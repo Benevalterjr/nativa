@@ -22,6 +22,7 @@
 #include <omp.h>
 
 #include "qwen_offsets_1.5b_q4.h"
+#include "nativa_sampling.h"
 
 #define MAX_SEQ_LEN 1024
 
@@ -858,55 +859,8 @@ static void forward_token(const uint8_t* model_bytes, int token_id, int pos) {
 // ----------------------------------------------------------------------------
 // SAMPLING ALGORITHMS
 // ----------------------------------------------------------------------------
-static inline int sample_argmax(const float* logits, int size) {
-    int best = 0;
-    float max_val = logits[0];
-    int i;
-    for (i = 1; i < size; i++) {
-        if (logits[i] > max_val) {
-            max_val = logits[i];
-            best = i;
-        }
-    }
-    return best;
-}
+// (Funcoes de amostragem em nativa_sampling.h)
 
-static inline float sample_random_float(void) {
-    static uint32_t rng_state = 2463534242u;
-    rng_state ^= rng_state << 13;
-    rng_state ^= rng_state >> 17;
-    rng_state ^= rng_state << 5;
-    return (float)(rng_state & 0x00FFFFFF) / (float)0x01000000;
-}
-
-static inline int sample_temperature(const float* logits, int size, float temp, float top_p) {
-    if (size <= 0) return 0;
-    if (temp <= 0.05f) return sample_argmax(logits, size);
-
-    float max_logit = logits[0];
-    int i;
-    for (i = 1; i < size; i++) {
-        if (logits[i] > max_logit) max_logit = logits[i];
-    }
-
-    float threshold = max_logit - 10.0f * temp;
-    float sum_exp = 0.0f;
-    for (i = 0; i < size; i++) {
-        if (logits[i] >= threshold) {
-            sum_exp += expf((logits[i] - max_logit) / temp);
-        }
-    }
-
-    float r = sample_random_float() * sum_exp;
-    float acc = 0.0f;
-    for (i = 0; i < size; i++) {
-        if (logits[i] >= threshold) {
-            acc += expf((logits[i] - max_logit) / temp);
-            if (acc >= r) return i;
-        }
-    }
-    return sample_argmax(logits, size);
-}
 
 // ----------------------------------------------------------------------------
 // INTERFACE PRINCIPAL
