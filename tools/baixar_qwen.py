@@ -61,20 +61,27 @@ def main():
     parser.add_argument("--full", action="store_true", help="Baixar o arquivo model.safetensors completo (24 camadas)")
     args = parser.parse_args()
 
-    os.makedirs("data", exist_ok=True)
+    data_dir = os.path.abspath("data")
+    os.makedirs(data_dir, exist_ok=True)
 
     # 1. Baixar Tokenizer oficial do Qwen
-    tok_dest = os.path.join("data", "tokenizer_qwen.json")
+    tok_dest = os.path.abspath(os.path.join(data_dir, "tokenizer_qwen.json"))
     download_file_with_progress(TOKENIZER_URL, tok_dest, "Tokenizador oficial (tokenizer.json)")
 
     # 2. Baixar Pesos
     if args.full or args.layers == 0:
-        model_dest = os.path.join("data", "qwen2.5_0.5b.safetensors")
+        model_dest = os.path.abspath(os.path.join(data_dir, "qwen2.5_0.5b.safetensors"))
         download_file_with_progress(QWEN_URL, model_dest, "Pesos do Qwen2.5-0.5B Completo (24 camadas)")
         return
 
+    if not (1 <= args.layers <= 24):
+        parser.error("O número de camadas deve estar entre 1 e 24.")
+
     n_layers = args.layers
-    dest = os.path.join("data", f"qwen2.5_{n_layers}camadas.safetensors")
+    dest = os.path.abspath(os.path.join(data_dir, f"qwen2.5_{n_layers}camadas.safetensors"))
+    if os.path.commonpath([data_dir, dest]) != data_dir:
+        parser.error("Caminho de destino fora do diretório permitido.")
+
     print(f"[*] Conectando ao Hugging Face para baixar {n_layers} camadas do Qwen2.5-0.5B...")
 
     req_header = urllib.request.Request(QWEN_URL, headers={"Range": "bytes=0-50000"})

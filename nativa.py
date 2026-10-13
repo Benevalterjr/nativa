@@ -4615,7 +4615,7 @@ class CTranspiler:
         out.append("    double* lut01 = (double*)malloc(num_groups * 9 * sizeof(double));")
         out.append("    double* lut23 = (double*)malloc(num_groups * 9 * sizeof(double));")
         out.append("    double* lut4  = (double*)malloc(num_groups * 3 * sizeof(double));")
-        out.append("    if (!lut01 || !lut23 || !lut4) return;")
+        out.append("    if (!lut01 || !lut23 || !lut4) { free(lut01); free(lut23); free(lut4); return; }")
         out.append("    for (int64_t g = 0; g < num_groups; g++) {")
         out.append("        int64_t base = g * 5;")
         out.append("        double x0 = (base < K) ? x[base] : 0.0;")
@@ -5296,6 +5296,8 @@ def main(argv: Optional[list[str]] = None) -> int:
         if nome not in EXEMPLOS:
             ap.error(f"exemplo desconhecido '{nome}' (opções: {', '.join(EXEMPLOS)})")
         source = EXEMPLOS[nome]
+    elif args.arquivo in EXEMPLOS:
+        source = EXEMPLOS[args.arquivo]
     else:
         with open(args.arquivo, encoding="utf-8") as fh:
             source = fh.read()

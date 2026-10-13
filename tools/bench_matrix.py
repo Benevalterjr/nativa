@@ -46,10 +46,10 @@ for threads, policy in configs:
         out = proc.stdout
         
         # Parse metrics with robust regex
-        speed_match = re.search(r"([0-9.]+)\s*tokens/segundo", out)
-        attn_match = re.search(r"cam\)\s*:\s*([0-9.]+)\s*ms", out)
-        mlp_match = re.search(r"MLP[^\n]*:\s*([0-9.]+)\s*ms", out)
-        lm_match = re.search(r"LM Head[^\n]*:\s*([0-9.]+)\s*ms", out)
+        speed_match = re.search(r"(\d+(?:\.\d+)?)\s*tokens/segundo", out)
+        attn_match = re.search(r"cam\)\s*:\s*(\d+(?:\.\d+)?)\s*ms", out)
+        mlp_match = re.search(r"MLP[^:\n]*:\s*(\d+(?:\.\d+)?)\s*ms", out)
+        lm_match = re.search(r"LM Head[^:\n]*:\s*(\d+(?:\.\d+)?)\s*ms", out)
 
         speed = float(speed_match.group(1)) if speed_match else 0.0
         attn = float(attn_match.group(1)) if attn_match else 0.0

@@ -122,7 +122,12 @@ static inline void nat_gemv_vec_lut_5trits(const uint8_t* W_packed, const double
     double* lut01 = (double*)malloc(num_groups * 9 * sizeof(double));
     double* lut23 = (double*)malloc(num_groups * 9 * sizeof(double));
     double* lut4  = (double*)malloc(num_groups * 3 * sizeof(double));
-    if (!lut01 || !lut23 || !lut4) return;
+    if (!lut01 || !lut23 || !lut4) {
+        free(lut01);
+        free(lut23);
+        free(lut4);
+        return;
+    }
     for (int64_t g = 0; g < num_groups; g++) {
         int64_t base = g * 5;
         double x0 = (base < K) ? x[base] : 0.0;

@@ -42,7 +42,7 @@ static bool load_vocab(const char* vocab_path) {
         fclose(f);
         return false;
     }
-    g_vocab = (VocabEntry*)malloc(g_vocab_size * sizeof(VocabEntry));
+    g_vocab = (VocabEntry*)calloc(g_vocab_size, sizeof(VocabEntry));
     if (!g_vocab) { fclose(f); return false; }
 
     uint32_t i;
@@ -55,6 +55,11 @@ static bool load_vocab(const char* vocab_path) {
         }
         g_vocab[i].len = len;
         g_vocab[i].str = (char*)malloc(len + 1);
+        if (!g_vocab[i].str) {
+            g_vocab[i].len = 0;
+            g_vocab[i].str = "";
+            continue;
+        }
         if (len > 0) {
             fread(g_vocab[i].str, 1, len, f);
         }
@@ -65,7 +70,7 @@ static bool load_vocab(const char* vocab_path) {
 }
 
 static inline void print_token(int token_id) {
-    if (token_id >= 0 && (uint32_t)token_id < g_vocab_size && g_vocab[token_id].len > 0) {
+    if (g_vocab && token_id >= 0 && (uint32_t)token_id < g_vocab_size && g_vocab[token_id].len > 0) {
         fwrite(g_vocab[token_id].str, 1, g_vocab[token_id].len, stdout);
         fflush(stdout);
     }

@@ -32,14 +32,23 @@ def main():
     if len(sys.argv) < 2:
         model_path = os.path.join(ROOT_DIR, "data", "qwen2.5_3b.natq4")
     else:
-        model_path = sys.argv[1]
+        raw_path = sys.argv[1]
+        if raw_path.startswith("-"):
+            print(f"[ERRO] Argumento inválido para caminho do modelo: {raw_path}")
+            return 1
+        model_path = raw_path
 
-    if not os.path.exists(model_path):
+    model_path = os.path.abspath(model_path)
+    if not os.path.isfile(model_path):
         print(f"[ERRO] Arquivo de modelo não encontrado: {model_path}")
         return 1
+    if not (model_path.endswith(".natq4") or model_path.endswith(".bin")):
+        print(f"[ERRO] Arquivo de modelo deve ser .natq4 ou .bin: {model_path}")
+        return 1
 
-    if not os.path.exists(ENGINE_PATH):
-        print(f"[ERRO] Motor nativo universal não encontrado: {ENGINE_PATH}")
+    engine_abs = os.path.abspath(ENGINE_PATH)
+    if not os.path.isfile(engine_abs):
+        print(f"[ERRO] Motor nativo universal não encontrado: {engine_abs}")
         return 1
 
     if hasattr(sys.stdout, "reconfigure"):
@@ -71,7 +80,7 @@ def main():
     env.setdefault("OMP_WAIT_POLICY", "PASSIVE")
 
     proc = subprocess.Popen(
-        [ENGINE_PATH, model_path, "--chat", "--vocab", vocab_path],
+        [engine_abs, model_path, "--chat", "--vocab", os.path.abspath(vocab_path)],
         stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,

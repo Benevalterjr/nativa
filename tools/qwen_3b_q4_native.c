@@ -496,11 +496,20 @@ static inline int sample_argmax(const float* logits, int size) {
     return best;
 }
 
+static inline float sample_random_float(void) {
+    static uint32_t rng_state = 2463534242u;
+    rng_state ^= rng_state << 13;
+    rng_state ^= rng_state >> 17;
+    rng_state ^= rng_state << 5;
+    return (float)(rng_state & 0x00FFFFFF) / (float)0x01000000;
+}
+
 static inline int sample_topk(const float* logits, int size, float temp, int top_k) {
+    if (size <= 0) return 0;
     if (temp <= 0.05f || top_k <= 1) return sample_argmax(logits, size);
     if (top_k > 50) top_k = 50;
 
-    TokenScore best[50];
+    TokenScore best[50] = {0};
     int count = 0;
     float min_best = 1e30f;
     int min_idx = 0;
@@ -536,6 +545,8 @@ static inline int sample_topk(const float* logits, int size, float temp, int top
         }
     }
 
+    if (count <= 0) return 0;
+
     float max_l = best[0].logit;
     for (j = 1; j < count; j++) {
         if (best[j].logit > max_l) max_l = best[j].logit;
@@ -546,7 +557,7 @@ static inline int sample_topk(const float* logits, int size, float temp, int top
         sum_exp += expf((best[j].logit - max_l) / temp);
     }
 
-    float r = ((float)rand() / (float)RAND_MAX) * sum_exp;
+    float r = sample_random_float() * sum_exp;
     float acc = 0.0f;
     for (j = 0; j < count; j++) {
         acc += expf((best[j].logit - max_l) / temp);

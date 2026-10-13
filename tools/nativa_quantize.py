@@ -26,28 +26,38 @@ TOKENIZER_VOCAB_SIZE_OFFSET = QK_NORM_OFFSET + MAX_LAYERS * 16
 MAX_CONTEXT = 32_768
 
 
+def _safe_resolve_path(base_dir: str, *segments: str) -> str:
+    base = os.path.abspath(base_dir)
+    target = os.path.abspath(os.path.join(base, *segments))
+    if os.path.commonpath([base, target]) != base:
+        raise ValueError(f"Tentativa de travessia de diretório detectada: {segments}")
+    return target
+
+
 def read_safe_header(path: str) -> tuple[int, dict[str, Any]]:
-    with open(path, "rb") as f:
+    clean_path = os.path.abspath(path)
+    with open(clean_path, "rb") as f:
         raw_len = f.read(8)
         if len(raw_len) != 8:
-            raise ValueError(f"Cabeçalho SafeTensors truncado: {path}")
+            raise ValueError(f"Cabeçalho SafeTensors truncado: {clean_path}")
         header_len = struct.unpack("<Q", raw_len)[0]
         file_size = os.fstat(f.fileno()).st_size
         if header_len <= 0 or header_len > file_size - 8:
-            raise ValueError(f"Tamanho de cabeçalho SafeTensors inválido: {path}")
+            raise ValueError(f"Tamanho de cabeçalho SafeTensors inválido: {clean_path}")
         header = json.loads(f.read(header_len).decode("utf-8"))
     return 8 + header_len, header
 
 
 def make_tensor_map(model_dir: str) -> dict[str, tuple[str, int, dict[str, Any]]]:
-    index_path = os.path.join(model_dir, "model.safetensors.index.json")
+    clean_model_dir = os.path.abspath(model_dir)
+    index_path = _safe_resolve_path(clean_model_dir, "model.safetensors.index.json")
     if os.path.isfile(index_path):
         with open(index_path, "r", encoding="utf-8") as f:
             weight_map = json.load(f).get("weight_map", {})
         if not weight_map:
             raise ValueError("O índice SafeTensors não contém weight_map.")
     else:
-        single = os.path.join(model_dir, "model.safetensors")
+        single = _safe_resolve_path(clean_model_dir, "model.safetensors")
         if not os.path.isfile(single):
             raise FileNotFoundError("Não encontrei model.safetensors nem model.safetensors.index.json.")
         weight_map = {key: "model.safetensors" for key in read_safe_header(single)[1] if key != "__metadata__"}
@@ -55,7 +65,7 @@ def make_tensor_map(model_dir: str) -> dict[str, tuple[str, int, dict[str, Any]]
     shard_headers: dict[str, tuple[int, dict[str, Any]]] = {}
     tensors: dict[str, tuple[str, int, dict[str, Any]]] = {}
     for key, shard_name in weight_map.items():
-        shard_path = os.path.join(model_dir, shard_name)
+        shard_path = _safe_resolve_path(clean_model_dir, shard_name)
         if shard_name not in shard_headers:
             if not os.path.isfile(shard_path):
                 raise FileNotFoundError(f"Shard ausente: {shard_path}")
@@ -149,10 +159,11 @@ def q4_size(rows: int, cols: int) -> int:
 
 
 def eos_ids(model_dir: str, cfg: dict[str, Any]) -> tuple[int, int]:
+    clean_model_dir = os.path.abspath(model_dir)
     raw = cfg.get("eos_token_id")
     candidates = raw if isinstance(raw, list) else [raw]
     ids = [int(x) for x in candidates if x is not None]
-    tok_path = os.path.join(model_dir, "tokenizer.json")
+    tok_path = _safe_resolve_path(clean_model_dir, "tokenizer.json")
     if os.path.isfile(tok_path):
         with open(tok_path, "r", encoding="utf-8") as f:
             tok = json.load(f)
@@ -170,7 +181,8 @@ def eos_ids(model_dir: str, cfg: dict[str, Any]) -> tuple[int, int]:
 
 
 def tokenizer_vocab_size(model_dir: str, model_vocab_size: int) -> int:
-    path = os.path.join(model_dir, "tokenizer.json")
+    clean_model_dir = os.path.abspath(model_dir)
+    path = _safe_resolve_path(clean_model_dir, "tokenizer.json")
     if not os.path.isfile(path):
         return model_vocab_size
     with open(path, "r", encoding="utf-8") as f:
@@ -190,9 +202,10 @@ def tokenizer_vocab_size(model_dir: str, model_vocab_size: int) -> int:
 
 
 def quantize_qwen(model_dir: str, out_file: str, max_seq_len: int = 2048) -> None:
-    config_path = os.path.join(model_dir, "config.json")
+    clean_model_dir = os.path.abspath(model_dir)
+    config_path = _safe_resolve_path(clean_model_dir, "config.json")
     if not os.path.isfile(config_path):
-        raise FileNotFoundError(f"config.json não encontrado em {model_dir}")
+        raise FileNotFoundError(f"config.json não encontrado em {clean_model_dir}")
     with open(config_path, "r", encoding="utf-8") as f:
         cfg = json.load(f)
 
@@ -357,9 +370,12 @@ def main() -> int:
     args = parser.parse_args()
     if args.output_pos and args.output_flag:
         parser.error("informe o destino como argumento posicional ou com --out, não ambos")
-    output = args.output_flag or args.output_pos or os.path.join(args.model_dir, "model.natq4")
+    model_dir = os.path.abspath(args.model_dir)
+    if not os.path.isdir(model_dir):
+        parser.error(f"Diretório do modelo não encontrado: {args.model_dir}")
+    output = os.path.abspath(args.output_flag or args.output_pos or os.path.join(model_dir, "model.natq4"))
     try:
-        quantize_qwen(args.model_dir, output, args.max_seq_len)
+        quantize_qwen(model_dir, output, args.max_seq_len)
     except (OSError, ValueError, KeyError, json.JSONDecodeError) as exc:
         parser.exit(2, f"[ERRO] {exc}\n")
     return 0

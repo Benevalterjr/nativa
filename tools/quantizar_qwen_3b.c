@@ -123,6 +123,9 @@ typedef struct {
 } MappedShard;
 
 static bool map_shard(const char* path, MappedShard* shard) {
+    shard->hFile = INVALID_HANDLE_VALUE;
+    shard->hMapping = NULL;
+    shard->base = NULL;
     shard->hFile = CreateFileA(path, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
     if (shard->hFile == INVALID_HANDLE_VALUE) {
         printf("[ERRO] Nao foi possivel abrir shard %s (Erro: %lu)\n", path, GetLastError());
@@ -132,22 +135,34 @@ static bool map_shard(const char* path, MappedShard* shard) {
     if (!shard->hMapping) {
         printf("[ERRO] Nao foi possivel criar mapeamento para %s\n", path);
         CloseHandle(shard->hFile);
+        shard->hFile = INVALID_HANDLE_VALUE;
         return false;
     }
     shard->base = (const uint8_t*)MapViewOfFile(shard->hMapping, FILE_MAP_READ, 0, 0, 0);
     if (!shard->base) {
         printf("[ERRO] Nao foi possivel mapear visualizacao de %s\n", path);
         CloseHandle(shard->hMapping);
+        shard->hMapping = NULL;
         CloseHandle(shard->hFile);
+        shard->hFile = INVALID_HANDLE_VALUE;
         return false;
     }
     return true;
 }
 
 static void unmap_shard(MappedShard* shard) {
-    if (shard->base) UnmapViewOfFile(shard->base);
-    if (shard->hMapping) CloseHandle(shard->hMapping);
-    if (shard->hFile) CloseHandle(shard->hFile);
+    if (shard->base) {
+        UnmapViewOfFile(shard->base);
+        shard->base = NULL;
+    }
+    if (shard->hMapping) {
+        CloseHandle(shard->hMapping);
+        shard->hMapping = NULL;
+    }
+    if (shard->hFile && shard->hFile != INVALID_HANDLE_VALUE) {
+        CloseHandle(shard->hFile);
+        shard->hFile = INVALID_HANDLE_VALUE;
+    }
 }
 
 int main(void) {
@@ -161,12 +176,17 @@ int main(void) {
     printf("  Saida INT4     : %s (~1.62 GB)\n", out_model_path);
     printf("====================================================================\n");
 
-    MappedShard s1, s2;
+    MappedShard s1 = { INVALID_HANDLE_VALUE, NULL, NULL };
+    MappedShard s2 = { INVALID_HANDLE_VALUE, NULL, NULL };
     printf("[*] Mapeando Shard 1 (3.97 GB)...\n");
-    if (!map_shard(shard1_path, &s1)) return 1;
+    if (!map_shard(shard1_path, &s1)) {
+        unmap_shard(&s1);
+        return 1;
+    }
 
     printf("[*] Mapeando Shard 2 (2.20 GB)...\n");
     if (!map_shard(shard2_path, &s2)) {
+        unmap_shard(&s2);
         unmap_shard(&s1);
         return 1;
     }
