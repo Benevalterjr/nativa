@@ -1,0 +1,6 @@
+# Linguagem Nativa (v0.3) — Requisitos do Runtime Core
+numpy>=1.24.0
+
+# Ferramentas de Pesquisa e Modelos (tools/) — Opcional
+# Necessário apenas para baixar e converter modelos oficiais do HuggingFace em data/
+# Para instalar tudo de uma vez para desenvolvimento: pip install -r requirements-tools.txt

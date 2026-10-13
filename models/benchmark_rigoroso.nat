@@ -1,0 +1,72 @@
+# models/benchmark_rigoroso.nat
+# Benchmark Cientifico e Rigoroso em Linguagem Nativa v0.3
+# Avalia memoria, estatisticas de latencia e fidelidade com tokens reais do Qwen2.5
+
+fn main():
+    print("==========================================================================")
+    print("  NATIVA v0.3: BENCHMARK RIGOROSO DE KERNELS E FIDELIDADE NUMERICA")
+    print("==========================================================================")
+
+    arquivo = "qwen2.5_0.5b.safetensors"
+
+    # Carrega pesos reais de projecoes criticas
+    print("[*] Carregando matrizes reais da Camada 0...")
+    w_gate = load_safetensors(arquivo, "model.layers.0.mlp.gate_proj.weight")
+    w_down = load_safetensors(arquivo, "model.layers.0.mlp.down_proj.weight")
+    norm1  = load_safetensors(arquivo, "model.layers.0.input_layernorm.weight")
+    emb    = load_safetensors(arquivo, "model.embed_tokens.weight")
+
+    # Quantizacao e empacotamento
+    print("[*] Quantizando e empacotando em 5-trits (Base-3)...")
+    w_gate_q = quantize_bitnet(w_gate)
+    w_gate_p = pack_ternary_5trits(w_gate_q)
+
+    w_down_q = quantize_bitnet(w_down)
+    w_down_p = pack_ternary_5trits(w_down_q)
+
+    print(f"    - gate_proj: FP32 shape={shape(w_gate)} | Packed shape={shape(w_gate_p)}")
+    print(f"    - down_proj: FP32 shape={shape(w_down)} | Packed shape={shape(w_down_p)}")
+
+    # Teste de latencia com warm-up
+    print("\n[*] Benchmark de Latencia com Warm-up (gate_proj [4864 x 896])...")
+    x = randn(896)
+
+    # Warm-up
+    for _ in 0..10:
+        w_gate @ x
+        w_gate_p @ x
+
+    # Medicao FP32
+    t0 = clock()
+    for _ in 0..50:
+        w_gate @ x
+    t_f32 = (clock() - t0) / 50.0
+
+    # Medicao 5-trits Vec-LUT
+    t0 = clock()
+    for _ in 0..50:
+        w_gate_p @ x
+    t_p5 = (clock() - t0) / 50.0
+
+    print(f"    - Tempo medio FP32:           {t_f32 * 1000.0:.3f} ms")
+    print(f"    - Tempo medio 5-trits Vec-LUT: {t_p5 * 1000.0:.3f} ms")
+
+    # Avaliacao de Fidelidade com 3 tokens reais diferentes
+    print("\n[*] Avaliacao de Fidelidade com Tokens Reais do Vocabulario:")
+    tokens = [9924, 1500, 50000]
+
+    for tid in tokens:
+        x_raw = emb[tid]
+        xn = rmsnorm(x_raw, norm1)
+        out_f = w_gate @ xn
+        out_p = w_gate_p @ xn
+
+        c_sim = cosine_sim(out_f, out_p)
+        p_cor = pearson_corr(out_f, out_p)
+        m_err = mae(out_f, out_p)
+
+        print(f"    - Token {tid:5d}: Cosine={c_sim:.4f} | Pearson={p_cor:.4f} | MAE={m_err:.4f}")
+
+    print("\n==========================================================================")
+    print("  BENCHMARK RIGOROSO CONCLUIDO!")
+    print("==========================================================================")

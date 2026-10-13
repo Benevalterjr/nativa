@@ -1,0 +1,45 @@
+# Ambientes Virtuais e Caches Python
+.venv/
+venv/
+ENV/
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.nativa_cache/
+scratch/
+
+# Compilação C/C++ e Binários Nativos
+*.obj
+*.exe
+*.dll
+*.lib
+*.exp
+*.pdb
+*.ilk
+_temp_build.bat
+
+# Modelos Grandes, Pesos e Datasets Binários (>100MB / GitHub Limit)
+*.safetensors
+*.bin
+*.natq4
+*.parquet
+*.gguf
+data/*.safetensors
+data/*.bin
+data/*.natq4
+data/*.parquet
+
+# Manter arquivos leves essenciais de dados/configuração no git
+!data/tokenizer_qwen.json
+!data/pesos_llama.safetensors
+!data/qwen3b/
+!data/qwen3b/config.json
+!data/qwen3b/model.safetensors.index.json
+
+# IDEs e Sistema Operacional
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+desktop.ini

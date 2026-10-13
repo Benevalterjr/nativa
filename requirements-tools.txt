@@ -1,0 +1,7 @@
+# Dependências para os utilitários de download, conversão e benchmarks em tools/
+# Inclui bibliotecas do ecossistema PyTorch e Hugging Face
+numpy>=1.24.0
+torch>=2.0.0
+transformers>=4.36.0
+safetensors>=0.4.0
+huggingface-hub>=0.20.0

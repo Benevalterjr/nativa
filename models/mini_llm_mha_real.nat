@@ -1,0 +1,197 @@
+# mini_llm_mha_real.nat
+# Multi-Head Attention Real (4 Heads) + KV Cache Completo + BitNet AbsMean Explicito + Sampling Estocastico
+
+fn main():
+    print("==========================================================================")
+    print("  MINI LLM V0.3 — MULTI-HEAD ATTENTION REAL & KV CACHE COMPLETO")
+    print("  4 Cabecas Independentes | Historico Integral no SDPA | Sampling Top-P")
+    print("==========================================================================")
+
+    # Hiperparametros
+    d_model   = 64
+    n_heads   = 4
+    dim_head  = 16       # d_model = n_heads * dim_head
+    d_ff      = 256
+    max_seq   = 128
+    n_new_tokens = 10
+
+    # 1. Tokenizador & Vocabulario Dinamico (Sem clamping!)
+    tok = Tokenizer()
+    vocab_size = len(tok)
+    prompt = "Nativa e uma linguagem para IA"
+    tokens = encode(tok, prompt)
+    prompt_len = len(tokens)
+
+    print(f"\n[1] Tokenizer:")
+    print(f"    Vocab size exato:   {vocab_size} (sem clamps ou modulo!)")
+    print(f"    Prompt:             \"{prompt}\"")
+    print(f"    Tokens do prompt:   {tokens}")
+    print(f"    Seq len:            {prompt_len}")
+
+    # 2. Inicializacao e Quantizacao BitNet com Gama Explicito
+    print("\n[2] Inicializando Pesos com Fatores de Escala AbsMean (gamma) Explicitos:")
+    emb = randn([vocab_size, d_model]) * 0.02
+
+    # Projecoes de Atencao e MLP (Camada 1)
+    Wq1_raw = randn([d_model, d_model])
+    Wk1_raw = randn([d_model, d_model])
+    Wv1_raw = randn([d_model, d_model])
+    Wo1_raw = randn([d_model, d_model])
+    W1_1_raw = randn([d_model, d_ff])
+    W2_1_raw = randn([d_ff, d_model])
+
+    # Fatores gamma explicitos
+    g_q1 = tensor_absmean(Wq1_raw)
+    g_k1 = tensor_absmean(Wk1_raw)
+    g_v1 = tensor_absmean(Wv1_raw)
+    g_o1 = tensor_absmean(Wo1_raw)
+    g_1_1 = tensor_absmean(W1_1_raw)
+    g_2_1 = tensor_absmean(W2_1_raw)
+
+    # Pesos ternarios {-1, 0, 1}
+    Wq1 = quantize_bitnet(Wq1_raw)
+    Wk1 = quantize_bitnet(Wk1_raw)
+    Wv1 = quantize_bitnet(Wv1_raw)
+    Wo1 = quantize_bitnet(Wo1_raw)
+    W1_1 = quantize_bitnet(W1_1_raw)
+    W2_1 = quantize_bitnet(W2_1_raw)
+
+    g_attn1 = ones([d_model])
+    g_mlp1  = ones([d_model])
+    g_final = ones([d_model])
+    lm_head = randn([d_model, vocab_size]) * 0.02
+
+    print(f"    gamma_q: {g_q1:.6f} | gamma_k: {g_k1:.6f} | gamma_v: {g_v1:.6f}")
+    print("    Todos os pesos lineares convertidos para BitNet b1.58!")
+
+    # 3. KV Caches Independentes para as 4 Cabecas
+    print(f"\n[3] Criando KV Cache independente para cada uma das {n_heads} cabecas...")
+    c_k0 = KVCache(max_seq, dim_head)
+    c_k1 = KVCache(max_seq, dim_head)
+    c_k2 = KVCache(max_seq, dim_head)
+    c_k3 = KVCache(max_seq, dim_head)
+
+    # 4. Prefill do Contexto
+    print("\n[4] Prefill com Multi-Head Attention Real...")
+    t_start = clock()
+    x = zeros([d_model])
+
+    for i in 0..prompt_len:
+        tid = tokens[i]
+        x = emb[tid]
+
+        # RMSNorm + QKV com gamma explicito
+        xn = rmsnorm(x, g_attn1)
+        q_all = (xn @ Wq1) * g_q1
+        k_all = (xn @ Wk1) * g_k1
+        v_all = (xn @ Wv1) * g_v1
+
+        # Fatiamento em 4 Cabecas (MHA)
+        q0 = apply_rope(q_all[0..16], i)
+        k0 = apply_rope(k_all[0..16], i)
+        v0 = v_all[0..16]
+        c_k0.update([k0], [v0])
+        att0 = sdpa([q0], c_k0.k, c_k0.v)
+
+        q1 = apply_rope(q_all[16..32], i)
+        k1 = apply_rope(k_all[16..32], i)
+        v1 = v_all[16..32]
+        c_k1.update([k1], [v1])
+        att1 = sdpa([q1], c_k1.k, c_k1.v)
+
+        q2 = apply_rope(q_all[32..48], i)
+        k2 = apply_rope(k_all[32..48], i)
+        v2 = v_all[32..48]
+        c_k2.update([k2], [v2])
+        att2 = sdpa([q2], c_k2.k, c_k2.v)
+
+        q3 = apply_rope(q_all[48..64], i)
+        k3 = apply_rope(k_all[48..64], i)
+        v3 = v_all[48..64]
+        c_k3.update([k3], [v3])
+        att3 = sdpa([q3], c_k3.k, c_k3.v)
+
+        # Concatenacao das 4 Cabecas
+        att_concat = concat([att0[0], att1[0], att2[0], att3[0]])
+        x = x + ((att_concat @ Wo1) * g_o1)
+
+        # MLP com gamma explicito
+        xn = rmsnorm(x, g_mlp1)
+        h = silu((xn @ W1_1) * g_1_1)
+        x = x + ((h @ W2_1) * g_2_1)
+
+    t_prefill = clock() - t_start
+    print(f"    Prefill concluido em {t_prefill * 1000.0:.2f} ms")
+    print(f"    KV Cache seq_len por cabeca: {c_k0.seq_len} tokens retidos no historico integral!")
+
+    # 5. Geracao com Sampling (Temperatura + Top-P) e KV Cache Integral
+    print(f"\n[5] Geracao de {n_new_tokens} tokens via Sampling Estocastico (T=0.8, Top-P=0.9):")
+    t_gen_start = clock()
+    x = rmsnorm(x, g_final)
+    novos_tokens = []
+
+    for step in 0..n_new_tokens:
+        pos = prompt_len + step
+        logits = x @ lm_head
+
+        # Amostragem Estocastica sem loops repetitivos
+        next_id = sample(logits, 0.8, 0.9)
+        novos_tokens.append(next_id)
+
+        print(f"      Passo {step + 1:2d}: Token id = {next_id:4d} | Cache len = {c_k0.seq_len}")
+
+        x = emb[next_id]
+
+        # Multi-Head Attention com historico completo de todas as posicoes anteriores
+        xn = rmsnorm(x, g_attn1)
+        q_all = (xn @ Wq1) * g_q1
+        k_all = (xn @ Wk1) * g_k1
+        v_all = (xn @ Wv1) * g_v1
+
+        q0 = apply_rope(q_all[0..16], pos)
+        k0 = apply_rope(k_all[0..16], pos)
+        v0 = v_all[0..16]
+        c_k0.update([k0], [v0])
+        att0 = sdpa([q0], c_k0.k, c_k0.v)
+
+        q1 = apply_rope(q_all[16..32], pos)
+        k1 = apply_rope(k_all[16..32], pos)
+        v1 = v_all[16..32]
+        c_k1.update([k1], [v1])
+        att1 = sdpa([q1], c_k1.k, c_k1.v)
+
+        q2 = apply_rope(q_all[32..48], pos)
+        k2 = apply_rope(k_all[32..48], pos)
+        v2 = v_all[32..48]
+        c_k2.update([k2], [v2])
+        att2 = sdpa([q2], c_k2.k, c_k2.v)
+
+        q3 = apply_rope(q_all[48..64], pos)
+        k3 = apply_rope(k_all[48..64], pos)
+        v3 = v_all[48..64]
+        c_k3.update([k3], [v3])
+        att3 = sdpa([q3], c_k3.k, c_k3.v)
+
+        att_concat = concat([att0[0], att1[0], att2[0], att3[0]])
+        x = x + ((att_concat @ Wo1) * g_o1)
+
+        xn = rmsnorm(x, g_mlp1)
+        h = silu((xn @ W1_1) * g_1_1)
+        x = x + ((h @ W2_1) * g_2_1)
+
+        x = rmsnorm(x, g_final)
+
+    t_gen = clock() - t_gen_start
+    print(f"\n    Tempo total de geracao: {t_gen * 1000.0:.2f} ms ({to_f64(n_new_tokens) / t_gen:.1f} tok/s)")
+    texto_gerado = decode(tok, novos_tokens)
+    print(f"    Tokens gerados:         {novos_tokens}")
+    print(f"    Texto gerado:           \"{texto_gerado}\"")
+
+    print("\n==========================================================================")
+    print("  TODAS AS LIMITACOES ARQUITETURAIS FORAM RESOLVIDAS:")
+    print("  [x] Multi-Head Attention Real (4 cabecas completas)")
+    print("  [x] KV Cache com historico integral de atencao no SDPA")
+    print("  [x] Fator de escala AbsMean (gamma) explicito no BitNet")
+    print("  [x] Vocabulario dinamico sem clamping ou modulo")
+    print("  [x] Amostragem estocastica com Temperatura e Top-P")
+    print("==========================================================================")

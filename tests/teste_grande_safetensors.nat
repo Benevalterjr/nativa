@@ -1,0 +1,72 @@
+# teste_grande_safetensors.nat
+# Teste de alta escala: carregamento de SafeTensors de 16 MB, quantização BitNet 1.58 bits
+# e projeção vetorial Add-Only GEMM na Linguagem Nativa
+
+fn main():
+    arquivo = "grande_modelo.safetensors"
+    camada = "model.layers.0.mlp.gate_proj.weight"
+
+    print("==================================================================")
+    print("  TESTE DE ALTA ESCALA: SAFETENSORS (16 MB) + BITNET 1.58-BIT     ")
+    print("==================================================================")
+
+    # 1. Inspeção de chaves no arquivo binário
+    t0 = clock()
+    chaves = safetensors_keys(arquivo)
+    print(f"[1] Metadados lidos com sucesso:")
+    print(f"    Tensores disponíveis: {chaves}")
+
+    # 2. Carregamento do tensor grande (1024 x 2048 = 2.097.152 elementos)
+    print(f"\n[2] Carregando '{camada}' (1024 x 2048 floats ~ 8.4 MB)...")
+    t1 = clock()
+    W = load_safetensors(arquivo, camada)
+    t2 = clock()
+    tempo_load = t2 - t1
+    sh = shape(W)
+    print(f"    Tensor carregado com sucesso em {tempo_load:.4f}s!")
+    print(f"    Shape do tensor: {sh}")
+
+    # 3. Quantização para 1.58 bits nativo da Nativa (pesos {-1, 0, +1})
+    print("\n[3] Quantizando 2.097.152 parâmetros para 1.58 bits (t2 / ternary)...")
+    t3 = clock()
+    W_t2 = quantize_ternary(W, 0.015)
+    t4 = clock()
+    tempo_quant = t4 - t3
+    print(f"    Quantização concluída em {tempo_quant:.4f}s!")
+
+    # 4. Compactação em memória (Bit Packing: 2 bits por trit = 4 trits/byte)
+    print("\n[4] Compactando matriz na memória (Bit-packing de 2 bits/trit)...")
+    t5 = clock()
+    compactado = pack_ternary(W_t2)
+    t6 = clock()
+    tempo_pack = t6 - t5
+    n_bytes = len(compactado)
+    kb = to_f64(n_bytes) / 1024.0
+    print(f"    Bit-packing concluído em {tempo_pack:.4f}s!")
+    print(f"    Tamanho original (f32): ~8.192 KB (8.4 MB)")
+    print(f"    Tamanho compactado (t2): ~{kb:.1f} KB (0.5 MB)")
+    print(f"    Economia de memória: ~16x menor!")
+
+    # 5. Inferência Add-Only GEMM com vetor de ativações (dimensão 2048)
+    print("\n[5] Executando Add-Only GEMM (W_t2 @ x) com vetor de 2048 ativações...")
+    x = ones([2048])
+    t7 = clock()
+    y = W_t2 @ x
+    t8 = clock()
+    tempo_gemm = t8 - t7
+    sh_y = shape(y)
+    m = mean(y)
+    v_max = max(y)
+    v_min = min(y)
+
+    print(f"    Multiplicação matricial concluída em {tempo_gemm:.4f}s!")
+    print(f"    Shape do vetor de saída: {sh_y}")
+    print(f"    Estatísticas da projeção:")
+    print(f"      - Média dos valores: {m:.4f}")
+    print(f"      - Valor máximo:      {v_max:.4f}")
+    print(f"      - Valor mínimo:      {v_min:.4f}")
+
+    tempo_total = t8 - t0
+    print("\n==================================================================")
+    print(f"  [SUCESSO] Pipeline completo concluído em {tempo_total:.3f}s!")
+    print("==================================================================")

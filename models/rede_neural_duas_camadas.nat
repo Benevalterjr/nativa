@@ -1,0 +1,30 @@
+# Rede neural feed-forward simples em Nativa
+# Duas camadas densas: entrada -> camada oculta (ReLU) -> saída (sigmoid)
+# Execute com: python nativa.py models/rede_neural_duas_camadas.nat --run
+
+fn main():
+    # Uma amostra com duas características.
+    entrada = tensor([0.8, -0.3])
+
+    # Pesos da primeira camada: 2 entradas -> 3 neurônios ocultos.
+    pesos_ocultos = tensor([
+        [0.5, -0.2],
+        [0.3, 0.8],
+        [-0.6, 0.4]
+    ])
+    vieses_ocultos = tensor([0.1, -0.1, 0.2])
+
+    # Pesos da camada de saída: 3 neurônios ocultos -> 1 saída.
+    pesos_saida = tensor([[0.7, -0.5, 0.9]])
+    vieses_saida = tensor([0.05])
+
+    # Forward pass: z1 = xW1^T + b1; a1 = ReLU(z1).
+    ocultos = relu(pesos_ocultos @ entrada + vieses_ocultos)
+
+    # Saída binária entre 0 e 1 usando a função sigmoid.
+    logits = pesos_saida @ ocultos + vieses_saida
+    previsao = sigmoid(logits)
+
+    print(f"Entrada: {entrada}")
+    print(f"Ativacoes da camada oculta: {ocultos}")
+    print(f"Probabilidade prevista: {previsao}")

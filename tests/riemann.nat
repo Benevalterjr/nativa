@@ -1,0 +1,67 @@
+# riemann.nat
+# Cálculo dos Zeros não-triviais da Função Zeta de Riemann na linha crítica (s = 1/2 + it)
+# Utiliza a aproximação da fórmula de Riemann-Siegel (Função Hardy Z) e o Método da Bissecção.
+
+const PI = 3.14159265358979323846
+
+# Função theta(t) de Riemann-Siegel (fase da função Zeta)
+fn theta(t: f64) -> f64:
+    return (
+        0.5 * t * ln(t / (2.0 * PI))
+        - 0.5 * t
+        - PI / 8.0
+        + 1.0 / (48.0 * t)
+        + 7.0 / (5760.0 * t * t * t)
+    )
+
+# Aproximação da função Z(t) de Hardy (onde Z(t) = 0 corresponde a zeta(1/2 + it) = 0)
+fn hardy_z_aprox(t: f64) -> f64:
+    N: i64 = to_i64(floor(sqrt(t / (2.0 * PI))))
+    fase = theta(t)
+    soma = 0.0
+    for n in 1..N + 1:
+        nf = to_f64(n)
+        soma += cos(fase - t * ln(nf)) / sqrt(nf)
+    return 2.0 * soma
+
+# Refinamento da raiz pelo Método da Bissecção
+fn bissecao(a_in: f64, b_in: f64) -> f64:
+    a = a_in
+    b = b_in
+    fa = hardy_z_aprox(a)
+    for passo in 0..60:
+        meio = (a + b) / 2.0
+        fm = hardy_z_aprox(meio)
+        if fm == 0.0:
+            return meio
+        if fa * fm < 0.0:
+            b = meio
+        else:
+            a = meio
+            fa = fm
+    return (a + b) / 2.0
+
+fn main():
+    inicio = 10.0
+    fim = 100.0
+    passo = 0.25
+
+    print(f"=== Buscando Zeros da Função Zeta na Linha Critica [t = {inicio} ate {fim}] ===")
+    
+    anterior_t = inicio
+    anterior_z = hardy_z_aprox(anterior_t)
+    encontrados = 0
+    t = inicio + passo
+
+    while t <= fim:
+        z = hardy_z_aprox(t)
+        # Houve mudança de sinal entre anterior_t e t? (Teorema do Valor Intermediário)
+        if anterior_z * z < 0.0:
+            encontrados += 1
+            raiz = bissecao(anterior_t, t)
+            print(f"[{encontrados:2d}] Zero detectado: t = {raiz:.6f}")
+        anterior_t = t
+        anterior_z = z
+        t += passo
+
+    print(f"=== Busca concluida: {encontrados} zeros nao-triviais encontrados ===")
