@@ -30,6 +30,38 @@ static inline int sample_argmax(const float* logits, int size) {
     return best;
 }
 
+static inline void topk_find_min(const TokenScore* best, int count, float* out_min_val, int* out_min_idx) {
+    float min_val = best[0].logit;
+    int min_idx = 0;
+    for (int j = 1; j < count; j++) {
+        if (best[j].logit < min_val) {
+            min_val = best[j].logit;
+            min_idx = j;
+        }
+    }
+    *out_min_val = min_val;
+    *out_min_idx = min_idx;
+}
+
+static inline int topk_sample_from_candidates(const TokenScore* best, int count, float temp) {
+    if (count <= 0) return 0;
+    float max_l = best[0].logit;
+    for (int j = 1; j < count; j++) {
+        if (best[j].logit > max_l) max_l = best[j].logit;
+    }
+    float sum_exp = 0.0f;
+    for (int j = 0; j < count; j++) {
+        sum_exp += expf((best[j].logit - max_l) / temp);
+    }
+    float r = sample_random_float() * sum_exp;
+    float acc = 0.0f;
+    for (int j = 0; j < count; j++) {
+        acc += expf((best[j].logit - max_l) / temp);
+        if (acc >= r) return best[j].id;
+    }
+    return best[0].id;
+}
+
 static inline int sample_topk(const float* logits, int size, float temp, int top_k) {
     if (size <= 0) return 0;
     if (temp <= 0.05f || top_k <= 1) return sample_argmax(logits, size);
@@ -47,48 +79,16 @@ static inline int sample_topk(const float* logits, int size, float temp, int top
             best[count].logit = l;
             count++;
             if (count == top_k) {
-                min_best = best[0].logit;
-                min_idx = 0;
-                for (int j = 1; j < top_k; j++) {
-                    if (best[j].logit < min_best) {
-                        min_best = best[j].logit;
-                        min_idx = j;
-                    }
-                }
+                topk_find_min(best, count, &min_best, &min_idx);
             }
         } else if (l > min_best) {
             best[min_idx].id = i;
             best[min_idx].logit = l;
-            min_best = best[0].logit;
-            min_idx = 0;
-            for (int j = 1; j < top_k; j++) {
-                if (best[j].logit < min_best) {
-                    min_best = best[j].logit;
-                    min_idx = j;
-                }
-            }
+            topk_find_min(best, count, &min_best, &min_idx);
         }
     }
 
-    if (count <= 0) return 0;
-
-    float max_l = best[0].logit;
-    for (int j = 1; j < count; j++) {
-        if (best[j].logit > max_l) max_l = best[j].logit;
-    }
-
-    float sum_exp = 0.0f;
-    for (int j = 0; j < count; j++) {
-        sum_exp += expf((best[j].logit - max_l) / temp);
-    }
-
-    float r = sample_random_float() * sum_exp;
-    float acc = 0.0f;
-    for (int j = 0; j < count; j++) {
-        acc += expf((best[j].logit - max_l) / temp);
-        if (acc >= r) return best[j].id;
-    }
-    return best[0].id;
+    return topk_sample_from_candidates(best, count, temp);
 }
 
 static inline int sample_temperature(const float* logits, int size, float temp, float top_p) {

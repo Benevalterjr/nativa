@@ -42,7 +42,7 @@ def main():
     if not os.path.isfile(model_path):
         print(f"[ERRO] Arquivo de modelo não encontrado: {model_path}")
         return 1
-    if not (model_path.endswith(".natq4") or model_path.endswith(".bin")):
+    if not model_path.endswith((".natq4", ".bin")):
         print(f"[ERRO] Arquivo de modelo deve ser .natq4 ou .bin: {model_path}")
         return 1
 

@@ -119,15 +119,14 @@ static inline void nat_fused_gemv_5trits(const uint8_t* W_packed, const double* 
 /* Vec-LUT Ternary GEMV: Look-Up Table por pares de trits com aceleração de streaming em C */
 static inline void nat_gemv_vec_lut_5trits(const uint8_t* W_packed, const double* x, double* y, int64_t M, int64_t K, double gamma) {
     int64_t num_groups = (K + 4) / 5;
-    double* lut01 = (double*)malloc(num_groups * 9 * sizeof(double));
-    double* lut23 = (double*)malloc(num_groups * 9 * sizeof(double));
-    double* lut4  = (double*)malloc(num_groups * 3 * sizeof(double));
-    if (!lut01 || !lut23 || !lut4) {
-        free(lut01);
-        free(lut23);
-        free(lut4);
+    if (num_groups <= 0) return;
+    double* lut = (double*)malloc(num_groups * 21 * sizeof(double));
+    if (!lut) {
         return;
     }
+    double* lut01 = lut;
+    double* lut23 = lut + num_groups * 9;
+    double* lut4  = lut + num_groups * 18;
     for (int64_t g = 0; g < num_groups; g++) {
         int64_t base = g * 5;
         double x0 = (base < K) ? x[base] : 0.0;
@@ -157,7 +156,7 @@ static inline void nat_gemv_vec_lut_5trits(const uint8_t* W_packed, const double
         }
         y[i] = acc * gamma;
     }
-    free(lut01); free(lut23); free(lut4);
+    free(lut);
 }
 
 /* Wrappers de Alto Nível de BitNet b1.58 para o Transpilador C */

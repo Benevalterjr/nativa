@@ -38,41 +38,67 @@ static uint32_t g_vocab_size = 0;
 static bool load_vocab(const char* vocab_path) {
     FILE* f = fopen(vocab_path, "rb");
     if (!f) return false;
-    if (fread(&g_vocab_size, sizeof(uint32_t), 1, f) != 1) {
+    uint32_t count = 0;
+    if (fread(&count, sizeof(uint32_t), 1, f) != 1 || count == 0) {
         fclose(f);
         return false;
     }
-    g_vocab = (VocabEntry*)calloc(g_vocab_size, sizeof(VocabEntry));
-    if (!g_vocab) { fclose(f); return false; }
+    VocabEntry* entries = (VocabEntry*)malloc(count * sizeof(VocabEntry));
+    if (!entries) {
+        fclose(f);
+        return false;
+    }
+    memset(entries, 0, count * sizeof(VocabEntry));
 
-    uint32_t i;
-    for (i = 0; i < g_vocab_size; i++) {
+    for (uint32_t i = 0; i < count; i++) {
         uint16_t len = 0;
         if (fread(&len, sizeof(uint16_t), 1, f) != 1) {
-            g_vocab[i].len = 0;
-            g_vocab[i].str = "";
-            continue;
+            for (uint32_t j = 0; j < i; j++) {
+                if (entries[j].len > 0 && entries[j].str) free(entries[j].str);
+            }
+            free(entries);
+            fclose(f);
+            return false;
         }
-        g_vocab[i].len = len;
-        g_vocab[i].str = (char*)malloc(len + 1);
-        if (!g_vocab[i].str) {
-            g_vocab[i].len = 0;
-            g_vocab[i].str = "";
-            continue;
-        }
+        entries[i].len = len;
+        entries[i].str = "";
         if (len > 0) {
-            fread(g_vocab[i].str, 1, len, f);
+            char* s = (char*)malloc(len + 1);
+            if (!s) {
+                for (uint32_t j = 0; j < i; j++) {
+                    if (entries[j].len > 0 && entries[j].str) free(entries[j].str);
+                }
+                free(entries);
+                fclose(f);
+                return false;
+            }
+            if (fread(s, 1, len, f) != len) {
+                free(s);
+                for (uint32_t j = 0; j < i; j++) {
+                    if (entries[j].len > 0 && entries[j].str) free(entries[j].str);
+                }
+                free(entries);
+                fclose(f);
+                return false;
+            }
+            s[len] = '\0';
+            entries[i].str = s;
         }
-        g_vocab[i].str[len] = '\0';
     }
     fclose(f);
+    g_vocab = entries;
+    g_vocab_size = count;
     return true;
 }
 
 static inline void print_token(int token_id) {
-    if (g_vocab && token_id >= 0 && (uint32_t)token_id < g_vocab_size && g_vocab[token_id].len > 0) {
-        fwrite(g_vocab[token_id].str, 1, g_vocab[token_id].len, stdout);
-        fflush(stdout);
+    if (g_vocab && token_id >= 0 && (uint32_t)token_id < g_vocab_size) {
+        uint16_t len = g_vocab[token_id].len;
+        const char* str = g_vocab[token_id].str;
+        if (len > 0 && str) {
+            fwrite(str, 1, len, stdout);
+            fflush(stdout);
+        }
     }
 }
 

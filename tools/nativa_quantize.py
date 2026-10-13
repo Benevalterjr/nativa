@@ -24,6 +24,7 @@ EOS_FIELDS_OFFSET = LAYER_OFFSET + MAX_LAYERS * LAYER_STRIDE
 QK_NORM_OFFSET = EOS_FIELDS_OFFSET + 8
 TOKENIZER_VOCAB_SIZE_OFFSET = QK_NORM_OFFSET + MAX_LAYERS * 16
 MAX_CONTEXT = 32_768
+TOKENIZER_JSON = "tokenizer.json"
 
 
 def _safe_resolve_path(base_dir: str, *segments: str) -> str:
@@ -163,7 +164,7 @@ def eos_ids(model_dir: str, cfg: dict[str, Any]) -> tuple[int, int]:
     raw = cfg.get("eos_token_id")
     candidates = raw if isinstance(raw, list) else [raw]
     ids = [int(x) for x in candidates if x is not None]
-    tok_path = _safe_resolve_path(clean_model_dir, "tokenizer.json")
+    tok_path = _safe_resolve_path(clean_model_dir, TOKENIZER_JSON)
     if os.path.isfile(tok_path):
         with open(tok_path, "r", encoding="utf-8") as f:
             tok = json.load(f)
@@ -182,7 +183,7 @@ def eos_ids(model_dir: str, cfg: dict[str, Any]) -> tuple[int, int]:
 
 def tokenizer_vocab_size(model_dir: str, model_vocab_size: int) -> int:
     clean_model_dir = os.path.abspath(model_dir)
-    path = _safe_resolve_path(clean_model_dir, "tokenizer.json")
+    path = _safe_resolve_path(clean_model_dir, TOKENIZER_JSON)
     if not os.path.isfile(path):
         return model_vocab_size
     with open(path, "r", encoding="utf-8") as f:
@@ -332,7 +333,7 @@ def quantize_qwen(model_dir: str, out_file: str, max_seq_len: int = 2048) -> Non
             os.fsync(out.fileno())
         reader.close()
         os.replace(temp_path, out_abs)
-        tokenizer_src = os.path.join(model_dir, "tokenizer.json")
+        tokenizer_src = os.path.join(model_dir, TOKENIZER_JSON)
         if os.path.isfile(tokenizer_src):
             tokenizer_dst = out_abs + ".tokenizer.json"
             fd_tok, temp_tok = tempfile.mkstemp(prefix=".tokenizer-", suffix=".tmp", dir=os.path.dirname(out_abs))
