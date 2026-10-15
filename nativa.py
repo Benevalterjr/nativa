@@ -5240,6 +5240,62 @@ Exemplos pre-carregados:
 ======================================================================""")
 
 
+def print_detected_devices() -> int:
+    print("====================================================================")
+    print("  NATIVA - DISPOSITIVOS DE COMPUTAÇÃO DETECTADOS")
+    print("====================================================================")
+    print(f"  [CPU Host] SO: {sys.platform} | Python {sys.version.split()[0]}")
+
+    try:
+        import ctypes
+        cl_name = "OpenCL.dll" if sys.platform == "win32" else "libOpenCL.so"
+        cl = ctypes.cdll.LoadLibrary(cl_name)
+
+        cl.clGetPlatformIDs.argtypes = [ctypes.c_uint32, ctypes.POINTER(ctypes.c_void_p), ctypes.POINTER(ctypes.c_uint32)]
+        cl.clGetPlatformIDs.restype = ctypes.c_int32
+        cl.clGetPlatformInfo.argtypes = [ctypes.c_void_p, ctypes.c_uint32, ctypes.c_size_t, ctypes.c_void_p, ctypes.POINTER(ctypes.c_size_t)]
+        cl.clGetPlatformInfo.restype = ctypes.c_int32
+        cl.clGetDeviceIDs.argtypes = [ctypes.c_void_p, ctypes.c_uint64, ctypes.c_uint32, ctypes.POINTER(ctypes.c_void_p), ctypes.POINTER(ctypes.c_uint32)]
+        cl.clGetDeviceIDs.restype = ctypes.c_int32
+        cl.clGetDeviceInfo.argtypes = [ctypes.c_void_p, ctypes.c_uint32, ctypes.c_size_t, ctypes.c_void_p, ctypes.POINTER(ctypes.c_size_t)]
+        cl.clGetDeviceInfo.restype = ctypes.c_int32
+
+        num_plat = ctypes.c_uint32(0)
+        cl.clGetPlatformIDs(0, None, ctypes.byref(num_plat))
+        if num_plat.value > 0:
+            plats = (ctypes.c_void_p * num_plat.value)()
+            cl.clGetPlatformIDs(num_plat.value, plats, None)
+            total_devs = 0
+            for p in plats:
+                p_name_buf = ctypes.create_string_buffer(256)
+                cl.clGetPlatformInfo(p, 0x0902, 256, p_name_buf, None)
+                p_name = p_name_buf.value.decode("utf-8", errors="ignore")
+
+                num_dev = ctypes.c_uint32(0)
+                cl.clGetDeviceIDs(p, 0xFFFFFFFF, 0, None, ctypes.byref(num_dev))
+                if num_dev.value > 0:
+                    devs = (ctypes.c_void_p * num_dev.value)()
+                    cl.clGetDeviceIDs(p, 0xFFFFFFFF, num_dev.value, devs, None)
+                    for d in devs:
+                        d_name_buf = ctypes.create_string_buffer(256)
+                        d_type = ctypes.c_uint64(0)
+                        cl.clGetDeviceInfo(d, 0x102B, 256, d_name_buf, None)
+                        cl.clGetDeviceInfo(d, 0x1000, 8, ctypes.byref(d_type), None)
+                        is_gpu = bool(d_type.value & 4)
+                        d_name = d_name_buf.value.decode("utf-8", errors="ignore")
+                        print(f"  [{total_devs}] [{'GPU' if is_gpu else 'CPU'}] {d_name} (Plataforma: {p_name})")
+                        total_devs += 1
+            if total_devs == 0:
+                print("  Nenhum dispositivo OpenCL ativo.")
+        else:
+            print("  Nenhuma plataforma OpenCL ativa.")
+    except Exception:
+        print("  [OpenCL] Nenhuma biblioteca OpenCL ativa (modo CPU C99/OpenMP nativo padrão).")
+
+    print("====================================================================")
+    return 0
+
+
 def main(argv: Optional[list[str]] = None) -> int:
     raw_args = list(sys.argv[1:] if argv is None else argv)
 
@@ -5274,6 +5330,8 @@ def main(argv: Optional[list[str]] = None) -> int:
     elif subcmd == "quantize":
         quant_script = os.path.join(os.path.dirname(__file__), "tools", "nativa_quantize.py")
         return subprocess.call([sys.executable, quant_script] + raw_args[1:])
+    elif subcmd in ("devices", "--devices", "opencl", "--opencl"):
+        return print_detected_devices()
 
     ap = argparse.ArgumentParser(description="Nativa v0.3 (AI, Data & Ternary Edition)")
     ap.add_argument("arquivo", nargs="?", help="arquivo .nat ou @exemplo | @riemann | @rede | @ia_tensor | @ternario")
@@ -5283,8 +5341,13 @@ def main(argv: Optional[list[str]] = None) -> int:
     ap.add_argument("--emit-c", metavar="ARQUIVO_C", nargs="?", const="", help="emite codigo C99 correspondente")
     ap.add_argument("--build", action="store_true", help="compila codigo C99 AOT para executavel nativo (.exe)")
     ap.add_argument("--test", action="store_true", help="roda a suite de testes")
+    ap.add_argument("--devices", action="store_true", help="lista os dispositivos de computação disponíveis (CPU, OpenCL GPU/CPU)")
+    ap.add_argument("--opencl", action="store_true", help="lista os dispositivos OpenCL disponíveis")
     ap.add_argument("-v", "--version", action="version", version="Nativa v0.3.0 (AI, Data & Ternary Edition)")
     args = ap.parse_args(argv)
+
+    if args.devices or args.opencl:
+        return print_detected_devices()
 
     if args.test:
         return run_tests()
