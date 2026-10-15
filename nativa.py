@@ -3240,9 +3240,10 @@ class Tokenizer:
                     import regex as _regex_mod
                     self._pre_regex = _regex_mod.compile(pat_str)
                 except Exception:
-                    translated = pat_str.replace(r"\p{L}", r"[^\W\d_]").replace(r"\p{N}", r"\d")
+                    # Fallback robusto para o módulo padrão 're' do Python (sem nested character classes)
+                    clean_pat = r"""(?i:'s|'t|'re|'ve|'m|'ll|'d)| ?[^\W\d_]+| ?\d+| ?[^\s\w]+|\s+(?!\S)|\s+"""
                     try:
-                        self._pre_regex = re.compile(translated)
+                        self._pre_regex = re.compile(clean_pat)
                     except Exception:
                         pass
 
