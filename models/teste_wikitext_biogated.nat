@@ -1,7 +1,7 @@
 # ==============================================================================
-# teste_wikitext_biogated.nat — Benchmark Córtex + Hipocampo 100% Nativa Puro
+# teste_wikitext_biogated.nat — Benchmark Córtex + Hipocampo na DSL Nativa v0.3
 # Avaliação de Sparsidade Neuroquímica, Recall em 2 bits e KV-Cache no WikiText-2
-# Sintaxe Limpa: Inferência de Tipos Local, fill(), seed() e Promoção Numérica
+# Sintaxe: Inferência de Tipos Local, fill(), seed() e Promoção Numérica
 # ==============================================================================
 
 # 1. Modulação Dopaminérgica com Normalização Homeostática
@@ -101,8 +101,8 @@ fn gerar_embedding_token(token_id: i64, d_model: i64, escala: f64) -> [f32]:
 
 fn main():
     print("==========================================================================")
-    print("BENCHMARK WIKITEXT-2 100% NATIVA: CORTEX BIO-GATED + HIPOCAMPO TURBOQUANT")
-    print("Executado Nativamente via Interpretador Nativa (.nat) sem Dependencia Externa")
+    print("BENCHMARK WIKITEXT-2: CORTEX BIO-GATED + HIPOCAMPO TURBOQUANT (DSL NATIVA)")
+    print("Executado via Frontend Nativa v0.3 / Runtime Prototipagem (Python + NumPy/C)")
     print("==========================================================================")
 
     # 1. Carregamento dos dados nativos
@@ -317,4 +317,4 @@ fn main():
     print(f"4. Hibrido Cortex + Hipocampo (Nativa): {mem_hibrido_kb:.2f} KB ({engramas_128k:.0f} engramas de 2 bits)")
     print(f"   -> Economia vs Transformer FP32:     {(mem_tf_fp32_mb * 1024.0) / mem_hibrido_kb:.1f}x MENOS MEMORIA!")
     print("==========================================================================")
-    print("Benchmark WikiText-2 100% nativo executado com exito na Linguagem Nativa!")
+    print("Benchmark WikiText-2 concluido com exito na DSL Nativa v0.3!")

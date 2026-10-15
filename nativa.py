@@ -1,28 +1,22 @@
 #!/usr/bin/env python3
 """
 nativa.py — Linguagem Nativa (v0.3 - AI, Data & Ternary Edition)
-Lexer, parser, analisador semântico e runtime para IA e computação em CPU/GPU.
+Frontend DSL, analisador semântico estático, interpretador de prototipagem (Python/NumPy)
+e transpilador AOT para C99 nativo (GCC/Clang/MSVC).
+
+Arquitetura do Projeto:
+    1. Frontend DSL: Lexer, parser e analisador semântico estático em Python puro.
+    2. Runtime de Prototipagem (--run): Interpretador dinâmico acelerado com NumPy
+       e kernels de baixo nível (BitNet b1.58, RMSNorm, SiLU, Softmax) via ctypes/AOT.
+    3. Compilador Nativo AOT (--build): Transpilador para C99 estático, compilado diretamente
+       via GCC, Clang ou MSVC para binário executável (.exe / ELF) sem dependência externa.
 
 Uso:
-    python nativa.py programa.nat            # analisa (sintaxe + semântica)
-    python nativa.py programa.nat --run      # executa o programa
-    python nativa.py programa.nat --ast      # imprime a AST
-    python nativa.py programa.nat --tokens   # imprime os tokens
-    python nativa.py @ternario --run         # exemplos: @exemplo @riemann @rede @ia_tensor @ternario
-    python nativa.py --test                  # roda a suíte de testes completa
-
-Decisões de semântica e recursos para IA e Computação Ternária:
-  - Suporte a tensores e precisões de IA: f32, f16, bf16, i32, i8, u8, tensor[T].
-  - Computação Ternária de 1.58 bits nativa: tipos t2 e ternary (valores em {-1, 0, +1}).
-  - Matmul Ternário Livre de Multiplicações: tensor[t2] @ tensor[f32] usa kernel Add-only GEMM.
-  - Primitivas ternárias: quantize_ternary(x, threshold), pack_ternary(x), unpack_ternary(bytes, n).
-  - Operador nativo de multiplicação matricial @ e atribuição composta @=.
-  - Fatiamento contíguo nativo em listas, strings e tensores: v[start..end] e v[start..=end].
-  - Funções de IA embutidas: matmul, relu, sigmoid, tanh, sum, mean, max, min,
-    argmax, zeros, ones, shape, reshape, transpose, tensor, device.
-  - len polimórfico suportando listas, tensores e strings.
-  - Broadcasting elemento a elemento acelerado em CPU via vetores contíguos (NumPy).
-  - Escopo de bloco, proibição de shadowing e sugestão de erros de digitação (fuzzy matching).
+    nativa run programa.nat            # executa via interpretador de prototipagem
+    nativa build programa.nat          # compila para binário executável nativo C99
+    nativa build programa.nat --run    # compila para binário C99 e executa nativamente
+    nativa programa.nat                # validação sintática e análise semântica
+    nativa test                        # roda a suíte de testes de regressão (75 testes)
 """
 
 from __future__ import annotations
@@ -45,7 +39,7 @@ import time
 import unicodedata
 import unittest
 from dataclasses import dataclass, field, fields
-from typing import Any, Optional, Union
+from typing import Any, Callable, Optional, Union
 
 import numpy as np
 
@@ -1018,80 +1012,109 @@ class FuncSig:
     ret: Any
     variadic: bool = False
     builtin: bool = False
+    min_args: Optional[int] = None
+    max_args: Optional[int] = None
+    ret_builder: Optional[Callable[[list[Any]], Any]] = None
+    arg_validator: Optional[Callable[[Any, list[Any], list[Any], Any], None]] = None
+    impl: Optional[Callable] = None
+    doc: str = ""
 
 
-BUILTINS = {
-    "print":            FuncSig([ANY], VOID, variadic=True, builtin=True),
-    "len":              FuncSig([ANY], I64, builtin=True),
-    "sqrt":             FuncSig([F64], F64, builtin=True),
-    "exp":              FuncSig([F64], F64, builtin=True),
-    "sin":              FuncSig([F64], F64, builtin=True),
-    "cos":              FuncSig([F64], F64, builtin=True),
-    "ln":               FuncSig([F64], F64, builtin=True),
-    "floor":            FuncSig([F64], I64, builtin=True),
-    "to_i64":           FuncSig([ANY], I64, builtin=True),
-    "to_f64":           FuncSig([ANY], F64, builtin=True),
-    "dot":              FuncSig([ListT(F64), ListT(F64)], F64, builtin=True),
+def _quant_ret(ats: list[Any]) -> Any:
+    if ats and ats[0] == ANY:
+        return ANY
+    if ats and isinstance(ats[0], (ListT, TensorT)):
+        c = ats[0]
+        depth = 0
+        while isinstance(c, (ListT, TensorT)):
+            depth += 1
+            c = c.elem
+        res = T2
+        for _ in range(depth):
+            res = TensorT(res)
+        return res
+    return T2
+
+
+def _len_validator(analyzer: Any, ats: list[Any], args: list[Any], node: Any) -> None:
+    if ats:
+        t = ats[0]
+        if not (isinstance(t, (ListT, TensorT)) or t in (STR, ANY)):
+            analyzer.report(f"argumento 1 de 'len': esperado lista, tensor ou str, recebeu {t}", args[0])
+
+
+BUILTINS: dict[str, FuncSig] = {
+    "print":            FuncSig([ANY], VOID, variadic=True, builtin=True, min_args=0, max_args=None),
+    "len":              FuncSig([ANY], I64, builtin=True, min_args=1, max_args=1, arg_validator=_len_validator),
+    "sqrt":             FuncSig([F64], F64, builtin=True, min_args=1, max_args=1),
+    "exp":              FuncSig([F64], F64, builtin=True, min_args=1, max_args=1),
+    "sin":              FuncSig([F64], F64, builtin=True, min_args=1, max_args=1),
+    "cos":              FuncSig([F64], F64, builtin=True, min_args=1, max_args=1),
+    "ln":               FuncSig([F64], F64, builtin=True, min_args=1, max_args=1),
+    "floor":            FuncSig([F64], I64, builtin=True, min_args=1, max_args=1),
+    "to_i64":           FuncSig([ANY], I64, builtin=True, min_args=1, max_args=1),
+    "to_f64":           FuncSig([ANY], F64, builtin=True, min_args=1, max_args=1),
+    "dot":              FuncSig([ListT(F64), ListT(F64)], F64, builtin=True, min_args=2, max_args=2),
     # Builtins adicionados para IA e manipulação de tensores
-    "tanh":             FuncSig([F64], F64, builtin=True),
-    "relu":             FuncSig([ANY], ANY, builtin=True),
-    "sigmoid":          FuncSig([ANY], ANY, builtin=True),
-    "matmul":           FuncSig([ANY, ANY], ANY, builtin=True),
-    "sum":              FuncSig([ANY], ANY, builtin=True),
-    "mean":             FuncSig([ANY], F64, builtin=True),
-    "max":              FuncSig([ANY], ANY, builtin=True),
-    "min":              FuncSig([ANY], ANY, builtin=True),
-    "argmax":           FuncSig([ANY], I64, builtin=True),
-    "zeros":            FuncSig([ANY], ANY, builtin=True),
-    "ones":             FuncSig([ANY], ANY, builtin=True),
-    "shape":            FuncSig([ANY], ListT(I64), builtin=True),
-    "reshape":          FuncSig([ANY, ANY], ANY, builtin=True),
-    "transpose":        FuncSig([ANY], ANY, builtin=True),
-    "tensor":           FuncSig([ANY], TensorT(ANY), builtin=True),
-    "device":           FuncSig([ANY], STR, builtin=True),
+    "tanh":             FuncSig([F64], F64, builtin=True, min_args=1, max_args=1),
+    "relu":             FuncSig([ANY], ANY, builtin=True, min_args=1, max_args=1),
+    "sigmoid":          FuncSig([ANY], ANY, builtin=True, min_args=1, max_args=1),
+    "matmul":           FuncSig([ANY, ANY], ANY, builtin=True, min_args=2, max_args=2),
+    "sum":              FuncSig([ANY], ANY, builtin=True, min_args=1, max_args=1),
+    "mean":             FuncSig([ANY], F64, builtin=True, min_args=1, max_args=1),
+    "max":              FuncSig([ANY], ANY, builtin=True, min_args=1, max_args=1),
+    "min":              FuncSig([ANY], ANY, builtin=True, min_args=1, max_args=1),
+    "argmax":           FuncSig([ANY], I64, builtin=True, min_args=1, max_args=1),
+    "zeros":            FuncSig([ANY], ANY, builtin=True, min_args=1, max_args=1),
+    "ones":             FuncSig([ANY], ANY, builtin=True, min_args=1, max_args=1),
+    "shape":            FuncSig([ANY], ListT(I64), builtin=True, min_args=1, max_args=1),
+    "reshape":          FuncSig([ANY, ANY], ANY, builtin=True, min_args=2, max_args=2),
+    "transpose":        FuncSig([ANY], ANY, builtin=True, min_args=1, max_args=1),
+    "tensor":           FuncSig([ANY], TensorT(ANY), builtin=True, min_args=1, max_args=3),
+    "device":           FuncSig([ANY], STR, builtin=True, min_args=1, max_args=1),
     # Primitivas para computação ternária
-    "quantize_ternary": FuncSig([ANY], TensorT(T2), builtin=True),
-    "pack_ternary":     FuncSig([ANY], ListT(I64), builtin=True),
-    "unpack_ternary":   FuncSig([ANY, I64], ListT(I64), builtin=True),
-    "clock":            FuncSig([], F64, builtin=True),
-    "random_ternary":   FuncSig([ANY], ANY, builtin=True),
-    "randn":            FuncSig([ANY], ANY, builtin=True),
-    "rotate_rht":       FuncSig([ANY], ListT(F64), builtin=True),
-    "turbo_quant":      FuncSig([ANY], ANY, builtin=True),
-    "turbo_dequant":    FuncSig([ANY], ListT(F64), builtin=True),
-    "turbo_dot":        FuncSig([ANY, ANY], F64, builtin=True),
-    "rmsnorm":          FuncSig([ANY, ANY], ANY, builtin=True),
-    "apply_rope":       FuncSig([ANY, I64], ListT(F64), builtin=True),
-    "silu":             FuncSig([ANY], ANY, builtin=True),
+    "quantize_ternary": FuncSig([ANY], TensorT(T2), builtin=True, min_args=1, max_args=2, ret_builder=_quant_ret),
+    "pack_ternary":     FuncSig([ANY], ListT(I64), builtin=True, min_args=1, max_args=1),
+    "unpack_ternary":   FuncSig([ANY, I64], ListT(I64), builtin=True, min_args=2, max_args=2),
+    "clock":            FuncSig([], F64, builtin=True, min_args=0, max_args=0),
+    "random_ternary":   FuncSig([ANY], ANY, builtin=True, min_args=1, max_args=2),
+    "randn":            FuncSig([ANY], ANY, builtin=True, min_args=1, max_args=2),
+    "rotate_rht":       FuncSig([ANY], ListT(F64), builtin=True, min_args=1, max_args=2),
+    "turbo_quant":      FuncSig([ANY], ANY, builtin=True, min_args=1, max_args=2),
+    "turbo_dequant":    FuncSig([ANY], ListT(F64), builtin=True, min_args=1, max_args=1),
+    "turbo_dot":        FuncSig([ANY, ANY], F64, builtin=True, min_args=2, max_args=2),
+    "rmsnorm":          FuncSig([ANY, ANY], ANY, builtin=True, min_args=2, max_args=3, ret_builder=lambda ats: ats[0] if ats else ANY),
+    "apply_rope":       FuncSig([ANY, I64], ListT(F64), builtin=True, min_args=2, max_args=3, ret_builder=lambda ats: ats[0] if ats else ANY),
+    "silu":             FuncSig([ANY], ANY, builtin=True, min_args=1, max_args=1),
     # SafeTensors I/O (Hugging Face standard)
-    "load_safetensors": FuncSig([STR, STR], ANY, builtin=True),
-    "safetensors_keys": FuncSig([STR], ListT(STR), builtin=True),
-    "save_safetensors": FuncSig([STR, STR, ANY], VOID, builtin=True),
+    "load_safetensors": FuncSig([STR, STR], ANY, builtin=True, min_args=2, max_args=2),
+    "safetensors_keys": FuncSig([STR], ListT(STR), builtin=True, min_args=1, max_args=1),
+    "save_safetensors": FuncSig([STR, STR, ANY], VOID, builtin=True, min_args=3, max_args=3),
     # BitNet b1.58 Canônico (AbsMean Scaling & Dense Base-3 Packing 5 trits/byte)
-    "quantize_bitnet":       FuncSig([ANY], TensorT(T2), builtin=True),
-    "tensor_absmean":        FuncSig([ANY], F64, builtin=True),
-    "pack_ternary_5trits":   FuncSig([ANY], ListT(I64), builtin=True),
-    "unpack_ternary_5trits": FuncSig([ANY, I64], ListT(I64), builtin=True),
+    "quantize_bitnet":       FuncSig([ANY], TensorT(T2), builtin=True, min_args=1, max_args=1, ret_builder=_quant_ret),
+    "tensor_absmean":        FuncSig([ANY], F64, builtin=True, min_args=1, max_args=1),
+    "pack_ternary_5trits":   FuncSig([ANY], ListT(I64), builtin=True, min_args=1, max_args=1),
+    "unpack_ternary_5trits": FuncSig([ANY, I64], ListT(I64), builtin=True, min_args=2, max_args=2),
     # Validação de Fidelidade Numérica & Vec-LUT Kernel
-    "mae":                   FuncSig([ANY, ANY], F64, builtin=True),
-    "relative_error":        FuncSig([ANY, ANY], F64, builtin=True),
-    "pearson_corr":          FuncSig([ANY, ANY], F64, builtin=True),
-    "cosine_sim":            FuncSig([ANY, ANY], F64, builtin=True),
-    "gemv_vec_lut":          FuncSig([ANY, ANY, I64, I64], ANY, builtin=True),
+    "mae":                   FuncSig([ANY, ANY], F64, builtin=True, min_args=2, max_args=2),
+    "relative_error":        FuncSig([ANY, ANY], F64, builtin=True, min_args=2, max_args=2),
+    "pearson_corr":          FuncSig([ANY, ANY], F64, builtin=True, min_args=2, max_args=2),
+    "cosine_sim":            FuncSig([ANY, ANY], F64, builtin=True, min_args=2, max_args=2),
+    "gemv_vec_lut":          FuncSig([ANY, ANY, I64, I64], ANY, builtin=True, min_args=4, max_args=5),
     # Primitivas de Modelo (Attention, Tokenizador, KV Cache)
-    "softmax":               FuncSig([ANY], ANY, builtin=True),
-    "causal_mask":           FuncSig([I64], ANY, builtin=True),
-    "sdpa":                  FuncSig([ANY, ANY, ANY], ANY, builtin=True),
-    "Tokenizer":             FuncSig([], ANY, builtin=True),
-    "load_tokenizer":        FuncSig([], ANY, builtin=True),
-    "encode":                FuncSig([ANY, STR], ANY, builtin=True),
-    "decode":                FuncSig([ANY, ANY], STR, builtin=True),
-    "KVCache":               FuncSig([I64, I64], ANY, builtin=True),
-    "concat":                FuncSig([ANY], ANY, builtin=True),
-    "sample":                FuncSig([ANY], I64, builtin=True),
-    "read_file":             FuncSig([STR], STR, builtin=True),
-    "fill":                  FuncSig([I64, ANY], ListT(ANY), builtin=True),
-    "seed":                  FuncSig([I64], VOID, builtin=True),
+    "softmax":               FuncSig([ANY], ANY, builtin=True, min_args=1, max_args=2),
+    "causal_mask":           FuncSig([I64], ANY, builtin=True, min_args=1, max_args=1),
+    "sdpa":                  FuncSig([ANY, ANY, ANY], TensorT(F32), builtin=True, min_args=3, max_args=5),
+    "Tokenizer":             FuncSig([], ANY, builtin=True, min_args=0, max_args=1),
+    "load_tokenizer":        FuncSig([], ANY, builtin=True, min_args=0, max_args=1),
+    "encode":                FuncSig([ANY, STR], ANY, builtin=True, min_args=2, max_args=2),
+    "decode":                FuncSig([ANY, ANY], STR, builtin=True, min_args=2, max_args=2),
+    "KVCache":               FuncSig([I64, I64], ANY, builtin=True, min_args=0, max_args=2),
+    "concat":                FuncSig([ANY], TensorT(F32), builtin=True, min_args=1, max_args=2),
+    "sample":                FuncSig([ANY], I64, builtin=True, min_args=1, max_args=3),
+    "read_file":             FuncSig([STR], STR, builtin=True, min_args=1, max_args=1),
+    "fill":                  FuncSig([I64, ANY], ListT(ANY), builtin=True, min_args=2, max_args=2, ret_builder=lambda ats: ListT(ats[1] if len(ats) > 1 else ANY)),
+    "seed":                  FuncSig([I64], VOID, builtin=True, min_args=1, max_args=1),
 }
 
 KNOWN_MODULES = {"math", "time"}
@@ -1648,103 +1671,36 @@ class SemanticAnalyzer:
         if sig is None:
             return ANY
 
-        if label in ("Tokenizer", "load_tokenizer"):
-            if len(ats) not in (0, 1):
-                self.report(f"'{label}' espera 0 ou 1 argumento(s), mas recebeu {len(ats)}", node)
-            return ANY
+        # Verificação uniforme e genérica de aridade
+        min_a = sig.min_args if sig.min_args is not None else (0 if sig.variadic else len(sig.params))
+        max_a = sig.max_args if sig.max_args is not None else (None if sig.variadic else len(sig.params))
 
-        if label == "sdpa":
-            if len(ats) not in (3, 4, 5):
-                self.report(f"'sdpa' espera entre 3 e 5 argumentos, mas recebeu {len(ats)}", node)
-            return TensorT(F32)
-
-        if label == "KVCache":
-            if len(ats) not in (0, 1, 2):
-                self.report(f"'KVCache' espera até 2 argumentos, mas recebeu {len(ats)}", node)
-            return ANY
-
-        if label == "sample":
-            if len(ats) not in (1, 2, 3):
-                self.report(f"'sample' espera entre 1 e 3 argumentos (logits, temp, top_p), mas recebeu {len(ats)}", node)
-            return I64
-
-        if label == "concat":
-            if len(ats) not in (1, 2):
-                self.report(f"'concat' espera 1 ou 2 argumento(s), mas recebeu {len(ats)}", node)
-            return TensorT(F32)
-
-        # Tratamento polimórfico de len para listas, tensores e strings
-        if label == "len":
-            if len(ats) != 1:
-                self.report(f"'len' espera 1 argumento(s), mas recebeu {len(ats)}", node)
+        if len(ats) < min_a or (max_a is not None and len(ats) > max_a):
+            if min_a == max_a:
+                self.report(f"'{label}' espera {min_a} argumento(s), mas recebeu {len(ats)}", node)
+            elif max_a is None:
+                self.report(f"'{label}' espera pelo menos {min_a} argumento(s), mas recebeu {len(ats)}", node)
             else:
-                t = ats[0]
-                if not (isinstance(t, (ListT, TensorT)) or t in (STR, ANY)):
-                    self.report(f"argumento 1 de 'len': esperado lista, tensor ou str, recebeu {t}", node.args[0])
-            return I64
+                self.report(f"'{label}' espera entre {min_a} e {max_a} argumentos, mas recebeu {len(ats)}", node)
 
-        # Tratamento de quantize_ternary e quantize_bitnet
-        if label in ("quantize_ternary", "quantize_bitnet"):
-            if label == "quantize_ternary" and len(ats) not in (1, 2):
-                self.report(f"'quantize_ternary' espera 1 ou 2 argumento(s), mas recebeu {len(ats)}", node)
-            elif label == "quantize_bitnet" and len(ats) != 1:
-                self.report(f"'quantize_bitnet' espera 1 argumento, mas recebeu {len(ats)}", node)
-            if ats and ats[0] == ANY:
-                return ANY
-            if ats and isinstance(ats[0], (ListT, TensorT)):
-                c = ats[0]
-                depth = 0
-                while isinstance(c, (ListT, TensorT)):
-                    depth += 1
-                    c = c.elem
-                res = T2
-                for _ in range(depth):
-                    res = TensorT(res)
-                return res
-            return T2
+        # Validação customizada se declarada na assinatura
+        if sig.arg_validator:
+            sig.arg_validator(self, ats, node.args, node)
 
-        if label == "turbo_quant":
-            if len(ats) not in (1, 2):
-                self.report(f"'turbo_quant' espera 1 ou 2 argumento(s), mas recebeu {len(ats)}", node)
-            return ANY
-
-        if label == "rmsnorm":
-            if len(ats) not in (2, 3):
-                self.report(f"'rmsnorm' espera 2 ou 3 argumento(s), mas recebeu {len(ats)}", node)
-            return ats[0] if ats else ANY
-
-        if label == "apply_rope":
-            if len(ats) not in (2, 3):
-                self.report(f"'apply_rope' espera 2 ou 3 argumento(s), mas recebeu {len(ats)}", node)
-            return ats[0] if ats else ANY
-
-        if label in ("random_ternary", "randn"):
-            if len(ats) not in (1, 2):
-                self.report(f"'{label}' espera 1 ou 2 argumento(s) (shape, seed opcional), mas recebeu {len(ats)}", node)
-            return ANY
-
-        if label == "fill":
-            if len(ats) != 2:
-                self.report(f"'fill' espera 2 argumentos (count, value), mas recebeu {len(ats)}", node)
-            return ListT(ats[1] if len(ats) > 1 else ANY)
-
-        if label == "seed":
-            if len(ats) != 1:
-                self.report(f"'seed' espera 1 argumento (seed: i64), mas recebeu {len(ats)}", node)
-            return VOID
-
+        # Verificação dos tipos dos argumentos passados
         if sig.variadic:
-            for i, (a, t) in enumerate(zip(node.args, ats)):
-                if not assignable(t, sig.params[0]):
-                    self.report(f"argumento {i + 1} de '{label}': esperado {sig.params[0]}, "
-                                f"recebeu {t}", a)
+            if sig.params and sig.params[0] != ANY:
+                for i, (a, t) in enumerate(zip(node.args, ats)):
+                    if not assignable(t, sig.params[0]):
+                        self.report(f"argumento {i + 1} de '{label}': esperado {sig.params[0]}, recebeu {t}", a)
         else:
-            if len(ats) != len(sig.params):
-                self.report(f"'{label}' espera {len(sig.params)} argumento(s), mas recebeu "
-                            f"{len(ats)}", node)
             for i, (a, t, p) in enumerate(zip(node.args, ats, sig.params)):
-                if not assignable(t, p):
+                if p != ANY and not assignable(t, p):
                     self.report(f"argumento {i + 1} de '{label}': esperado {p}, recebeu {t}", a)
+
+        # Resolução do tipo de retorno (polimórfico dinâmico ou estático)
+        if sig.ret_builder:
+            return sig.ret_builder(ats)
         return sig.ret
 
 
@@ -3515,6 +3471,99 @@ def save_safetensors_fn(path: str, tensor_name: str, data: Any) -> None:
         f.write(raw_bytes)
 
 
+BUILTIN_IMPLS: dict[str, Callable] = {
+    "print": print,
+    "len": len,
+    "sqrt": math.sqrt,
+    "exp": math.exp,
+    "sin": math.sin,
+    "cos": math.cos,
+    "ln": math.log,
+    "floor": lambda x: int(math.floor(x)),
+    "to_i64": int,
+    "to_f64": float,
+    "dot": lambda a, b: float(np.dot(np.array(a), np.array(b))),
+    "matmul": lambda a, b: (Tensor(np.matmul(np.asarray(a), np.asarray(b))) if isinstance(a, Tensor) or isinstance(b, Tensor) else (np.matmul(np.array(a), np.array(b))).tolist()),
+    "tanh": math.tanh,
+    "relu": lambda x: (Tensor(np.maximum(0, x.data)) if isinstance(x, Tensor) else ((np.maximum(0, np.array(x))).tolist() if isinstance(x, list) else max(0, x))),
+    "sigmoid": lambda x: (Tensor(1.0 / (1.0 + np.exp(-x.data))) if isinstance(x, Tensor) else ((1.0 / (1.0 + np.exp(-np.array(x, dtype=float)))).tolist() if isinstance(x, list) else (1.0 / (1.0 + math.exp(-x))))),
+    "sum": lambda x: (np.sum(x.data if isinstance(x, Tensor) else np.asarray(x))).item() if isinstance(x, (list, Tensor, np.ndarray)) else x,
+    "mean": lambda x: float(np.mean(x.data if isinstance(x, Tensor) else np.asarray(x))),
+    "max": lambda x: (np.max(x.data if isinstance(x, Tensor) else np.asarray(x))).item() if isinstance(x, (list, Tensor, np.ndarray)) else x,
+    "min": lambda x: (np.min(x.data if isinstance(x, Tensor) else np.asarray(x))).item() if isinstance(x, (list, Tensor, np.ndarray)) else x,
+    "argmax": lambda x: int(np.argmax(x.data if isinstance(x, Tensor) else np.asarray(x))),
+    "zeros": lambda s: Tensor(np.zeros(s, dtype=np.float32), dtype="f32"),
+    "ones": lambda s: Tensor(np.ones(s, dtype=np.float32), dtype="f32"),
+    "shape": lambda x: list(x.shape) if hasattr(x, "shape") else list(np.shape(x)),
+    "reshape": lambda x, s: (Tensor(np.reshape(np.array(x), s)) if isinstance(x, Tensor) else (np.reshape(np.array(x), s)).tolist()),
+    "transpose": lambda x: (Tensor(np.transpose(np.array(x))) if isinstance(x, Tensor) else (np.transpose(np.array(x))).tolist()),
+    "tensor": lambda x, dtype="f32", dev=None: Tensor(x, dtype=dtype, device=dev),
+    "device": device_fn,
+    "quantize_ternary": quantize_ternary_fn,
+    "pack_ternary": pack_ternary_fn,
+    "unpack_ternary": unpack_ternary_fn,
+    "clock": time.perf_counter,
+    "random_ternary": lambda s, seed=None: (
+        Tensor(np.random.RandomState(int(seed)).choice([-1, 0, 1], size=s).astype(np.int8), dtype="t2")
+        if seed is not None else
+        Tensor(np.random.choice([-1, 0, 1], size=s).astype(np.int8), dtype="t2")
+    ),
+    "randn": lambda s, seed=None: (
+        Tensor(np.random.RandomState(int(seed)).randn(*(s if isinstance(s, (list, tuple)) else (s,))).astype(np.float32), dtype="f32")
+        if seed is not None else
+        Tensor(np.random.randn(*(s if isinstance(s, (list, tuple)) else (s,))).astype(np.float32), dtype="f32")
+    ),
+    "rotate_rht": rht_fn,
+    "turbo_quant": turbo_quant_fn,
+    "turbo_dequant": turbo_dequant_fn,
+    "turbo_dot": turbo_dot_fn,
+    "rmsnorm": rmsnorm_fn,
+    "apply_rope": apply_rope_fn,
+    "silu": silu_fn,
+    "softmax": softmax_fn,
+    "causal_mask": causal_mask_fn,
+    "sdpa": sdpa_fn,
+    "KVCache": KVCache,
+    "Tokenizer": Tokenizer,
+    "load_tokenizer": lambda p=None: Tokenizer(p),
+    "encode": lambda tok, text: tok.encode(text),
+    "decode": lambda tok, tokens: tok.decode(tokens),
+    "load_safetensors": load_safetensors_fn,
+    "safetensors_keys": safetensors_keys_fn,
+    "save_safetensors": save_safetensors_fn,
+    "quantize_bitnet": quantize_bitnet_fn,
+    "tensor_absmean": tensor_absmean_fn,
+    "pack_ternary_5trits": pack_ternary_5trits_fn,
+    "unpack_ternary_5trits": unpack_ternary_5trits_fn,
+    "mae": mae_fn,
+    "relative_error": relative_error_fn,
+    "pearson_corr": pearson_corr_fn,
+    "cosine_sim": cosine_sim_fn,
+    "gemv_vec_lut": gemv_vec_lut_fn,
+    "concat": concat_fn,
+    "sample": sample_fn,
+    "read_file": lambda p: open(p, "r", encoding="utf-8").read(),
+    "fill": lambda n, v: [copy.deepcopy(v) if isinstance(v, (dict, list)) else v for _ in range(int(n))],
+    "seed": lambda s: np.random.seed(int(s)),
+}
+
+
+def _bind_builtin_implementations():
+    """Garante coerência bidirecional estrita entre BUILTINS (semântico) e BUILTIN_IMPLS (runtime)."""
+    missing_impls = set(BUILTINS.keys()) - set(BUILTIN_IMPLS.keys())
+    missing_decls = set(BUILTIN_IMPLS.keys()) - set(BUILTINS.keys())
+    if missing_impls:
+        raise RuntimeError(f"Coerência semântica/runtime violada: builtins em BUILTINS sem implementação: {missing_impls}")
+    if missing_decls:
+        raise RuntimeError(f"Coerência semântica/runtime violada: builtins em BUILTIN_IMPLS sem assinatura: {missing_decls}")
+
+    for name, impl in BUILTIN_IMPLS.items():
+        BUILTINS[name].impl = impl
+
+
+_bind_builtin_implementations()
+
+
 class Interpreter:
     def __init__(self):
         self.globals: dict[str, Any] = {}
@@ -3525,83 +3574,10 @@ class Interpreter:
         self.init_builtins()
 
     def init_builtins(self):
-        self.globals = {
-            "print": print,
-            "len": len,
-            "sqrt": math.sqrt,
-            "exp": math.exp,
-            "sin": math.sin,
-            "cos": math.cos,
-            "ln": math.log,
-            "floor": lambda x: int(math.floor(x)),
-            "to_i64": int,
-            "to_f64": float,
-            "dot": lambda a, b: float(np.dot(np.array(a), np.array(b))),
-            "matmul": lambda a, b: (Tensor(np.matmul(np.asarray(a), np.asarray(b))) if isinstance(a, Tensor) or isinstance(b, Tensor) else (np.matmul(np.array(a), np.array(b))).tolist()),
-            "tanh": math.tanh,
-            "relu": lambda x: (Tensor(np.maximum(0, x.data)) if isinstance(x, Tensor) else ((np.maximum(0, np.array(x))).tolist() if isinstance(x, list) else max(0, x))),
-            "sigmoid": lambda x: (Tensor(1.0 / (1.0 + np.exp(-x.data))) if isinstance(x, Tensor) else ((1.0 / (1.0 + np.exp(-np.array(x, dtype=float)))).tolist() if isinstance(x, list) else (1.0 / (1.0 + math.exp(-x))))),
-            "sum": lambda x: (np.sum(x.data if isinstance(x, Tensor) else np.asarray(x))).item() if isinstance(x, (list, Tensor, np.ndarray)) else x,
-            "mean": lambda x: float(np.mean(x.data if isinstance(x, Tensor) else np.asarray(x))),
-            "max": lambda x: (np.max(x.data if isinstance(x, Tensor) else np.asarray(x))).item() if isinstance(x, (list, Tensor, np.ndarray)) else x,
-            "min": lambda x: (np.min(x.data if isinstance(x, Tensor) else np.asarray(x))).item() if isinstance(x, (list, Tensor, np.ndarray)) else x,
-            "argmax": lambda x: int(np.argmax(x.data if isinstance(x, Tensor) else np.asarray(x))),
-            "zeros": lambda s: Tensor(np.zeros(s, dtype=np.float32), dtype="f32"),
-            "ones": lambda s: Tensor(np.ones(s, dtype=np.float32), dtype="f32"),
-            "shape": lambda x: list(x.shape) if hasattr(x, "shape") else list(np.shape(x)),
-            "reshape": lambda x, s: (Tensor(np.reshape(np.array(x), s)) if isinstance(x, Tensor) else (np.reshape(np.array(x), s)).tolist()),
-            "transpose": lambda x: (Tensor(np.transpose(np.array(x))) if isinstance(x, Tensor) else (np.transpose(np.array(x))).tolist()),
-            "tensor": lambda x, dtype="f32", dev=None: Tensor(x, dtype=dtype, device=dev),
-            "Tensor": Tensor,
-            "device": device_fn,
-            "quantize_ternary": quantize_ternary_fn,
-            "pack_ternary": pack_ternary_fn,
-            "unpack_ternary": unpack_ternary_fn,
-            "clock": time.perf_counter,
-            "random_ternary": lambda s, seed=None: (
-                Tensor(np.random.RandomState(int(seed)).choice([-1, 0, 1], size=s).astype(np.int8), dtype="t2")
-                if seed is not None else
-                Tensor(np.random.choice([-1, 0, 1], size=s).astype(np.int8), dtype="t2")
-            ),
-            "randn": lambda s, seed=None: (
-                Tensor(np.random.RandomState(int(seed)).randn(*(s if isinstance(s, (list, tuple)) else (s,))).astype(np.float32), dtype="f32")
-                if seed is not None else
-                Tensor(np.random.randn(*(s if isinstance(s, (list, tuple)) else (s,))).astype(np.float32), dtype="f32")
-            ),
-            "rotate_rht": rht_fn,
-            "turbo_quant": turbo_quant_fn,
-            "turbo_dequant": turbo_dequant_fn,
-            "turbo_dot": turbo_dot_fn,
-            "rmsnorm": rmsnorm_fn,
-            "apply_rope": apply_rope_fn,
-            "silu": silu_fn,
-            "softmax": softmax_fn,
-            "causal_mask": causal_mask_fn,
-            "sdpa": sdpa_fn,
-            "KVCache": KVCache,
-            "Tokenizer": Tokenizer,
-            "load_tokenizer": lambda p=None: Tokenizer(p),
-            "encode": lambda tok, text: tok.encode(text),
-            "decode": lambda tok, tokens: tok.decode(tokens),
-            "load_safetensors": load_safetensors_fn,
-            "safetensors_keys": safetensors_keys_fn,
-            "save_safetensors": save_safetensors_fn,
-            "quantize_bitnet": quantize_bitnet_fn,
-            "tensor_absmean": tensor_absmean_fn,
-            "pack_ternary_5trits": pack_ternary_5trits_fn,
-            "unpack_ternary_5trits": unpack_ternary_5trits_fn,
-            "mae": mae_fn,
-            "relative_error": relative_error_fn,
-            "pearson_corr": pearson_corr_fn,
-            "cosine_sim": cosine_sim_fn,
-            "gemv_vec_lut": gemv_vec_lut_fn,
-            "concat": concat_fn,
-            "sample": sample_fn,
-            "read_file": lambda p: open(p, "r", encoding="utf-8").read(),
-            "fill": lambda n, v: [copy.deepcopy(v) if isinstance(v, (dict, list)) else v for _ in range(int(n))],
-            "seed": lambda s: np.random.seed(int(s)),
-            "math": MathModule(),
-        }
+        # Fonte Única de Verdade: popula funções globais diretamente da tabela BUILTINS
+        self.globals = {name: sig.impl for name, sig in BUILTINS.items()}
+        self.globals["Tensor"] = Tensor
+        self.globals["math"] = MathModule()
 
     def run(self, program: Program):
         self.const_globals.clear()
@@ -5145,6 +5121,25 @@ def compile_c_to_binary(c_path: str, exe_path: str) -> bool:
 # ============================================================================
 # TESTES DE ESCOPO, LIMITES DO BACKEND C E TESTES DIFERENCIAIS
 # ============================================================================
+
+class TesteCoerenciaSemanticoRuntime(unittest.TestCase):
+    def test_correspondencia_biunivoca_builtins(self):
+        """Critique #2: Garante que nenhuma função declarada em BUILTINS falte no runtime e vice-versa."""
+        self.assertEqual(set(BUILTINS.keys()), set(BUILTIN_IMPLS.keys()))
+        for name, sig in BUILTINS.items():
+            self.assertIsNotNone(sig.impl, f"Builtin '{name}' não possui implementação vinculada!")
+            self.assertTrue(callable(sig.impl), f"Implementação de '{name}' não é invocável!")
+            self.assertIsNotNone(sig.min_args, f"Builtin '{name}' não possui min_args definido!")
+            if sig.max_args is not None:
+                self.assertGreaterEqual(sig.max_args, sig.min_args, f"Builtin '{name}' possui max_args < min_args!")
+
+    def test_interpretador_inicializa_de_builtins(self):
+        """Critique #2: O interpretador deve derivar seus builtins estritamente de BUILTINS."""
+        interp = Interpreter()
+        for name in BUILTINS:
+            self.assertIn(name, interp.globals, f"Builtin '{name}' ausente em Interpreter.globals!")
+            self.assertIs(interp.globals[name], BUILTINS[name].impl)
+
 
 class TesteEscopoInterpretador(unittest.TestCase):
     def test_escopo_bloco_if(self):
