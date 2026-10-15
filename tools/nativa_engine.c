@@ -361,6 +361,8 @@ static inline void apply_rope(float* vec, int pos, int num_heads, int head_dim, 
 // ----------------------------------------------------------------------------
 // KERNEL Q4x4 UNIVERSAL (SSSE3 Fused 4-Row Vector Dot Product)
 // ----------------------------------------------------------------------------
+static bool g_cpu_has_ssse3 = true;
+
 static inline __m128 q4x4_dot4(const BlockQ4x4* restrict W4, const BlockQ8* restrict x_q8, int nb) {
     const __m128i mask = _mm_set1_epi8(0x0F);
     const __m128i ones = _mm_set1_epi16(1);
@@ -396,17 +398,78 @@ static inline __m128 q4x4_dot4(const BlockQ4x4* restrict W4, const BlockQ8* rest
     return acc;
 }
 
+static inline void q4x4_dot4_scalar(const BlockQ4x4* restrict W4, const BlockQ8* restrict x_q8, int nb, float* out4) {
+    float acc0 = 0.0f;
+    float acc1 = 0.0f;
+    float acc2 = 0.0f;
+    float acc3 = 0.0f;
+    int b;
+    for (b = 0; b < nb; b++) {
+        const BlockQ4x4* blk = &W4[b];
+        const BlockQ8* xb = &x_q8[b];
+
+        float s0 = bf16_to_fp32(blk->scale[0]);
+        float s1 = bf16_to_fp32(blk->scale[1]);
+        float s2 = bf16_to_fp32(blk->scale[2]);
+        float s3 = bf16_to_fp32(blk->scale[3]);
+
+        int32_t dot0 = 0;
+        int32_t dot1 = 0;
+        int32_t dot2 = 0;
+        int32_t dot3 = 0;
+
+        for (int i = 0; i < 16; i++) {
+            uint8_t b0 = blk->qs[i];
+            uint8_t b1 = blk->qs[i + 16];
+            uint8_t b2 = blk->qs[i + 32];
+            uint8_t b3 = blk->qs[i + 48];
+
+            int8_t x_lo = xb->qs[i * 2];
+            int8_t x_hi = xb->qs[i * 2 + 1];
+
+            dot0 += ((int)(b0 & 0x0F) - 8) * (int)x_lo + ((int)(b0 >> 4) - 8) * (int)x_hi;
+            dot1 += ((int)(b1 & 0x0F) - 8) * (int)x_lo + ((int)(b1 >> 4) - 8) * (int)x_hi;
+            dot2 += ((int)(b2 & 0x0F) - 8) * (int)x_lo + ((int)(b2 >> 4) - 8) * (int)x_hi;
+            dot3 += ((int)(b3 & 0x0F) - 8) * (int)x_lo + ((int)(b3 >> 4) - 8) * (int)x_hi;
+        }
+
+        float sc = xb->scale;
+        acc0 += (float)dot0 * s0 * sc;
+        acc1 += (float)dot1 * s1 * sc;
+        acc2 += (float)dot2 * s2 * sc;
+        acc3 += (float)dot3 * s3 * sc;
+    }
+    out4[0] = acc0;
+    out4[1] = acc1;
+    out4[2] = acc2;
+    out4[3] = acc3;
+}
+
 static inline void matvec_q4x4(float* restrict y, const BlockQ4x4* restrict W, const BlockQ8* restrict x_q8,
                                const uint16_t* restrict bias, int rows, int cols, int add) {
     int nb = cols / 32;
     int groups = rows / 4;
     int g;
-    #pragma omp parallel for schedule(static)
-    for (g = 0; g < groups; g++) {
-        __m128 acc = q4x4_dot4(W + (size_t)g * nb, x_q8, nb);
-        if (bias) acc = _mm_add_ps(acc, bf16x4_to_ps(bias + g * 4));
-        if (add) acc = _mm_add_ps(acc, _mm_loadu_ps(&y[g * 4]));
-        _mm_storeu_ps(&y[g * 4], acc);
+    if (g_cpu_has_ssse3) {
+        #pragma omp parallel for schedule(static)
+        for (g = 0; g < groups; g++) {
+            __m128 acc = q4x4_dot4(W + (size_t)g * nb, x_q8, nb);
+            if (bias) acc = _mm_add_ps(acc, bf16x4_to_ps(bias + g * 4));
+            if (add) acc = _mm_add_ps(acc, _mm_loadu_ps(&y[g * 4]));
+            _mm_storeu_ps(&y[g * 4], acc);
+        }
+    } else {
+        #pragma omp parallel for schedule(static)
+        for (g = 0; g < groups; g++) {
+            float out4[4];
+            q4x4_dot4_scalar(W + (size_t)g * nb, x_q8, nb, out4);
+            for (int r = 0; r < 4; r++) {
+                float val = out4[r];
+                if (bias) val += bf16_to_fp32(bias[g * 4 + r]);
+                if (add) val += y[g * 4 + r];
+                y[g * 4 + r] = val;
+            }
+        }
     }
 }
 
@@ -648,6 +711,10 @@ int main(int argc, char** argv) {
     cpu_detect(&cpu);
     cpu_print_info(&cpu);
     cpu_apply_auto_tune(&cpu);
+    g_cpu_has_ssse3 = cpu.ssse3;
+    if (!g_cpu_has_ssse3) {
+        printf("  [NATIVA UNIVERSAL] Processador sem SSSE3 detectado. Modo escalar C99 ativo!\n");
+    }
 
     // 2. Carregar vocabulario
     if (!load_vocab(vocab_path)) {

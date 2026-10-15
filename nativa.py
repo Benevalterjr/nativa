@@ -5065,7 +5065,7 @@ def compile_c_to_binary(c_path: str, exe_path: str) -> bool:
         if os.path.exists(vc):
             bat_dir = os.path.dirname(os.path.abspath(c_path))
             bat_path = os.path.join(bat_dir, "_nativa_build.bat")
-            bat_content = f'@echo off\ncall "{vc}" >nul 2>&1\ncl.exe /O2 /arch:AVX /openmp /nologo /W3 "{c_path}" /Fe:"{exe_path}"\n'
+            bat_content = f'@echo off\ncall "{vc}" >nul 2>&1\ncl.exe /O2 /openmp /nologo /W3 "{c_path}" /Fe:"{exe_path}"\n'
             with open(bat_path, "w", encoding="ascii", errors="ignore") as f:
                 f.write(bat_content)
             try:
@@ -5088,7 +5088,7 @@ def compile_c_to_binary(c_path: str, exe_path: str) -> bool:
 
     cl = shutil.which("cl")
     if cl:
-        cmd = [cl, "/O2", "/arch:AVX", "/openmp", "/nologo", "/W3", c_path, f"/Fe:{exe_path}"]
+        cmd = [cl, "/O2", "/openmp", "/nologo", "/W3", c_path, f"/Fe:{exe_path}"]
         res = subprocess.run(cmd, capture_output=True, text=True)
         if res.returncode != 0:
             print(res.stderr or res.stdout, file=sys.stderr)
