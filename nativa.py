@@ -1088,6 +1088,7 @@ BUILTINS = {
     "KVCache":               FuncSig([I64, I64], ANY, builtin=True),
     "concat":                FuncSig([ANY], ANY, builtin=True),
     "sample":                FuncSig([ANY], I64, builtin=True),
+    "read_file":             FuncSig([STR], STR, builtin=True),
 }
 
 KNOWN_MODULES = {"math", "time"}
@@ -3570,6 +3571,7 @@ class Interpreter:
             "gemv_vec_lut": gemv_vec_lut_fn,
             "concat": concat_fn,
             "sample": sample_fn,
+            "read_file": lambda p: open(p, "r", encoding="utf-8").read(),
             "math": MathModule(),
         }
 
