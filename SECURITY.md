@@ -1,29 +1,47 @@
-# Política de Segurança — Linguagem Nativa
+# Security Policy / Política de Segurança — Nativa
 
-Levamos a segurança do compilador, do runtime e do ecossistema da Linguagem Nativa a sério. Agradecemos o esforço e a colaboração da comunidade em reportar vulnerabilidades de forma responsável.
+We take the security of Nativa's compiler, runtime, and ecosystem seriously. / Levamos a segurança do compilador, do runtime e do ecossistema da Nativa a sério.
 
-## Versões Suportadas
+---
 
-Atualmente, apenas a versão mais recente em desenvolvimento recebe atualizações e correções de segurança.
+## Supported Versions / Versões Suportadas
 
-| Versão | Suportada          |
-| ------ | ------------------ |
-| 0.3.x  | :white_check_mark: |
-| < 0.3  | :x:                |
+Only the latest active development versions receive security updates. / Apenas as versões ativas mais recentes recebem correções de segurança.
 
-## Como Reportar uma Vulnerabilidade
+| Version / Versão | Supported / Suportada |
+| :--- | :---: |
+| 0.4.x | :white_check_mark: |
+| 0.3.x | :white_check_mark: |
+| < 0.3 | :x: |
 
-Se você descobrir uma falha de segurança no código da Nativa, no compilador AOT C99, no interpretador ou nas dependências:
+---
 
-1. **Não abra uma Issue pública** para não expor a falha antes da correção.
-2. Utilize o recurso nativo de **[Private Vulnerability Reporting do GitHub](https://github.com/Benevalterjr/nativa/security/advisories/new)** para relatar a falha diretamente aos mantenedores.
-3. Se preferir, envie os detalhes por e-mail diretamente ao mantenedor do projeto com o título `[Vulnerabilidade de Segurança - Nativa]`.
+## Reporting a Vulnerability / Como Reportar uma Vulnerabilidade
 
-### O que incluir no relatório:
-- Descrição clara da vulnerabilidade.
-- Passos para reproduzir o problema (código de exemplo `.nat` ou script de teste).
-- Possível impacto da falha (ex: estouro de buffer no runtime C99, vazamento de memória mmap, etc.).
+If you discover a security vulnerability in Nativa (compiler, C99 runtime, SafeTensors loader, or .natq4 engine):
 
-### O que esperar:
-- **Primeira resposta:** Em até 48 a 72 horas confirmando o recebimento do relato.
-- **Avaliação e correção:** Manteremos você informado sobre o andamento e o lançamento da versão corrigida.
+1. **Do NOT open a public issue.** Keep details private until a fix is released.
+2. **GitHub Private Advisory (Preferred):** Use the official [GitHub Private Vulnerability Reporting](https://github.com/Benevalterjr/nativa/security/advisories/new).
+3. **Email:** Alternatively, report directly to `databenti@gmail.com` with the subject `[SECURITY - Nativa]`.
+
+### What to include in your report / O que incluir no relato:
+- A clear description of the vulnerability and its potential impact. / Descrição clara da vulnerabilidade e seu impacto.
+- Minimal reproducible example (`.nat` script, malicious tensor header, or command sequence). / Exemplo mínimo reproduzível.
+- Affected platforms (OS, Python version, compiler used: GCC/Clang/MSVC). / Plataformas afetadas.
+
+### Response Timeline / Prazos de Resposta:
+- **Initial acknowledgment:** Within 48 hours. / Confirmação de recebimento em até 48 horas.
+- **Triage & Assessment:** Regular updates provided until a fix is published. / Atualizações regulares até a publicação da correção.
+
+---
+
+## Scope / Escopo de Segurança
+
+### In Scope / Em Escopo:
+- **Memory Safety in C99 Kernels:** Buffer overflows, out-of-bounds access, or memory leaks in generated C99 code or AOT runtime engines.
+- **Untrusted File Parsing:** Malformed SafeTensors headers, corrupted `.natq4` files, or tokenizer deserialization exploits.
+- **I/O Safety:** Path traversal vulnerabilities during model or file loading (`read_file_safe`).
+
+### Out of Scope / Fora de Escopo:
+- Running untrusted third-party `.nat` scripts without operating-system level sandboxing.
+- Issues related to underlying operating system drivers or vendor OpenCL/CPU runtimes.
