@@ -87,6 +87,11 @@ Nativa adota uma separação intencional entre **velocidade de exploração cien
 | `KVCache` dinâmico | Sim | **Não** | Arena dinâmica de memória; estática em v0.4 |
 | `turbo_quant`, `turbo_dequant`, `turbo_dot` | Sim | **Não** | Depende de tabelas e engrams dicionários |
 | `read_file`, `fill`, `seed` | Sim | Parcial | `fill()` e `seed()` suportados em v0.3.1 |
+| **Tratamento de Erros (`Result`)** | | | |
+| `Result[str]`, `read_file_safe`, `ok`, `err`, `is_ok`, `is_err`, `unwrap`, `unwrap_or`, `error_message` | Sim | Sim | C99 `NatResult` (carrega apenas `const char*`) |
+| `Result[T]` com `T` ≠ `str` (ex.: `Result[i64]`) | Sim | **Não** | Compilador recusa com erro claro; só interpretador por enquanto |
+| `?` em função que **não** retorna `Result` (ex.: `main`) | Sim (panic controlado) | Sim (`nat_unwrap_str`, `exit 1`) | Mesma semântica de unwrap com panic nos dois modos |
+| `?` com propagação de `Err` em função `-> Result[T]` | Sim | **Não** | Exige early-return; C99 puro não tem statement-expressions. Compilador recusa com erro claro |
 
 ---
 

@@ -16,7 +16,7 @@ Uso:
     nativa build programa.nat          # compila para binário executável nativo C99
     nativa build programa.nat --run    # compila para binário C99 e executa nativamente
     nativa programa.nat                # validação sintática e análise semântica
-    nativa test                        # roda a suíte de testes de regressão (75 testes)
+    nativa test                        # roda a suíte de testes de regressão (86 testes)
 """
 
 from __future__ import annotations
@@ -1597,7 +1597,9 @@ class SemanticAnalyzer:
         t = self.expr(node.expr)
         if isinstance(t, ResultT):
             return t.elem
-        return t
+        if t != ANY:
+            self.report(f"o operador '?' exige um Result[T], mas recebeu {t}", node)
+        return ANY
 
     def visit_Unary(self, node: Unary):
         t = self.expr(node.operand)
@@ -1778,6 +1780,19 @@ def analyze(program: Program) -> list[Diagnostic]:
 class ReturnSignal(Exception):
     def __init__(self, value: Any):
         self.value = value
+
+class ErrPropagate(Exception):
+    """Sinal disparado por '?' quando o Result é Err.
+    Capturado por call_function: se a função declara retorno Result, o Err é devolvido
+    ao chamador (propagação estilo Rust); caso contrário vira panic controlado."""
+    def __init__(self, result: Any):
+        self.result = result
+
+def is_result_type_expr(t: Any) -> bool:
+    """True se a anotação de tipo da AST for Result / Result[T] / NatResult."""
+    if isinstance(t, TypeResult):
+        return True
+    return isinstance(t, TypeName) and t.name in ("Result", "NatResult")
 
 class BreakSignal(Exception):
     pass
@@ -3861,6 +3876,12 @@ class Interpreter:
                 self.eval_stmt(stmt)
         except ReturnSignal as ret:
             return ret.value
+        except ErrPropagate as prop:
+            if is_result_type_expr(fn.ret):
+                return prop.result          # propagação: devolve o Err ao chamador
+            raise RuntimeError(
+                f"panic: erro propagado por '?' em '{fn.name}' (que não retorna Result): "
+                f"{prop.result.error}") from None
         finally:
             self.const_scopes.pop()
             self.last_scope = self.scopes.pop()
@@ -3999,7 +4020,7 @@ class Interpreter:
             val = self.eval_expr(e.expr)
             if isinstance(val, NatResult):
                 if not val.is_ok:
-                    raise RuntimeError(f"Erro propagado por '?': {val.error}")
+                    raise ErrPropagate(val)
                 return val.value
             return val
         if isinstance(e, Unary):
@@ -4500,6 +4521,8 @@ class SemTipos(SemBase):
         self.ok(M('r: Result[str] = ok("ola")\ns: str = r?\nprint(s)'))
         self.erro(M('r: Result[str] = ok("ola")\nx: i64 = r?\nprint(x)'), "declarado como")
         self.erro(M('x = 1\nr: Result[str] = ok("ola")\nx = r?\nprint(x)'), "não pode receber")
+        self.erro(M('s = read_file("a.txt")?\nprint(s)'), "exige um Result[T]")
+        self.erro(M('n = 5\nm = n?\nprint(m)'), "exige um Result[T]")
 
 
 class SemFuncoes(SemBase):
@@ -4742,7 +4765,13 @@ class CTranspiler:
             return self.types_map.get(t.name, "double")
         if isinstance(t, Prim):
             return self.types_map.get(t.name, "double")
-        if isinstance(t, (TypeResult, ResultT)):
+        if isinstance(t, TypeResult):
+            if not (isinstance(t.elem, TypeName) and t.elem.name == "str"):
+                raise NatError("o backend C99 suporta apenas Result[str] por enquanto "
+                               "(use 'nativa run' para Result de outros tipos)",
+                               getattr(t, "line", 0), 0)
+            return "NatResult"
+        if isinstance(t, ResultT):
             return "NatResult"
         if isinstance(t, (TypeList, TypeTensor)):
             elem_t = self.c_type(t.elem)
@@ -5332,6 +5361,7 @@ class CTranspiler:
     def emit_function(self, fn: Function) -> str:
         lines = []
         is_main = (fn.name == "main")
+        self.cur_fn_returns_result = (not is_main) and is_result_type_expr(fn.ret)
         ret_t = "int" if is_main else (self.c_type(fn.ret) if fn.ret else "void")
         p_str = "int argc, char** argv" if is_main else (", ".join(f"{self.c_type(p.type)} {p.name}" for p in fn.params) if fn.params else "void")
 
@@ -5933,9 +5963,14 @@ class CTranspiler:
             return f"({obj})[{idx}]"
 
         if isinstance(e, TryUnwrap):
+            if getattr(self, "cur_fn_returns_result", False):
+                raise NatError(
+                    "propagação de Err via '?' dentro de função que retorna Result ainda não é "
+                    "suportada no backend C99 (use 'nativa run' ou unwrap_or/is_err)",
+                    getattr(e, "line", 0), 0)
             inner = self.emit_expr(e.expr)
             if self.infer_type(e.expr) == "NatResult":
-                return f"nat_unwrap_str({inner})"
+                return f"nat_unwrap_str({inner})"   # Err -> panic controlado (exit 1)
             return inner
 
         if isinstance(e, Attr):
@@ -6194,6 +6229,49 @@ class TesteCoerenciaSemanticoRuntime(unittest.TestCase):
             self.assertIs(interp.globals[name], BUILTINS[name].impl)
 
 
+class TestePropagacaoResult(unittest.TestCase):
+    """Semântica de runtime do operador '?' sobre Result[T]."""
+    FN = ('fn ler(p: str) -> Result[str]:\n'
+          '    s = read_file_safe(p)?\n'
+          '    return ok(s)\n\n')
+
+    def _run(self, code):
+        import io, contextlib
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            Interpreter().run(parse(code))
+        return buf.getvalue().strip()
+
+    def test_propaga_err_em_funcao_result(self):
+        code = self.FN + ('fn main():\n'
+                          '    r = ler("nao_existe_xyz_123.txt")\n'
+                          '    print(is_err(r))\n'
+                          '    print(error_message(r) != "")\n')
+        self.assertEqual(analisar(code)[0], [])
+        self.assertEqual(self._run(code).splitlines(), ["True", "True"])
+
+    def test_ok_desempacota(self):
+        code = 'fn main():\n    r = ok("abc")\n    s = r?\n    print(s)\n'
+        self.assertEqual(self._run(code), "abc")
+
+    def test_panic_controlado_fora_de_result(self):
+        code = 'fn main():\n    s = read_file_safe("nao_existe_xyz_123.txt")?\n    print(s)\n'
+        with self.assertRaises(RuntimeError) as cm:
+            self._run(code)
+        self.assertIn("panic", str(cm.exception))
+
+    def test_c99_rejeita_propagacao(self):
+        code = self.FN + 'fn main():\n    r = ler("x.txt")\n    print(is_err(r))\n'
+        with self.assertRaises(NatError) as cm:
+            CTranspiler(parse(code)).transpile()
+        self.assertIn("backend C99", cm.exception.message)
+
+    def test_c99_rejeita_result_nao_str(self):
+        code = 'fn f() -> Result[i64]:\n    return ok(1)\n\nfn main():\n    print(is_ok(f()))\n'
+        with self.assertRaises(NatError):
+            CTranspiler(parse(code)).transpile()
+
+
 class TesteEscopoInterpretador(unittest.TestCase):
     def test_escopo_bloco_if(self):
         # Variável definida dentro de if não deve vazar para fora
@@ -6441,7 +6519,7 @@ Comandos principais:
   nativa build <arquivo.nat>         Compila AOT gerando executavel nativo (.exe)
   nativa chat [modelo.natq4]         Inicia chat local Qwen2 em INT4
   nativa quantize <dir_hf> [out]     Converte Qwen2 SafeTensors para .natq4 Q4x4
-  nativa test                        Executa a suite completa de 81 testes
+  nativa test                        Executa a suite completa de 86 testes
   nativa version                     Exibe a versao instalada
 
 Exemplos pre-carregados:

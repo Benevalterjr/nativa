@@ -187,7 +187,37 @@ As funções espectrais (`rfft`, `irfft`, `power_spectrum`, `Complex`) também e
 
 ---
 
-## 8. Exemplos Prontos Embutidos
+## 8. Tratamento de Erros com `Result` e o Operador `?`
+
+Funções que podem falhar devolvem um `Result[T]` (ou `Ok(valor)` ou `Err(mensagem)`) em vez de abortar o programa:
+
+```python
+fn ler_config(caminho: str) -> Result[str]:
+    texto = read_file_safe(caminho)?   # se for Err, devolve o Err ao chamador
+    return ok(texto)
+
+fn main():
+    r: Result[str] = read_file_safe("arquivo.txt")
+    s = unwrap_or(r, "")               # valor padrão se der erro
+    print(f"Tamanho: {len(s)}")
+    if is_ok(r):
+        print(unwrap(r))               # unwrap: aborta se for Err
+
+    cfg = ler_config("config.txt")
+    if is_err(cfg):
+        print(f"Falhou: {error_message(cfg)}")
+```
+
+Regras do `?`:
+* Só pode ser aplicado a um `Result[T]` — o resultado da expressão é `T` (verificado em tempo de compilação).
+* Dentro de uma função que retorna `Result`, um `Err` é **propagado** (a função retorna o `Err` imediatamente).
+* Em funções que **não** retornam `Result` (como `main`), um `Err` gera um **panic controlado** com a mensagem do erro.
+
+> **Compilação nativa (`nativa build`):** por enquanto o backend C99 suporta apenas `Result[str]`, e `?` funciona como unwrap com panic (`exit 1`). A propagação de `Err` com `?` dentro de funções que retornam `Result` e `Result` de outros tipos rodam **só no interpretador** (`nativa run`); o compilador recusa esses casos com uma mensagem clara.
+
+---
+
+## 9. Exemplos Prontos Embutidos
 
 Você pode rodar exemplos completos incluídos diretamente no Nativa usando o prefixo `@`:
 
@@ -200,7 +230,7 @@ nativa run @ternario     # Computação Ternária BitNet 1.58b pura
 
 ---
 
-## 9. Compilação AOT para Binário Nativo (.exe)
+## 10. Compilação AOT para Binário Nativo (.exe)
 
 O Nativa permite compilar programas `.nat` diretamente para código de máquina C99 de alta velocidade:
 
@@ -216,7 +246,7 @@ A compilação utiliza automaticamente o compilador C disponível no seu sistema
 
 ---
 
-## 10. Descoberta de Hardware e Testes
+## 11. Descoberta de Hardware e Testes
 
 ### Inspecionar Dispositivos (CPU & OpenCL)
 Para saber quais placas de vídeo e processadores estão disponíveis para aceleração:
@@ -227,7 +257,7 @@ nativa opencl
 ```
 
 ### Executar a Suíte de Validação
-Para rodar a bateria com os **81 testes automatizados** do compilador:
+Para rodar a bateria com os **86 testes automatizados** do compilador:
 
 ```powershell
 nativa test
