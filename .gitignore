@@ -7,6 +7,9 @@ __pycache__/
 *$py.class
 .pytest_cache/
 .nativa_cache/
+*.egg-info/
+dist/
+build/
 scratch/
 
 # Compilação C/C++ e Binários Nativos
