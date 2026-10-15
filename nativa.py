@@ -999,16 +999,20 @@ class TensorT:
 # Tipos numéricos expandidos (incluindo t2 / ternary para 1.58-bit AI)
 I8, U8, I16, U16, I32, U32, I64, U64 = (Prim(n) for n in ("i8", "u8", "i16", "u16", "i32", "u32", "i64", "u64"))
 F16, BF16, F32, F64 = (Prim(n) for n in ("f16", "bf16", "f32", "f64"))
+C64 = Prim("c64")
+COMPLEX = Prim("complex")
 T2 = Prim("t2")   # Ternary: -1, 0, +1
 STR, BOOL, VOID, ANY = (Prim(n) for n in ("str", "bool", "void", "any"))
 
 FLOAT_TYPES = {"f16", "bf16", "f32", "f64"}
 INT_TYPES = {"i8", "u8", "i16", "u16", "i32", "u32", "i64", "u64", "t2", "ternary"}
+COMPLEX_TYPES = {"c64", "complex"}
 
 PRIM_TYPES = {
     "i8": I8, "u8": U8, "i16": I16, "u16": U16,
     "i32": I32, "u32": U32, "i64": I64, "u64": U64,
     "f16": F16, "bf16": BF16, "f32": F32, "f64": F64,
+    "c64": C64, "complex": COMPLEX, "Complex": COMPLEX,
     "t2": T2, "ternary": T2,
     "str": STR, "bool": BOOL, "void": VOID, "any": ANY,
 }
@@ -1132,10 +1136,15 @@ BUILTINS: dict[str, FuncSig] = {
     "error_message":         FuncSig([ANY], STR, builtin=True, min_args=1, max_args=1),
     "fill":                  FuncSig([I64, ANY], ListT(ANY), builtin=True, min_args=2, max_args=2, ret_builder=lambda ats: ListT(ats[1] if len(ats) > 1 else ANY)),
     "seed":                  FuncSig([I64], VOID, builtin=True, min_args=1, max_args=1),
+    # Primitivas Espectrais e Números Complexos (Fase 1: Fourier)
+    "Complex":               FuncSig([F64], COMPLEX, builtin=True, min_args=1, max_args=2),
+    "rfft":                  FuncSig([ANY], ANY, builtin=True, min_args=1, max_args=2),
+    "irfft":                 FuncSig([ANY], ANY, builtin=True, min_args=1, max_args=2),
+    "power_spectrum":        FuncSig([ANY], ANY, builtin=True, min_args=1, max_args=1),
 }
 
 KNOWN_MODULES = {"math", "time"}
-MATH_FUNCS = {"sqrt", "exp", "sin", "cos", "ln", "floor", "tanh"}
+MATH_FUNCS = {"sqrt", "exp", "sin", "cos", "ln", "floor", "tanh", "rfft", "irfft", "power_spectrum", "Complex"}
 MATH_CONSTS = {"PI": F64, "E": F64}
 
 
@@ -1584,6 +1593,8 @@ class SemanticAnalyzer:
                     self.report(f"'{op}' exige bool, mas recebeu {t}", node)
             return BOOL
         if op in ("==", "!="):
+            if l in (COMPLEX, C64) and r in (COMPLEX, C64):
+                return BOOL
             if not (same(l, r) or (is_num(l) and is_num(r))):
                 self.report(f"não é possível comparar {l} com {r}", node)
             return BOOL
@@ -1597,6 +1608,8 @@ class SemanticAnalyzer:
     def arith(self, op, l, r, node):
         if l == ANY or r == ANY:
             return ANY
+        if (l in (COMPLEX, C64) or r in (COMPLEX, C64)) and op in ("+", "-", "*", "/"):
+            return COMPLEX
         if is_num(l) and is_num(r):
             if op == "/":
                 return F64
@@ -1753,6 +1766,22 @@ class MathModule:
     ln = staticmethod(math.log)
     floor = staticmethod(lambda x: int(math.floor(x)))
     tanh = staticmethod(math.tanh)
+
+    @staticmethod
+    def Complex(*args, **kwargs):
+        return complex_fn(*args, **kwargs)
+
+    @staticmethod
+    def rfft(*args, **kwargs):
+        return rfft_fn(*args, **kwargs)
+
+    @staticmethod
+    def irfft(*args, **kwargs):
+        return irfft_fn(*args, **kwargs)
+
+    @staticmethod
+    def power_spectrum(*args, **kwargs):
+        return power_spectrum_fn(*args, **kwargs)
 
 
 CURRENT_DEVICE = "cpu"
@@ -3529,6 +3558,133 @@ def load_tokenizer_safe_fn(path: Optional[str] = None) -> NatResult:
         return NatResult(error=str(e), is_ok=False)
 
 
+@dataclass
+class NatComplex:
+    real: float = 0.0
+    imag: float = 0.0
+
+    def __repr__(self) -> str:
+        sign = "+" if self.imag >= 0 else "-"
+        return f"{self.real}{sign}{abs(self.imag)}i"
+
+    def __add__(self, other: Any) -> "NatComplex":
+        if isinstance(other, NatComplex):
+            return NatComplex(self.real + other.real, self.imag + other.imag)
+        if isinstance(other, (int, float)):
+            return NatComplex(self.real + float(other), self.imag)
+        return NotImplemented
+
+    def __radd__(self, other: Any) -> "NatComplex":
+        return self.__add__(other)
+
+    def __sub__(self, other: Any) -> "NatComplex":
+        if isinstance(other, NatComplex):
+            return NatComplex(self.real - other.real, self.imag - other.imag)
+        if isinstance(other, (int, float)):
+            return NatComplex(self.real - float(other), self.imag)
+        return NotImplemented
+
+    def __rsub__(self, other: Any) -> "NatComplex":
+        if isinstance(other, (int, float)):
+            return NatComplex(float(other) - self.real, -self.imag)
+        return NotImplemented
+
+    def __mul__(self, other: Any) -> "NatComplex":
+        if isinstance(other, NatComplex):
+            return NatComplex(
+                self.real * other.real - self.imag * other.imag,
+                self.real * other.imag + self.imag * other.real
+            )
+        if isinstance(other, (int, float)):
+            return NatComplex(self.real * float(other), self.imag * float(other))
+        return NotImplemented
+
+    def __rmul__(self, other: Any) -> "NatComplex":
+        return self.__mul__(other)
+
+    def __abs__(self) -> float:
+        return math.hypot(self.real, self.imag)
+
+    @property
+    def magnitude(self) -> float:
+        return math.hypot(self.real, self.imag)
+
+    @property
+    def power(self) -> float:
+        return self.real * self.real + self.imag * self.imag
+
+
+def complex_fn(real: Any = 0.0, imag: Any = 0.0) -> NatComplex:
+    return NatComplex(float(real), float(imag))
+
+
+def rfft_fn(x: Any, n: Optional[int] = None) -> Any:
+    if isinstance(x, Tensor):
+        arr = np.asarray(x.data, dtype=np.float64)
+        is_tensor = True
+    else:
+        arr = np.asarray(x, dtype=np.float64)
+        is_tensor = False
+
+    N = int(n) if n is not None else arr.shape[0]
+    spec_complex = np.fft.rfft(arr, n=N)
+    spec_2d = np.column_stack((spec_complex.real, spec_complex.imag)).astype(np.float64)
+    if is_tensor:
+        return Tensor(spec_2d, dtype="f64")
+    return spec_2d.tolist()
+
+
+def irfft_fn(freqs: Any, n: Optional[int] = None) -> Any:
+    if isinstance(freqs, list) and freqs and isinstance(freqs[0], NatComplex):
+        complex_arr = np.array([complex(c.real, c.imag) for c in freqs], dtype=np.complex128)
+        N = int(n) if n is not None else (len(complex_arr) - 1) * 2
+        rec = np.fft.irfft(complex_arr, n=N).astype(np.float64)
+        return rec.tolist()
+
+    if isinstance(freqs, Tensor):
+        arr = np.asarray(freqs.data, dtype=np.float64)
+        is_tensor = True
+    else:
+        arr = np.asarray(freqs, dtype=np.float64)
+        is_tensor = False
+
+    if arr.ndim == 2 and arr.shape[1] == 2:
+        complex_arr = arr[:, 0] + 1j * arr[:, 1]
+    elif arr.dtype in (np.complex128, np.complex64):
+        complex_arr = arr
+    else:
+        complex_arr = arr.astype(np.complex128)
+
+    N = int(n) if n is not None else (len(complex_arr) - 1) * 2
+    rec = np.fft.irfft(complex_arr, n=N).astype(np.float64)
+    if is_tensor:
+        return Tensor(rec, dtype="f64")
+    return rec.tolist()
+
+
+def power_spectrum_fn(x: Any) -> Any:
+    if isinstance(x, list) and x and isinstance(x[0], NatComplex):
+        return [c.real ** 2 + c.imag ** 2 for c in x]
+
+    if isinstance(x, Tensor):
+        arr = np.asarray(x.data, dtype=np.float64)
+        is_tensor = True
+    else:
+        arr = np.asarray(x, dtype=np.float64)
+        is_tensor = False
+
+    if arr.ndim == 2 and arr.shape[1] == 2:
+        ps = arr[:, 0] ** 2 + arr[:, 1] ** 2
+    else:
+        spec_c = np.fft.rfft(arr)
+        ps = spec_c.real ** 2 + spec_c.imag ** 2
+
+    ps = ps.astype(np.float64)
+    if is_tensor:
+        return Tensor(ps, dtype="f64")
+    return ps.tolist()
+
+
 BUILTIN_IMPLS: dict[str, Callable] = {
     "print": print,
     "len": len,
@@ -3613,6 +3769,10 @@ BUILTIN_IMPLS: dict[str, Callable] = {
     "error_message": lambda r: (r.error if (isinstance(r, NatResult) and not r.is_ok) else ""),
     "fill": lambda n, v: [copy.deepcopy(v) if isinstance(v, (dict, list)) else v for _ in range(int(n))],
     "seed": lambda s: np.random.seed(int(s)),
+    "Complex": complex_fn,
+    "rfft": rfft_fn,
+    "irfft": irfft_fn,
+    "power_spectrum": power_spectrum_fn,
 }
 
 
@@ -4519,6 +4679,7 @@ class CTranspiler:
             "u64": "uint64_t", "u32": "uint32_t", "u16": "uint16_t", "u8": "uint8_t",
             "f64": "double", "f32": "double", "f16": "double", "bf16": "double",
             "t2": "int8_t", "ternary": "int8_t",
+            "c64": "NatComplex", "complex": "NatComplex", "Complex": "NatComplex",
             "bool": "bool", "str": "const char*", "void": "void"
         }
         self.var_types: dict[str, str] = {}
@@ -4559,6 +4720,10 @@ class CTranspiler:
             return "bool"
         if isinstance(expr, Str):
             return "const char*"
+        if isinstance(expr, Attr):
+            if expr.name in ("real", "imag", "magnitude", "power"):
+                return "double"
+            return "double"
         if isinstance(expr, ListLit):
             if not expr.items:
                 return "double*"
@@ -4579,6 +4744,8 @@ class CTranspiler:
                 return "double*"
             t_left = self.infer_type(expr.left)
             t_right = self.infer_type(expr.right)
+            if t_left == "NatComplex" or t_right == "NatComplex":
+                return "NatComplex"
             if "double" in (t_left, t_right) or "float" in (t_left, t_right):
                 return "double"
             return t_left
@@ -4589,8 +4756,15 @@ class CTranspiler:
                 return "bool"
             return self.infer_type(expr.operand)
         if isinstance(expr, Call):
+            fname = ""
             if isinstance(expr.func, Name):
                 fname = expr.func.id
+            elif isinstance(expr.func, Attr) and isinstance(expr.func.obj, Name) and expr.func.obj.id == "math":
+                fname = expr.func.name
+
+            if fname:
+                if fname == "Complex":
+                    return "NatComplex"
                 if fname in ("sqrt", "exp", "sin", "cos", "ln", "to_f64", "tanh", "mean", "sum", "dot", "min", "max"):
                     return "double"
                 if fname in ("floor", "to_i64", "len", "argmax"):
@@ -4631,6 +4805,82 @@ class CTranspiler:
         out.append("#ifndef NAT_E")
         out.append("#define NAT_E  2.71828182845904523536")
         out.append("#endif")
+        out.append("/* Tipos e funções para números complexos e análise espectral (Fourier) */")
+        out.append("typedef struct {")
+        out.append("    double real;")
+        out.append("    double imag;")
+        out.append("} NatComplex;")
+        out.append("static inline NatComplex nat_complex(double re, double im) {")
+        out.append("    NatComplex c; c.real = re; c.imag = im; return c;")
+        out.append("}")
+        out.append("static inline NatComplex nat_complex_add(NatComplex a, NatComplex b) {")
+        out.append("    return nat_complex(a.real + b.real, a.imag + b.imag);")
+        out.append("}")
+        out.append("static inline NatComplex nat_complex_sub(NatComplex a, NatComplex b) {")
+        out.append("    return nat_complex(a.real - b.real, a.imag - b.imag);")
+        out.append("}")
+        out.append("static inline NatComplex nat_complex_mul(NatComplex a, NatComplex b) {")
+        out.append("    return nat_complex(a.real * b.real - a.imag * b.imag, a.real * b.imag + a.imag * b.real);")
+        out.append("}")
+        out.append("static inline double nat_complex_abs(NatComplex c) {")
+        out.append("    return sqrt(c.real * c.real + c.imag * c.imag);")
+        out.append("}")
+        out.append("static inline double nat_complex_power(NatComplex c) {")
+        out.append("    return c.real * c.real + c.imag * c.imag;")
+        out.append("}")
+        out.append("static inline void nat_rfft(const double* x, double* out_spec, int64_t N) {")
+        out.append("    if (N <= 0) return;")
+        out.append("    int64_t M = N / 2 + 1;")
+        out.append("    for (int64_t k = 0; k < M; k++) {")
+        out.append("        double re = 0.0, im = 0.0;")
+        out.append("        for (int64_t n = 0; n < N; n++) {")
+        out.append("            double angle = 2.0 * NAT_PI * (double)k * (double)n / (double)N;")
+        out.append("            re += x[n] * cos(angle);")
+        out.append("            im -= x[n] * sin(angle);")
+        out.append("        }")
+        out.append("        out_spec[k * 2]     = re;")
+        out.append("        out_spec[k * 2 + 1] = im;")
+        out.append("    }")
+        out.append("}")
+        out.append("static inline void nat_irfft(const double* spec, double* out_x, int64_t M, int64_t N) {")
+        out.append("    if (N <= 0 || M <= 0) return;")
+        out.append("    double inv_N = 1.0 / (double)N;")
+        out.append("    int64_t max_k = (N - 1) / 2;")
+        out.append("    for (int64_t n = 0; n < N; n++) {")
+        out.append("        double val = spec[0];")
+        out.append("        if (N % 2 == 0 && (N / 2) < M) {")
+        out.append("            double sign = (n % 2 == 0) ? 1.0 : -1.0;")
+        out.append("            val += spec[(N / 2) * 2] * sign;")
+        out.append("        }")
+        out.append("        for (int64_t k = 1; k <= max_k && k < M; k++) {")
+        out.append("            double angle = 2.0 * NAT_PI * (double)k * (double)n / (double)N;")
+        out.append("            double re_k = spec[k * 2];")
+        out.append("            double im_k = spec[k * 2 + 1];")
+        out.append("            val += 2.0 * (re_k * cos(angle) - im_k * sin(angle));")
+        out.append("        }")
+        out.append("        out_x[n] = val * inv_N;")
+        out.append("    }")
+        out.append("}")
+        out.append("static inline void nat_power_spectrum_spec(const double* spec, double* out_ps, int64_t M) {")
+        out.append("    for (int64_t k = 0; k < M; k++) {")
+        out.append("        double re = spec[k * 2];")
+        out.append("        double im = spec[k * 2 + 1];")
+        out.append("        out_ps[k] = re * re + im * im;")
+        out.append("    }")
+        out.append("}")
+        out.append("static inline void nat_power_spectrum_signal(const double* x, double* out_ps, int64_t N) {")
+        out.append("    if (N <= 0) return;")
+        out.append("    int64_t M = N / 2 + 1;")
+        out.append("    for (int64_t k = 0; k < M; k++) {")
+        out.append("        double re = 0.0, im = 0.0;")
+        out.append("        for (int64_t n = 0; n < N; n++) {")
+        out.append("            double angle = 2.0 * NAT_PI * (double)k * (double)n / (double)N;")
+        out.append("            re += x[n] * cos(angle);")
+        out.append("            im -= x[n] * sin(angle);")
+        out.append("        }")
+        out.append("        out_ps[k] = re * re + im * im;")
+        out.append("    }")
+        out.append("}")
         out.append("/* Primitivas de quantização ternária e empacotamento {-1, 0, +1} em C */")
         out.append("static inline int8_t* nat_quantize_ternary(const double* v, int64_t length, double threshold) {")
         out.append("    int8_t* out = (int8_t*)malloc(length * sizeof(int8_t));")
@@ -5328,6 +5578,126 @@ class CTranspiler:
                 self.var_shapes[name] = shape
                 return f"{ind}{const_p}double {name}[{total}]; for (int64_t _i = 0; _i < {total}; _i++) {name}[_i] = ({l_code}) {val_expr.op} {val_expr.right.id}[_i];"
 
+        # 9. rfft(signal, [n])
+        is_rfft = False
+        if isinstance(val_expr, Call):
+            fn = ""
+            if isinstance(val_expr.func, Name):
+                fn = val_expr.func.id
+            elif isinstance(val_expr.func, Attr) and isinstance(val_expr.func.obj, Name) and val_expr.func.obj.id == "math":
+                fn = val_expr.func.name
+            if fn == "rfft":
+                is_rfft = True
+
+        if is_rfft and val_expr.args:
+            sig_arg = val_expr.args[0]
+            sig_code = self.emit_expr(sig_arg)
+            n_val = None
+            if len(val_expr.args) > 1 and isinstance(val_expr.args[1], Int) and val_expr.args[1].value is not None:
+                n_val = val_expr.args[1].value
+            elif isinstance(sig_arg, Name):
+                if sig_arg.id in self.var_shapes and len(self.var_shapes[sig_arg.id]) == 1:
+                    n_val = self.var_shapes[sig_arg.id][0]
+                elif sig_arg.id in self.var_lengths:
+                    n_val = self.var_lengths[sig_arg.id]
+            elif isinstance(sig_arg, ListLit):
+                n_val = len(sig_arg.items)
+
+            if n_val is not None:
+                M = n_val // 2 + 1
+                total = M * 2
+                self.var_types[name] = "double*"
+                self.var_lengths[name] = total
+                self.var_shapes[name] = (M, 2)
+                return f"{ind}{const_p}double {name}[{total}]; nat_rfft({sig_code}, {name}, {n_val}LL);"
+            else:
+                n_code = self.emit_expr(val_expr.args[1]) if len(val_expr.args) > 1 else f"((int64_t)(sizeof({sig_code}) / sizeof(({sig_code})[0])))"
+                self.var_types[name] = "double*"
+                return f"{ind}int64_t _n_{name} = (int64_t)({n_code}); int64_t _m_{name} = _n_{name} / 2 + 1; {const_p}double* {name} = (double*)malloc(_m_{name} * 2 * sizeof(double)); if ({name}) nat_rfft({sig_code}, {name}, _n_{name});"
+
+        # 10. irfft(spec, [n])
+        is_irfft = False
+        if isinstance(val_expr, Call):
+            fn = ""
+            if isinstance(val_expr.func, Name):
+                fn = val_expr.func.id
+            elif isinstance(val_expr.func, Attr) and isinstance(val_expr.func.obj, Name) and val_expr.func.obj.id == "math":
+                fn = val_expr.func.name
+            if fn == "irfft":
+                is_irfft = True
+
+        if is_irfft and val_expr.args:
+            spec_arg = val_expr.args[0]
+            spec_code = self.emit_expr(spec_arg)
+            M_val = None
+            if isinstance(spec_arg, Name):
+                if spec_arg.id in self.var_shapes and len(self.var_shapes[spec_arg.id]) == 2:
+                    M_val = self.var_shapes[spec_arg.id][0]
+                elif spec_arg.id in self.var_lengths:
+                    M_val = self.var_lengths[spec_arg.id] // 2
+
+            n_val = None
+            if len(val_expr.args) > 1 and isinstance(val_expr.args[1], Int) and val_expr.args[1].value is not None:
+                n_val = val_expr.args[1].value
+            elif M_val is not None:
+                n_val = (M_val - 1) * 2
+
+            if n_val is not None and M_val is not None:
+                self.var_types[name] = "double*"
+                self.var_lengths[name] = n_val
+                self.var_shapes[name] = (n_val,)
+                return f"{ind}{const_p}double {name}[{n_val}]; nat_irfft({spec_code}, {name}, {M_val}LL, {n_val}LL);"
+            else:
+                m_code = f"{M_val}LL" if M_val is not None else f"((int64_t)(sizeof({spec_code}) / (2 * sizeof(double))))"
+                n_code = self.emit_expr(val_expr.args[1]) if len(val_expr.args) > 1 else f"(({m_code} - 1) * 2)"
+                self.var_types[name] = "double*"
+                return f"{ind}int64_t _m_{name} = (int64_t)({m_code}); int64_t _n_{name} = (int64_t)({n_code}); {const_p}double* {name} = (double*)malloc(_n_{name} * sizeof(double)); if ({name}) nat_irfft({spec_code}, {name}, _m_{name}, _n_{name});"
+
+        # 11. power_spectrum(x)
+        is_ps = False
+        if isinstance(val_expr, Call):
+            fn = ""
+            if isinstance(val_expr.func, Name):
+                fn = val_expr.func.id
+            elif isinstance(val_expr.func, Attr) and isinstance(val_expr.func.obj, Name) and val_expr.func.obj.id == "math":
+                fn = val_expr.func.name
+            if fn == "power_spectrum":
+                is_ps = True
+
+        if is_ps and val_expr.args:
+            x_arg = val_expr.args[0]
+            x_code = self.emit_expr(x_arg)
+            is_spec_2d = False
+            M_val = None
+            N_val = None
+            if isinstance(x_arg, Name):
+                if x_arg.id in self.var_shapes and len(self.var_shapes[x_arg.id]) == 2:
+                    is_spec_2d = True
+                    M_val = self.var_shapes[x_arg.id][0]
+                elif x_arg.id in self.var_shapes and len(self.var_shapes[x_arg.id]) == 1:
+                    N_val = self.var_shapes[x_arg.id][0]
+                    M_val = N_val // 2 + 1
+                elif x_arg.id in self.var_lengths:
+                    N_val = self.var_lengths[x_arg.id]
+                    M_val = N_val // 2 + 1
+            elif isinstance(x_arg, ListLit):
+                N_val = len(x_arg.items)
+                M_val = N_val // 2 + 1
+
+            if is_spec_2d and M_val is not None:
+                self.var_types[name] = "double*"
+                self.var_lengths[name] = M_val
+                self.var_shapes[name] = (M_val,)
+                return f"{ind}{const_p}double {name}[{M_val}]; nat_power_spectrum_spec({x_code}, {name}, {M_val}LL);"
+            elif N_val is not None and M_val is not None:
+                self.var_types[name] = "double*"
+                self.var_lengths[name] = M_val
+                self.var_shapes[name] = (M_val,)
+                return f"{ind}{const_p}double {name}[{M_val}]; nat_power_spectrum_signal({x_code}, {name}, {N_val}LL);"
+            else:
+                self.var_types[name] = "double*"
+                return f"{ind}int64_t _n_{name} = ((int64_t)(sizeof({x_code}) / sizeof(({x_code})[0]))); int64_t _m_{name} = _n_{name} / 2 + 1; {const_p}double* {name} = (double*)malloc(_m_{name} * sizeof(double)); if ({name}) nat_power_spectrum_signal({x_code}, {name}, _n_{name});"
+
         return None
 
     def emit_stmt(self, s: Node) -> str:
@@ -5481,6 +5851,14 @@ class CTranspiler:
         if isinstance(e, Binary):
             l = self.emit_expr(e.left)
             r = self.emit_expr(e.right)
+            tl = self.infer_type(e.left)
+            tr = self.infer_type(e.right)
+            if tl == "NatComplex" or tr == "NatComplex":
+                l_c = l if tl == "NatComplex" else f"nat_complex((double)({l}), 0.0)"
+                r_c = r if tr == "NatComplex" else f"nat_complex((double)({r}), 0.0)"
+                if e.op == "+": return f"nat_complex_add({l_c}, {r_c})"
+                if e.op == "-": return f"nat_complex_sub({l_c}, {r_c})"
+                if e.op == "*": return f"nat_complex_mul({l_c}, {r_c})"
             if e.op == "and": return f"(({l}) && ({r}))"
             if e.op == "or": return f"(({l}) || ({r}))"
             if e.op == "**": return f"pow((double)({l}), (double)({r}))"
@@ -5551,6 +5929,8 @@ class CTranspiler:
                     code = self.emit_expr(a)
                     if itype in ("int64_t", "int32_t", "int16_t", "int8_t"):
                         parts.append(f'printf("%lld{sep}", (long long)({code}));')
+                    elif itype == "NatComplex":
+                        parts.append(f'printf("%f%+fi{sep}", ({code}).real, ({code}).imag);')
                     elif itype in ("double", "float"):
                         parts.append(f'printf("%f{sep}", (double)({code}));')
                     elif itype == "const char*":
@@ -5567,7 +5947,11 @@ class CTranspiler:
         elif isinstance(c.func, Attr) and isinstance(c.func.obj, Name) and c.func.obj.id == "math":
             fn_name = c.func.name
 
-        if fn_name == "ln": fn_name = "nat_ln"
+        if fn_name == "Complex":
+            re = self.emit_expr(c.args[0]) if len(c.args) > 0 else "0.0"
+            im = self.emit_expr(c.args[1]) if len(c.args) > 1 else "0.0"
+            return f"nat_complex((double)({re}), (double)({im}))"
+        elif fn_name == "ln": fn_name = "nat_ln"
         elif fn_name == "relu": fn_name = "nat_relu"
         elif fn_name == "sigmoid": fn_name = "nat_sigmoid"
         elif fn_name == "silu": fn_name = "nat_silu"
@@ -5870,6 +6254,125 @@ fn main():
             c_out = res.stdout.strip()
 
         self.assertEqual(interp_out, c_out)
+
+
+class TesteEspectralFourier(unittest.TestCase):
+    def test_complex_aritmetica(self):
+        c1 = complex_fn(3.0, 4.0)
+        c2 = complex_fn(1.0, 2.0)
+        self.assertEqual(c1.real, 3.0)
+        self.assertEqual(c1.imag, 4.0)
+        self.assertAlmostEqual(c1.magnitude, 5.0)
+        self.assertAlmostEqual(c1.power, 25.0)
+
+        c_soma = c1 + c2
+        self.assertEqual((c_soma.real, c_soma.imag), (4.0, 6.0))
+
+        c_sub = c1 - c2
+        self.assertEqual((c_sub.real, c_sub.imag), (2.0, 2.0))
+
+        c_mul = c1 * c2
+        self.assertEqual((c_mul.real, c_mul.imag), (-5.0, 10.0))
+
+    def test_rfft_irfft_reconstrucao(self):
+        sinal = [1.0, 2.0, 3.0, 4.0, 3.0, 2.0, 1.0, 0.0]
+        spec = rfft_fn(sinal)
+        self.assertEqual(len(spec), 5)
+        self.assertEqual(len(spec[0]), 2)
+
+        rec = irfft_fn(spec, n=8)
+        self.assertEqual(len(rec), 8)
+        for orig, r in zip(sinal, rec):
+            self.assertAlmostEqual(orig, r, places=6)
+
+    def test_power_spectrum(self):
+        sinal = [1.0, 0.0, -1.0, 0.0]
+        ps = power_spectrum_fn(sinal)
+        self.assertEqual(len(ps), 3)
+        for p in ps:
+            self.assertGreaterEqual(p, 0.0)
+
+    def test_interpretador_fourier_nat(self):
+        code = '''
+fn main():
+    c = Complex(3.0, 4.0)
+    print(c.real)
+    print(c.imag)
+    sig = [1.0, 2.0, 3.0, 4.0]
+    spec = rfft(sig)
+    ps = power_spectrum(sig)
+    rec = irfft(spec)
+    print(len(spec))
+    print(len(rec))
+'''
+        import io
+        prog = parse(code)
+        interp = Interpreter()
+        buf = io.StringIO()
+        old_stdout = sys.stdout
+        sys.stdout = buf
+        try:
+            interp.run(prog)
+        finally:
+            sys.stdout = old_stdout
+        lines = [l.strip() for l in buf.getvalue().strip().splitlines()]
+        self.assertEqual(lines[0], "3.0")
+        self.assertEqual(lines[1], "4.0")
+        self.assertEqual(lines[2], "3")
+        self.assertEqual(lines[3], "4")
+
+    def test_diferencial_fourier_c99(self):
+        if not bool(shutil.which("gcc") or shutil.which("clang") or shutil.which("cl")):
+            self.skipTest("Nenhum compilador C disponível para teste diferencial")
+
+        source = '''
+fn main():
+    c = Complex(3.0, 4.0)
+    c2 = Complex(1.0, -2.0)
+    c3 = c + c2
+    print(c3.real)
+    print(c3.imag)
+    x = [1.0, 2.0, 3.0, 4.0]
+    spec = rfft(x)
+    ps = power_spectrum(spec)
+    rec = irfft(spec)
+    print(len(spec))
+    print(len(rec))
+    print(ps[0])
+'''
+        import io, tempfile
+        prog = parse(source)
+        interp = Interpreter()
+        buf = io.StringIO()
+        old_stdout = sys.stdout
+        sys.stdout = buf
+        try:
+            interp.run(prog)
+        finally:
+            sys.stdout = old_stdout
+        interp_out = buf.getvalue().strip()
+
+        c_code = CTranspiler(prog).transpile()
+        kwargs = {"ignore_cleanup_errors": True} if sys.version_info >= (3, 10) else {}
+        with tempfile.TemporaryDirectory(**kwargs) as tmpdir:
+            c_path = os.path.join(tmpdir, "diff_fourier.c")
+            exe_path = os.path.join(tmpdir, "diff_fourier.exe")
+            with open(c_path, "w", encoding="utf-8") as f:
+                f.write(c_code)
+            ok = compile_c_to_binary(c_path, exe_path)
+            self.assertTrue(ok, "Compilação C falhou para diff_fourier")
+            res = subprocess.run([exe_path], capture_output=True, text=True, timeout=10)
+            c_out = res.stdout.strip()
+
+        interp_lines = interp_out.splitlines()
+        c_lines = c_out.splitlines()
+        self.assertEqual(len(interp_lines), len(c_lines))
+        for il, cl in zip(interp_lines, c_lines):
+            try:
+                self.assertAlmostEqual(float(il), float(cl), places=4)
+            except ValueError:
+                self.assertEqual(il, cl)
+
 
 
 # ============================================================================
