@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-nativa.py — Linguagem Nativa (v0.3 - AI, Data & Ternary Edition)
+nativa.py — Linguagem Nativa (v0.4 - AI, Data, Spectral & Ternary Edition)
 Frontend DSL, analisador semântico estático, interpretador de prototipagem (Python/NumPy)
 e transpilador AOT para C99 nativo (GCC/Clang/MSVC).
 
@@ -307,7 +307,11 @@ class TypeList(Node):
 class TypeTensor(Node):
     elem: "TypeExpr"
 
-TypeExpr = Union[TypeName, TypeList, TypeTensor]
+@dataclass
+class TypeResult(Node):
+    elem: "TypeExpr"
+
+TypeExpr = Union[TypeName, TypeList, TypeTensor, TypeResult]
 
 # --- expressões ---
 @dataclass
@@ -596,6 +600,11 @@ class Parser:
                 elem = self.parse_type()
                 self.expect_op("]", " ao fechar o tipo tensor")
                 return TypeTensor(elem, line=t.line)
+            if t.value in ("Result", "NatResult") and self.is_op("["):
+                self.advance()
+                elem = self.parse_type()
+                self.expect_op("]", " ao fechar o tipo Result")
+                return TypeResult(elem, line=t.line)
             return TypeName(t.value, line=t.line)
         if self.is_op("["):
             self.advance()
@@ -1004,6 +1013,14 @@ COMPLEX = Prim("complex")
 T2 = Prim("t2")   # Ternary: -1, 0, +1
 STR, BOOL, VOID, ANY = (Prim(n) for n in ("str", "bool", "void", "any"))
 
+@dataclass(frozen=True)
+class ResultT:
+    elem: Any = ANY
+    def __repr__(self) -> str:
+        return f"Result[{self.elem}]"
+
+RESULT = ResultT(ANY)
+
 FLOAT_TYPES = {"f16", "bf16", "f32", "f64"}
 INT_TYPES = {"i8", "u8", "i16", "u16", "i32", "u32", "i64", "u64", "t2", "ternary"}
 COMPLEX_TYPES = {"c64", "complex"}
@@ -1015,6 +1032,7 @@ PRIM_TYPES = {
     "c64": C64, "complex": COMPLEX, "Complex": COMPLEX,
     "t2": T2, "ternary": T2,
     "str": STR, "bool": BOOL, "void": VOID, "any": ANY,
+    "Result": RESULT, "NatResult": RESULT,
 }
 
 @dataclass
@@ -1124,15 +1142,15 @@ BUILTINS: dict[str, FuncSig] = {
     "concat":                FuncSig([ANY], TensorT(F32), builtin=True, min_args=1, max_args=2),
     "sample":                FuncSig([ANY], I64, builtin=True, min_args=1, max_args=3),
     "read_file":             FuncSig([STR], STR, builtin=True, min_args=1, max_args=1),
-    "read_file_safe":        FuncSig([STR], ANY, builtin=True, min_args=1, max_args=1),
+    "read_file_safe":        FuncSig([STR], ResultT(STR), builtin=True, min_args=1, max_args=1),
     "exists_file":           FuncSig([STR], BOOL, builtin=True, min_args=1, max_args=1),
-    "load_tokenizer_safe":   FuncSig([STR], ANY, builtin=True, min_args=0, max_args=1),
-    "ok":                    FuncSig([ANY], ANY, builtin=True, min_args=1, max_args=1),
-    "err":                   FuncSig([STR], ANY, builtin=True, min_args=1, max_args=1),
+    "load_tokenizer_safe":   FuncSig([STR], ResultT(ANY), builtin=True, min_args=0, max_args=1),
+    "ok":                    FuncSig([ANY], RESULT, builtin=True, min_args=1, max_args=1, ret_builder=lambda ats: ResultT(ats[0] if ats else ANY)),
+    "err":                   FuncSig([STR], RESULT, builtin=True, min_args=1, max_args=1),
     "is_ok":                 FuncSig([ANY], BOOL, builtin=True, min_args=1, max_args=1),
     "is_err":                FuncSig([ANY], BOOL, builtin=True, min_args=1, max_args=1),
-    "unwrap":                FuncSig([ANY], ANY, builtin=True, min_args=1, max_args=1),
-    "unwrap_or":             FuncSig([ANY, ANY], ANY, builtin=True, min_args=2, max_args=2),
+    "unwrap":                FuncSig([ANY], ANY, builtin=True, min_args=1, max_args=1, ret_builder=lambda ats: ats[0].elem if (ats and isinstance(ats[0], ResultT)) else (ats[0] if ats else ANY)),
+    "unwrap_or":             FuncSig([ANY, ANY], ANY, builtin=True, min_args=2, max_args=2, ret_builder=lambda ats: ats[0].elem if (ats and isinstance(ats[0], ResultT)) else (ats[1] if len(ats) > 1 else ANY)),
     "error_message":         FuncSig([ANY], STR, builtin=True, min_args=1, max_args=1),
     "fill":                  FuncSig([I64, ANY], ListT(ANY), builtin=True, min_args=2, max_args=2, ret_builder=lambda ats: ListT(ats[1] if len(ats) > 1 else ANY)),
     "seed":                  FuncSig([I64], VOID, builtin=True, min_args=1, max_args=1),
@@ -1186,6 +1204,8 @@ def same(a, b) -> bool:
         return same(a.elem, b.elem)
     if isinstance(a, TensorT) and isinstance(b, TensorT):
         return same(a.elem, b.elem)
+    if isinstance(a, ResultT) and isinstance(b, ResultT):
+        return same(a.elem, b.elem)
     return a == b
 
 def assignable(src, dst) -> bool:
@@ -1203,6 +1223,8 @@ def assignable(src, dst) -> bool:
         if is_float(src.elem) and is_float(dst.elem):
             return True
         return same(src, dst)   # Listas inteiras não promovem para float
+    if isinstance(src, ResultT) and isinstance(dst, ResultT):
+        return assignable(src.elem, dst.elem)
     if isinstance(dst, TensorT):
         bn = base_num(src)
         return assignable(bn, dst.elem) if bn is not None else False
@@ -1227,6 +1249,9 @@ def unify(a, b):
     if isinstance(a, TensorT) and isinstance(b, TensorT):
         e = unify(a.elem, b.elem)
         return TensorT(e) if e is not None else None
+    if isinstance(a, ResultT) and isinstance(b, ResultT):
+        e = unify(a.elem, b.elem)
+        return ResultT(e) if e is not None else None
     return None
 
 
@@ -1300,6 +1325,8 @@ class SemanticAnalyzer:
             return r
         if isinstance(t, TypeTensor):
             return TensorT(self.resolve_type(t.elem))
+        if isinstance(t, TypeResult):
+            return ResultT(self.resolve_type(t.elem))
         return ListT(self.resolve_type(t.elem))
 
     def analyze(self, program: Program) -> list[Diagnostic]:
@@ -1567,7 +1594,10 @@ class SemanticAnalyzer:
         return ANY
 
     def visit_TryUnwrap(self, node: TryUnwrap):
-        return self.expr(node.expr)
+        t = self.expr(node.expr)
+        if isinstance(t, ResultT):
+            return t.elem
+        return t
 
     def visit_Unary(self, node: Unary):
         t = self.expr(node.operand)
@@ -1788,7 +1818,7 @@ CURRENT_DEVICE = "cpu"
 
 def device_fn(dev: Any = None) -> str:
     """Consulta ou define o dispositivo de execução do runtime Nativa.
-    Nota arquitetural (v0.3): O pipeline de execução opera nativamente no backend CPU
+    Nota arquitetural (v0.4): O pipeline de execução opera nativamente no backend CPU
     acelerado por OpenMP/AOT C99. As marcações 'cuda' e 'opencl' operam como metadados
     de posicionamento de grafo para compatibilidade futura com backends GPU.
     """
@@ -1799,8 +1829,8 @@ def device_fn(dev: Any = None) -> str:
         if dev_str in valid:
             if dev_str in ("cuda", "opencl") and CURRENT_DEVICE != dev_str:
                 sys.stderr.write(
-                    f"[Nativa v0.3 Aviso]: Dispositivo '{dev_str}' registrado como metadado de grafo. "
-                    f"O runtime v0.3 executa tensores no backend CPU otimizado (C99 AOT / OpenMP). "
+                    f"[Nativa v0.4 Aviso]: Dispositivo '{dev_str}' registrado como metadado de grafo. "
+                    f"O runtime v0.4 executa tensores no backend CPU otimizado (C99 AOT / OpenMP). "
                     f"Aceleração nativa via hardware '{dev_str}' está reservada para as próximas versões.\n"
                 )
             CURRENT_DEVICE = dev_str
@@ -2078,7 +2108,7 @@ class AOTKernelEngine:
                 except Exception:
                     pass
             elif not compiled_ok:
-                sys.stderr.write("[Nativa v0.3 Aviso]: Recompilação AOT C99 falhou. O cache não foi atualizado.\n")
+                sys.stderr.write("[Nativa v0.4 Aviso]: Recompilação AOT C99 falhou. O cache não foi atualizado.\n")
 
         if os.path.exists(dll_path):
             try:
@@ -4463,6 +4493,14 @@ class SemTipos(SemBase):
     def test_sem_valor(self):
         self.erro(M("x = print(1)"), "não produz valor")
 
+    def test_result_unwrap(self):
+        self.ok(M('r = ok(42)\nx: i64 = r?\nprint(x)'))
+        self.ok(M('r = ok("teste")\ns: str = unwrap(r)\nprint(s)'))
+        self.ok(M('r = err("falha")\ns: str = unwrap_or(r, "padrao")\nprint(s)'))
+        self.ok(M('r: Result[str] = ok("ola")\ns: str = r?\nprint(s)'))
+        self.erro(M('r: Result[str] = ok("ola")\nx: i64 = r?\nprint(x)'), "declarado como")
+        self.erro(M('x = 1\nr: Result[str] = ok("ola")\nx = r?\nprint(x)'), "não pode receber")
+
 
 class SemFuncoes(SemBase):
     F = "fn f(a: i64) -> i64:\n    return a\n\n"
@@ -4680,6 +4718,7 @@ class CTranspiler:
             "f64": "double", "f32": "double", "f16": "double", "bf16": "double",
             "t2": "int8_t", "ternary": "int8_t",
             "c64": "NatComplex", "complex": "NatComplex", "Complex": "NatComplex",
+            "Result": "NatResult", "NatResult": "NatResult",
             "bool": "bool", "str": "const char*", "void": "void"
         }
         self.var_types: dict[str, str] = {}
@@ -4703,6 +4742,8 @@ class CTranspiler:
             return self.types_map.get(t.name, "double")
         if isinstance(t, Prim):
             return self.types_map.get(t.name, "double")
+        if isinstance(t, (TypeResult, ResultT)):
+            return "NatResult"
         if isinstance(t, (TypeList, TypeTensor)):
             elem_t = self.c_type(t.elem)
             return f"{elem_t}*"
@@ -4750,7 +4791,10 @@ class CTranspiler:
                 return "double"
             return t_left
         if isinstance(expr, TryUnwrap):
-            return "const char*"
+            inner_t = self.infer_type(expr.expr)
+            if inner_t == "NatResult":
+                return "const char*"
+            return inner_t
         if isinstance(expr, Unary):
             if expr.op == "not":
                 return "bool"
@@ -6387,7 +6431,7 @@ def run_tests() -> int:
 
 def print_nativa_help() -> None:
     print("""======================================================================
-  NATIVA CLI v0.3.0 - Linguagem Nativa (AI, Data & Ternary Edition)
+  NATIVA CLI v0.4.0 - Linguagem Nativa (AI, Data, Spectral & Ternary Edition)
 ======================================================================
 Uso: nativa <comando> [opcoes]
 
@@ -6397,7 +6441,7 @@ Comandos principais:
   nativa build <arquivo.nat>         Compila AOT gerando executavel nativo (.exe)
   nativa chat [modelo.natq4]         Inicia chat local Qwen2 em INT4
   nativa quantize <dir_hf> [out]     Converte Qwen2 SafeTensors para .natq4 Q4x4
-  nativa test                        Executa a suite completa de 73 testes
+  nativa test                        Executa a suite completa de 81 testes
   nativa version                     Exibe a versao instalada
 
 Exemplos pre-carregados:
@@ -6405,7 +6449,7 @@ Exemplos pre-carregados:
   nativa run @rede                   Rede Neural Perceptron multicamada
   nativa run @ia_tensor              Operacoes com Tensores e Autodiff
   nativa run @ternario               Computacao Ternaria BitNet / Trits
-======================================================================""")
+=======================================================================""")
 
 
 def print_detected_devices() -> int:
@@ -6474,7 +6518,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     # Subcomandos modernos estilo NodeJS / Cargo / Go / Python CLI
     subcmd = raw_args[0].lower()
     if subcmd in ("version", "--version", "-v"):
-        print("Nativa v0.3.0 (AI, Data & Ternary Edition)")
+        print("Nativa v0.4.0 (AI, Data, Spectral & Ternary Edition)")
         return 0
     elif subcmd == "run":
         if len(raw_args) == 1:
@@ -6501,7 +6545,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     elif subcmd in ("devices", "--devices", "opencl", "--opencl"):
         return print_detected_devices()
 
-    ap = argparse.ArgumentParser(description="Nativa v0.3 (AI, Data & Ternary Edition)")
+    ap = argparse.ArgumentParser(description="Nativa v0.4 (AI, Data, Spectral & Ternary Edition)")
     ap.add_argument("arquivo", nargs="?", help="arquivo .nat ou @exemplo | @riemann | @rede | @ia_tensor | @ternario")
     ap.add_argument("--ast", action="store_true", help="imprime a AST")
     ap.add_argument("--tokens", action="store_true", help="imprime os tokens")
@@ -6511,7 +6555,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     ap.add_argument("--test", action="store_true", help="roda a suite de testes")
     ap.add_argument("--devices", action="store_true", help="lista os dispositivos de computação disponíveis (CPU, OpenCL GPU/CPU)")
     ap.add_argument("--opencl", action="store_true", help="lista os dispositivos OpenCL disponíveis")
-    ap.add_argument("-v", "--version", action="version", version="Nativa v0.3.0 (AI, Data & Ternary Edition)")
+    ap.add_argument("-v", "--version", action="version", version="Nativa v0.4.0 (AI, Data, Spectral & Ternary Edition)")
     args = ap.parse_args(argv)
 
     if args.devices or args.opencl:

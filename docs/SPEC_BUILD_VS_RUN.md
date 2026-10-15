@@ -1,4 +1,4 @@
-# Especificação Técnica: `nativa run` vs `nativa build` (v0.3)
+# Especificação Técnica: `nativa run` vs `nativa build` (v0.4)
 
 Este documento define formalmente a matriz de suporte, o escopo arquitetural e os limites entre os dois modos de execução da linguagem Nativa:
 1. **Modo Interpretador / Prototipagem (`nativa run` / `--run`)**
@@ -41,13 +41,14 @@ Nativa adota uma separação intencional entre **velocidade de exploração cien
 
 ---
 
-## 2. Matriz de Compatibilidade (v0.3)
+## 2. Matriz de Compatibilidade (v0.4)
 
 | Recurso / Primitiva | Interpretador (`--run`) | Compilador C99 (`--build`) | Observações |
 | :--- | :---: | :---: | :--- |
-| **Tipos Escalares** | | | |
+| **Tipos Escalares e Estruturados** | | | |
 | `i64`, `i32`, `i16`, `i8`, `u64`, `u32`, `u16`, `u8` | Sim | Sim | C99 `int64_t`, `int32_t`, etc. (`stdint.h`) |
 | `f64`, `f32`, `f16`, `bf16` | Sim | Sim | C99 `double` / `float` |
+| `c64`, `complex`, `Complex` | Sim | Sim | C99 `NatComplex` struct (`double real, imag;`) |
 | `bool`, `str` | Sim | Sim | C99 `bool` (`stdbool.h`), `const char*` |
 | `t2`, `ternary` ({-1, 0, +1}) | Sim | Sim | C99 `int8_t` |
 | **Estruturas de Dados** | | | |
@@ -68,8 +69,9 @@ Nativa adota uma separação intencional entre **velocidade de exploração cien
 | Lógicos (`and`, `or`, `not`) | Sim | Sim | Operadores `&&`, `||`, `!` |
 | `@` (Multiplicação Matricial Genérica) | Sim | Parcial | No C99 suportado para pesos ternários via GEMV |
 | Fatiamento de Vetores `v[start..end]` | Sim | Parcial | Otimizado em loops no C99 |
-| **Primitivas Matemáticas** | | | |
+| **Primitivas Matemáticas e Espectrais** | | | |
 | `sqrt`, `exp`, `sin`, `cos`, `ln`, `floor`, `tanh` | Sim | Sim | Mapeadas para `<math.h>` (`sqrt`, `log`, etc.) |
+| `rfft`, `irfft`, `power_spectrum` | Sim | Sim | Kernels ANSI C99 nativos embarcados (`nat_rfft`, `nat_irfft`, `nat_power_spectrum`) |
 | `to_i64`, `to_f64` | Sim | Sim | Casts de tipo C99 `(int64_t)`, `(double)` |
 | `print` (valores, literais, f-strings) | Sim | Sim | Mapeado para `printf` com especificadores de formato |
 | **Primitivas BitNet b1.58 e Ternárias** | | | |

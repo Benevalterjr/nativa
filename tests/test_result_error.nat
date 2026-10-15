@@ -28,6 +28,6 @@ fn main():
         tam_lido = len(unwrap(res_ok))
         print(f"Arquivo lido com sucesso! Bytes lidos: {tam_lido}")
     
-    # 5. Operador Postfix ? para Desempacotamento Automático
-    conteudo_interrogacao = read_file(arq_existente)?
+    # 5. Operador Postfix ? para Desempacotamento Automático em Result
+    conteudo_interrogacao = read_file_safe(arq_existente)?
     print(f"Leitura via operador '?' bem sucedida! Tamanho: {len(conteudo_interrogacao)}")

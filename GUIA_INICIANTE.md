@@ -1,6 +1,6 @@
 # Guia de Início: Aprendendo a Linguagem Nativa
 
-Este guia apresenta os recursos da linguagem **Nativa (v0.3)** através de exemplos práticos e diretos.
+Este guia apresenta os recursos da linguagem **Nativa (v0.4)** através de exemplos práticos e diretos.
 
 ---
 
@@ -55,6 +55,7 @@ fn main():
 * **Inteiros com sinal:** `i8`, `i16`, `i32`, `i64`
 * **Inteiros sem sinal:** `u8`, `u16`, `u32`, `u64`
 * **Ponto Flutuante:** `f16`, `bf16`, `f32`, `f64`
+* **Números Complexos:** `c64`, `Complex` (campos `.real` e `.imag`, construtor `Complex(re, im)`)
 * **Texto e Lógica:** `str`, `bool` (`true` / `false`)
 * **Computação Ternária (BitNet b1.58):** `t2` (valores restritos a `-1`, `0` e `1`)
 
@@ -156,7 +157,37 @@ fn main():
 
 ---
 
-## 7. Exemplos Prontos Embutidos
+## 7. Análise Espectral e Números Complexos (Fourier)
+
+O Nativa v0.4 inclui suporte de primeira classe a números complexos (`Complex`) e Transformadas de Fourier para análise espectral de sinais, filtros e inspeção de frequências em tensores de ativações:
+
+```nativa
+fn main():
+    # 1. Numeros complexos e aritmetica
+    c1 = Complex(3.0, 4.0)
+    c2 = Complex(1.0, 2.0)
+    soma = c1 + c2
+    print(f"Soma complexa: {soma.real} + {soma.imag}i")
+
+    # 2. Transformada Discreta de Fourier 1D (rfft)
+    sinal = [1.0, 2.0, 3.0, 4.0, 3.0, 2.0, 1.0, 0.0]
+    spec = rfft(sinal)
+    print(f"Qtd frequencias (N//2 + 1): {len(spec)}")
+
+    # 3. Densidade Espectral de Potencia (|X|^2)
+    ps = power_spectrum(spec)
+    print(f"Potencia DC: {ps[0]}")
+
+    # 4. Transformada Inversa (irfft) com reconstrucao exata
+    rec = irfft(spec)
+    print(f"Sinal reconstruido: {len(rec)} amostras")
+```
+
+As funções espectrais (`rfft`, `irfft`, `power_spectrum`, `Complex`) também estão disponíveis através do módulo `math` (`math.rfft(...)`) e são compiladas para código nativo C99 puro sem dependências externas.
+
+---
+
+## 8. Exemplos Prontos Embutidos
 
 Você pode rodar exemplos completos incluídos diretamente no Nativa usando o prefixo `@`:
 
@@ -169,7 +200,7 @@ nativa run @ternario     # Computação Ternária BitNet 1.58b pura
 
 ---
 
-## 8. Compilação AOT para Binário Nativo (.exe)
+## 9. Compilação AOT para Binário Nativo (.exe)
 
 O Nativa permite compilar programas `.nat` diretamente para código de máquina C99 de alta velocidade:
 
@@ -185,7 +216,7 @@ A compilação utiliza automaticamente o compilador C disponível no seu sistema
 
 ---
 
-## 9. Descoberta de Hardware e Testes
+## 10. Descoberta de Hardware e Testes
 
 ### Inspecionar Dispositivos (CPU & OpenCL)
 Para saber quais placas de vídeo e processadores estão disponíveis para aceleração:
@@ -196,7 +227,7 @@ nativa opencl
 ```
 
 ### Executar a Suíte de Validação
-Para rodar a bateria com os **73 testes automatizados** do compilador:
+Para rodar a bateria com os **81 testes automatizados** do compilador:
 
 ```powershell
 nativa test
