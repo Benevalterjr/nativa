@@ -1,5 +1,5 @@
 # ==============================================================================
-# teste_wikitext_biogated.nat — Teste de Integração e Sintaxe da DSL Nativa v0.3
+# teste_wikitext_biogated.nat — Teste de Integração e Sintaxe da DSL Nativa v0.4
 # Validação funcional dos primitivos da linguagem (fill, seed, rmsnorm, turbo_quant, matmul)
 # NOTA CIENTÍFICA: Para o benchmark empírico rigoroso com pesos reais do Qwen2.5-0.5B,
 # Perplexidade (PPL) e NLL no WikiText-2, execute: `tools/experimento_real_cortex_hipocampo.py`
@@ -103,7 +103,7 @@ fn gerar_embedding_token(token_id: i64, d_model: i64, escala: f64) -> [f32]:
 fn main():
     print("==========================================================================")
     print("BENCHMARK WIKITEXT-2: CORTEX BIO-GATED + HIPOCAMPO TURBOQUANT (DSL NATIVA)")
-    print("Executado via Frontend Nativa v0.3 / Runtime Prototipagem (Python + NumPy/C)")
+    print("Executado via Frontend Nativa v0.4 / Runtime Prototipagem (Python + NumPy/C)")
     print("==========================================================================")
 
     # 1. Carregamento dos dados nativos
@@ -318,4 +318,4 @@ fn main():
     print(f"4. Hibrido Cortex + Hipocampo (Nativa): {mem_hibrido_kb:.2f} KB ({engramas_128k:.0f} engramas de 2 bits)")
     print(f"   -> Economia vs Transformer FP32:     {(mem_tf_fp32_mb * 1024.0) / mem_hibrido_kb:.1f}x MENOS MEMORIA!")
     print("==========================================================================")
-    print("Benchmark WikiText-2 concluido com exito na DSL Nativa v0.3!")
+    print("Benchmark WikiText-2 concluido com exito na DSL Nativa v0.4!")

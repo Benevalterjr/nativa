@@ -1,13 +1,22 @@
 # models/benchmark_rigoroso.nat
-# Benchmark Cientifico e Rigoroso em Linguagem Nativa v0.3
+# Benchmark Cientifico e Rigoroso em Linguagem Nativa v0.4
 # Avalia memoria, estatisticas de latencia e fidelidade com tokens reais do Qwen2.5
 
 fn main():
     print("==========================================================================")
-    print("  NATIVA v0.3: BENCHMARK RIGOROSO DE KERNELS E FIDELIDADE NUMERICA")
+    print("  NATIVA v0.4: BENCHMARK RIGOROSO DE KERNELS E FIDELIDADE NUMERICA")
     print("==========================================================================")
 
-    arquivo = "qwen2.5_0.5b.safetensors"
+    arquivo = "data/qwen2.5_0.5b.safetensors"
+    if not exists_file(arquivo):
+        if exists_file("qwen2.5_0.5b.safetensors"):
+            arquivo = "qwen2.5_0.5b.safetensors"
+        else:
+            print("[AVISO] Arquivo de pesos nao encontrado:")
+            print(f"        {arquivo}")
+            print("Para baixar o modelo Qwen2.5-0.5B, execute o utilitario:")
+            print("  python tools/baixar_qwen.py")
+            return
 
     # Carrega pesos reais de projecoes criticas
     print("[*] Carregando matrizes reais da Camada 0...")

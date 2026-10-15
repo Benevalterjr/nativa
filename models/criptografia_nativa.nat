@@ -1,12 +1,12 @@
 # models/criptografia_nativa.nat
-# Criptografia Moderna em Linguagem Nativa v0.3
+# Criptografia Moderna em Linguagem Nativa v0.4
 # Demonstra dois paradigmas:
 # 1. Cifra de Bloco Tensorial (Difusao Matricial MDS + S-Box Nao-Linear)
 # 2. Criptografia Pos-Quantica Baseada em Reticulados (Ternary LWE com Chave {-1, 0, 1})
 
 fn main():
     print("==========================================================================")
-    print("  CRIPTOGRAFIA EM NATIVA v0.3: DO CLÁSSICO AO PÓS-QUÂNTICO")
+    print("  CRIPTOGRAFIA EM NATIVA v0.4: DO CLÁSSICO AO PÓS-QUÂNTICO")
     print("==========================================================================")
 
     # =========================================================================

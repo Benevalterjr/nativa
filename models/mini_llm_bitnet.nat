@@ -1,5 +1,5 @@
 # mini_llm_bitnet.nat
-# Mini Decoder-Only BitNet b1.58 Transformer em Nativa v0.3
+# Mini Decoder-Only BitNet b1.58 Transformer em Nativa v0.4
 # Componentes:
 #   - Tokenizer BPE + Byte-Fallback
 #   - Token Embedding Contiguo
@@ -9,7 +9,7 @@
 
 fn main():
     print("==========================================================================")
-    print("  MINI LLM BITNET b1.58 — Decoder-Only Transformer (Nativa v0.3)")
+    print("  MINI LLM BITNET b1.58 — Decoder-Only Transformer (Nativa v0.4)")
     print("  Pesos 100% Ternarios {-1, 0, +1} | Matmul Add-Only Livre de Multiplicacoes")
     print("==========================================================================")
 

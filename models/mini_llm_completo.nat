@@ -1,5 +1,5 @@
 # mini_llm_completo.nat
-# Mini Decoder-Only Transformer completo em Nativa v0.3
+# Mini Decoder-Only Transformer completo em Nativa v0.4
 # Componentes:
 #   - Tokenizer BPE
 #   - Token Embedding
@@ -8,7 +8,7 @@
 #   - KV Cache para geracao autoregressiva
 
 fn main():
-    print(f"  MINI LLM COMPLETO — Decoder-Only Transformer (Nativa v0.3)")
+    print(f"  MINI LLM COMPLETO — Decoder-Only Transformer (Nativa v0.4)")
     print("  d_model=64 | n_heads=4 | n_layers=2 | dim_head=16")
     print("==========================================================================")
 

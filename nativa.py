@@ -16,7 +16,7 @@ Uso:
     nativa build programa.nat          # compila para binário executável nativo C99
     nativa build programa.nat --run    # compila para binário C99 e executa nativamente
     nativa programa.nat                # validação sintática e análise semântica
-    nativa test                        # roda a suíte de testes de regressão (86 testes)
+    nativa test                        # roda a suíte de testes de regressão (87 testes)
 """
 
 from __future__ import annotations
@@ -1049,6 +1049,24 @@ class FuncSig:
     doc: str = ""
 
 
+def _tensor_ret(ats: list[Any]) -> Any:
+    if not ats:
+        return TensorT(ANY)
+    t = ats[0]
+    if t == ANY:
+        return TensorT(ANY)
+    depth = 0
+    c = t
+    while isinstance(c, (ListT, TensorT)):
+        depth += 1
+        c = c.elem
+    elem = c if is_num(c) else ANY
+    res = elem
+    for _ in range(max(1, depth)):
+        res = TensorT(res)
+    return res
+
+
 def _quant_ret(ats: list[Any]) -> Any:
     if ats and ats[0] == ANY:
         return ANY
@@ -1086,8 +1104,8 @@ BUILTINS: dict[str, FuncSig] = {
     "dot":              FuncSig([ListT(F64), ListT(F64)], F64, builtin=True, min_args=2, max_args=2),
     # Builtins adicionados para IA e manipulação de tensores
     "tanh":             FuncSig([F64], F64, builtin=True, min_args=1, max_args=1),
-    "relu":             FuncSig([ANY], ANY, builtin=True, min_args=1, max_args=1),
-    "sigmoid":          FuncSig([ANY], ANY, builtin=True, min_args=1, max_args=1),
+    "relu":             FuncSig([ANY], ANY, builtin=True, min_args=1, max_args=1, ret_builder=lambda ats: ats[0] if ats else ANY),
+    "sigmoid":          FuncSig([ANY], ANY, builtin=True, min_args=1, max_args=1, ret_builder=lambda ats: ats[0] if ats else ANY),
     "matmul":           FuncSig([ANY, ANY], ANY, builtin=True, min_args=2, max_args=2),
     "sum":              FuncSig([ANY], ANY, builtin=True, min_args=1, max_args=1),
     "mean":             FuncSig([ANY], F64, builtin=True, min_args=1, max_args=1),
@@ -1099,7 +1117,7 @@ BUILTINS: dict[str, FuncSig] = {
     "shape":            FuncSig([ANY], ListT(I64), builtin=True, min_args=1, max_args=1),
     "reshape":          FuncSig([ANY, ANY], ANY, builtin=True, min_args=2, max_args=2),
     "transpose":        FuncSig([ANY], ANY, builtin=True, min_args=1, max_args=1),
-    "tensor":           FuncSig([ANY], TensorT(ANY), builtin=True, min_args=1, max_args=3),
+    "tensor":           FuncSig([ANY], TensorT(ANY), builtin=True, min_args=1, max_args=3, ret_builder=_tensor_ret),
     "device":           FuncSig([ANY], STR, builtin=True, min_args=1, max_args=1),
     # Primitivas para computação ternária
     "quantize_ternary": FuncSig([ANY], TensorT(T2), builtin=True, min_args=1, max_args=2, ret_builder=_quant_ret),
@@ -1195,7 +1213,7 @@ def is_int(t) -> bool:
 def base_num(t):
     while isinstance(t, (ListT, TensorT)):
         t = t.elem
-    return t if is_num(t) else None
+    return t if (is_num(t) or t == ANY) else None
 
 def same(a, b) -> bool:
     if a == ANY or b == ANY:
@@ -1676,11 +1694,15 @@ class SemanticAnalyzer:
                     res_elem = F32
                 elif is_float(nl) or is_float(nr):
                     res_elem = F32
+                elif nl == ANY or nr == ANY:
+                    res_elem = ANY if (nl == ANY and nr == ANY) else (nl if nr == ANY else nr)
                 else:
                     res_elem = I64
 
                 wrap = TensorT if (isinstance(l, TensorT) or isinstance(r, TensorT)) else ListT
                 if dl == 1 and dr == 1:
+                    if isinstance(l, TensorT) or isinstance(r, TensorT):
+                        return wrap(res_elem)
                     return res_elem
                 elif dl == 2 and dr == 1:
                     return wrap(res_elem)
@@ -1693,7 +1715,7 @@ class SemanticAnalyzer:
             return ANY
 
         ll, rl = isinstance(l, (ListT, TensorT)), isinstance(r, (ListT, TensorT))
-        numlike = lambda t: is_num(t) or (isinstance(t, (ListT, TensorT)) and base_num(t) is not None)
+        numlike = lambda t: is_num(t) or t == ANY or (isinstance(t, (ListT, TensorT)) and base_num(t) is not None)
         if (ll or rl) and numlike(l) and numlike(r):          # broadcasting
             wrap = TensorT if (isinstance(l, TensorT) or isinstance(r, TensorT)) else ListT
             if ll and rl:
@@ -4524,6 +4546,11 @@ class SemTipos(SemBase):
         self.erro(M('s = read_file("a.txt")?\nprint(s)'), "exige um Result[T]")
         self.erro(M('n = 5\nm = n?\nprint(m)'), "exige um Result[T]")
 
+    def test_tensor_matmul_broadcasting(self):
+        # Multiplicação matricial e broadcasting com tensores e ativações
+        self.ok(M("A = tensor([[1.0, 2.0], [3.0, 4.0]])\nx = tensor([0.5, -0.5])\ny = relu(A @ x + tensor([0.1, -0.1]))\nprint(y)"))
+        self.ok(M("W: tensor[t2] = random_ternary([4, 4], 1)\nx: [f32] = [1.0, 2.0, 3.0, 4.0]\ny: [f32] = sigmoid((W @ x) * 0.5)\nprint(y)"))
+
 
 class SemFuncoes(SemBase):
     F = "fn f(a: i64) -> i64:\n    return a\n\n"
@@ -6519,7 +6546,7 @@ Comandos principais:
   nativa build <arquivo.nat>         Compila AOT gerando executavel nativo (.exe)
   nativa chat [modelo.natq4]         Inicia chat local Qwen2 em INT4
   nativa quantize <dir_hf> [out]     Converte Qwen2 SafeTensors para .natq4 Q4x4
-  nativa test                        Executa a suite completa de 86 testes
+  nativa test                        Executa a suite completa de 87 testes
   nativa version                     Exibe a versao instalada
 
 Exemplos pre-carregados:

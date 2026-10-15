@@ -3,7 +3,7 @@
 
 fn main():
     print("==========================================================================")
-    print("  MINI LLM V0.3 — MULTI-HEAD ATTENTION REAL & KV CACHE COMPLETO")
+    print("  MINI LLM V0.4 — MULTI-HEAD ATTENTION REAL & KV CACHE COMPLETO")
     print("  4 Cabecas Independentes | Historico Integral no SDPA | Sampling Top-P")
     print("==========================================================================")
 

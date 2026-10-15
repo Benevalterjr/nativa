@@ -257,7 +257,7 @@ nativa opencl
 ```
 
 ### Executar a Suíte de Validação
-Para rodar a bateria com os **86 testes automatizados** do compilador:
+Para rodar a bateria com os **87 testes automatizados** do compilador:
 
 ```powershell
 nativa test

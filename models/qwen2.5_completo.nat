@@ -1,14 +1,23 @@
 # models/qwen2.5_completo.nat
-# Execucao do Modelo Oficial Completo Qwen2.5-0.5B (Alibaba Cloud) em Nativa v0.3
+# Execucao do Modelo Oficial Completo Qwen2.5-0.5B (Alibaba Cloud) em Nativa v0.4
 # 24 Camadas Transformer Decoder-Only com SwiGLU, RMSNorm e GQA Attention
 
 fn main():
     print("==========================================================================")
-    print("  NATIVA v0.3: INFERENCIA DO MODELO OFICIAL COMPLETO QWEN2.5-0.5B")
+    print("  NATIVA v0.4: INFERENCIA DO MODELO OFICIAL COMPLETO QWEN2.5-0.5B")
     print("  24 Camadas Decoder-Only | 490 Milhoes de Parametros | Alibaba Cloud")
     print("==========================================================================")
 
-    arquivo = "qwen2.5_0.5b.safetensors"
+    arquivo = "data/qwen2.5_0.5b.safetensors"
+    if not exists_file(arquivo):
+        if exists_file("qwen2.5_0.5b.safetensors"):
+            arquivo = "qwen2.5_0.5b.safetensors"
+        else:
+            print("[AVISO] Arquivo de pesos nao encontrado:")
+            print(f"        {arquivo}")
+            print("Para baixar o modelo Qwen2.5-0.5B, execute o utilitario:")
+            print("  python tools/baixar_qwen.py")
+            return
 
     # Hiperparametros oficiais do Qwen2.5-0.5B
     d_model      = 896
