@@ -28,6 +28,7 @@ Decisões de semântica e recursos para IA e Computação Ternária:
 from __future__ import annotations
 
 import argparse
+import copy
 import ctypes
 import difflib
 import hashlib
@@ -1089,6 +1090,8 @@ BUILTINS = {
     "concat":                FuncSig([ANY], ANY, builtin=True),
     "sample":                FuncSig([ANY], I64, builtin=True),
     "read_file":             FuncSig([STR], STR, builtin=True),
+    "fill":                  FuncSig([I64, ANY], ListT(ANY), builtin=True),
+    "seed":                  FuncSig([I64], VOID, builtin=True),
 }
 
 KNOWN_MODULES = {"math", "time"}
@@ -1714,6 +1717,21 @@ class SemanticAnalyzer:
             if len(ats) not in (2, 3):
                 self.report(f"'apply_rope' espera 2 ou 3 argumento(s), mas recebeu {len(ats)}", node)
             return ats[0] if ats else ANY
+
+        if label in ("random_ternary", "randn"):
+            if len(ats) not in (1, 2):
+                self.report(f"'{label}' espera 1 ou 2 argumento(s) (shape, seed opcional), mas recebeu {len(ats)}", node)
+            return ANY
+
+        if label == "fill":
+            if len(ats) != 2:
+                self.report(f"'fill' espera 2 argumentos (count, value), mas recebeu {len(ats)}", node)
+            return ListT(ats[1] if len(ats) > 1 else ANY)
+
+        if label == "seed":
+            if len(ats) != 1:
+                self.report(f"'seed' espera 1 argumento (seed: i64), mas recebeu {len(ats)}", node)
+            return VOID
 
         if sig.variadic:
             for i, (a, t) in enumerate(zip(node.args, ats)):
@@ -3540,8 +3558,16 @@ class Interpreter:
             "pack_ternary": pack_ternary_fn,
             "unpack_ternary": unpack_ternary_fn,
             "clock": time.perf_counter,
-            "random_ternary": lambda s: Tensor(np.random.choice([-1, 0, 1], size=s).astype(np.int8), dtype="t2"),
-            "randn": lambda s: Tensor(np.random.randn(*s if isinstance(s, list) else (s,)).astype(np.float32), dtype="f32"),
+            "random_ternary": lambda s, seed=None: (
+                Tensor(np.random.RandomState(int(seed)).choice([-1, 0, 1], size=s).astype(np.int8), dtype="t2")
+                if seed is not None else
+                Tensor(np.random.choice([-1, 0, 1], size=s).astype(np.int8), dtype="t2")
+            ),
+            "randn": lambda s, seed=None: (
+                Tensor(np.random.RandomState(int(seed)).randn(*(s if isinstance(s, (list, tuple)) else (s,))).astype(np.float32), dtype="f32")
+                if seed is not None else
+                Tensor(np.random.randn(*(s if isinstance(s, (list, tuple)) else (s,))).astype(np.float32), dtype="f32")
+            ),
             "rotate_rht": rht_fn,
             "turbo_quant": turbo_quant_fn,
             "turbo_dequant": turbo_dequant_fn,
@@ -3572,6 +3598,8 @@ class Interpreter:
             "concat": concat_fn,
             "sample": sample_fn,
             "read_file": lambda p: open(p, "r", encoding="utf-8").read(),
+            "fill": lambda n, v: [copy.deepcopy(v) if isinstance(v, (dict, list)) else v for _ in range(int(n))],
+            "seed": lambda s: np.random.seed(int(s)),
             "math": MathModule(),
         }
 

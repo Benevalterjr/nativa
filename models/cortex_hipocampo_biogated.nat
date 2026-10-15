@@ -13,12 +13,12 @@ fn modular_dopamina(
     W_da: tensor[t2],
     W_rpe: tensor[t2]
 ) -> [f32]:
-    n_dim = to_f64(len(x_t))
+    n_dim = len(x_t)
     escala = 1.0 / sqrt(n_dim)
 
     # Expectativa cortical combinando memória rápida (AMPA) e lenta (NMDA)
     mem_combinada = (mem_ampa * 0.6) + (mem_nmda * 0.4)
-    expectativa: [f32] = matmul(W_rpe, mem_combinada) * (escala * 0.25)
+    expectativa = matmul(W_rpe, mem_combinada) * (escala * 0.25)
     erro_pred = x_t - expectativa
 
     # Energia de surpresa fásica (norma RMS da discrepância contextual)
@@ -38,7 +38,7 @@ fn modular_gaba(
     W_gaba: tensor[t2],
     U_gaba: tensor[t2]
 ) -> [f32]:
-    n_dim = to_f64(len(x_norm))
+    n_dim = len(x_norm)
     escala = 1.0 / sqrt(n_dim)
 
     proj_gaba = ((W_gaba @ x_norm) + (U_gaba @ mem_nmda)) * escala
@@ -101,7 +101,7 @@ fn inferencia_hibrida_step(
     W_ffn_down: tensor[t2],
     eps: f64
 ) -> [f32]:
-    n_dim = to_f64(len(x_t))
+    n_dim = len(x_t)
     escala = 1.0 / sqrt(n_dim)
     x_norm = rmsnorm(x_t, gamma_norm, eps)
 
@@ -111,14 +111,14 @@ fn inferencia_hibrida_step(
     gate_leitura = silu((W_read_gate @ x_norm) * escala)
     contexto_lido = gate_leitura * estado_integrado
 
-    proj_out: [f32] = matmul(W_proj, contexto_lido) * escala
+    proj_out = matmul(W_proj, contexto_lido) * escala
     h = x_t + proj_out
 
     # Camada Dendrítica SwiGLU Ternária (1.58 bits)
     h_norm = rmsnorm(h, gamma_norm, eps)
     ffn_g = silu((W_ffn_gate @ h_norm) * escala)
     ffn_u = matmul(W_ffn_up, h_norm) * escala
-    ffn_out: [f32] = matmul(W_ffn_down, ffn_g * ffn_u) * (1.0 / sqrt(to_f64(len(ffn_g))))
+    ffn_out = matmul(W_ffn_down, ffn_g * ffn_u) * (1.0 / sqrt(len(ffn_g)))
 
     return h + ffn_out
 
@@ -129,43 +129,44 @@ fn main():
     print("Estado Cortical Fixo O(1) + Cache Episodico Seletivo de 2 Bits na Nativa")
     print("==========================================================================")
 
-    # 1. Hiperparâmetros
+    # 1. Hiperparâmetros e Semente Global
+    seed(42)
     d_model = 64
     d_ffn = 128
     n_passos = 10
     limiar_da_hipocampo = 0.75
     eps = 0.000001
-    escala_dim = 1.0 / sqrt(to_f64(d_model))
+    escala_dim = 1.0 / sqrt(d_model)
 
     print(f"Dimensao Cortical (d_model):          {d_model} neuronios")
     print(f"Limiar Dopaminergico do Hipocampo:    DA > {limiar_da_hipocampo:.2f}")
     print("Mecanismo Cortical:                   AMPA (Rapido) + NMDA (Lento) + GABA WTA")
     print("Mecanismo Hipocampal:                 RoPE + RHT + TurboQuant (2 bits/coord)")
 
-    # 2. Pesos Sinápticos Ternários (1.58-bit Add-Only GEMM)
-    W_exc: tensor[t2] = random_ternary([d_model, d_model])
-    W_da: tensor[t2] = random_ternary([d_model, d_model])
-    W_rpe: tensor[t2] = random_ternary([d_model, d_model])
-    W_gaba: tensor[t2] = random_ternary([d_model, d_model])
-    U_gaba: tensor[t2] = random_ternary([d_model, d_model])
-    W_read_gate: tensor[t2] = random_ternary([d_model, d_model])
-    W_proj: tensor[t2] = random_ternary([d_model, d_model])
+    # 2. Pesos Sinápticos Ternários (1.58-bit Add-Only GEMM com sementes determinísticas)
+    W_exc: tensor[t2] = random_ternary([d_model, d_model], 11)
+    W_da: tensor[t2] = random_ternary([d_model, d_model], 12)
+    W_rpe: tensor[t2] = random_ternary([d_model, d_model], 13)
+    W_gaba: tensor[t2] = random_ternary([d_model, d_model], 14)
+    U_gaba: tensor[t2] = random_ternary([d_model, d_model], 15)
+    W_read_gate: tensor[t2] = random_ternary([d_model, d_model], 16)
+    W_proj: tensor[t2] = random_ternary([d_model, d_model], 17)
 
-    W_ffn_gate: tensor[t2] = random_ternary([d_ffn, d_model])
-    W_ffn_up: tensor[t2] = random_ternary([d_ffn, d_model])
-    W_ffn_down: tensor[t2] = random_ternary([d_model, d_ffn])
+    W_ffn_gate: tensor[t2] = random_ternary([d_ffn, d_model], 18)
+    W_ffn_up: tensor[t2] = random_ternary([d_ffn, d_model], 19)
+    W_ffn_down: tensor[t2] = random_ternary([d_model, d_ffn], 20)
 
     # 3. Estados Sinápticos Corticais O(1) (AMPA e NMDA)
     mem_ampa: [f32] = zeros([d_model])
     mem_nmda: [f32] = zeros([d_model])
     gamma_norm: [f32] = ones([d_model])
 
-    # 4. Banco de Engramas do Hipocampo (Alocação Esparsa Comprimida em 2 bits)
+    # 4. Banco de Engramas do Hipocampo (Alocação Concisa via fill())
     vec_vazio: [f32] = zeros([d_model])
     engrama_nulo = turbo_quant(vec_vazio, 2)
-    hipocampo_k = [engrama_nulo, engrama_nulo, engrama_nulo, engrama_nulo]
-    hipocampo_v = [engrama_nulo, engrama_nulo, engrama_nulo, engrama_nulo]
-    hipocampo_token_id = [0, 0, 0, 0]
+    hipocampo_k = fill(4, engrama_nulo)
+    hipocampo_v = fill(4, engrama_nulo)
+    hipocampo_token_id = fill(4, 0)
     num_engramas = 0
 
     # Guardaremos os vetores do Fato Saliente #1 ("Agulha no Palheiro") para testar

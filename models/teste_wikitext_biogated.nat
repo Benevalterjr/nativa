@@ -1,6 +1,7 @@
 # ==============================================================================
 # teste_wikitext_biogated.nat — Benchmark Córtex + Hipocampo 100% Nativa Puro
 # Avaliação de Sparsidade Neuroquímica, Recall em 2 bits e KV-Cache no WikiText-2
+# Sintaxe Limpa: Inferência de Tipos Local, fill(), seed() e Promoção Numérica
 # ==============================================================================
 
 # 1. Modulação Dopaminérgica com Normalização Homeostática
@@ -14,19 +15,19 @@ fn modular_dopamina(
     gamma_norm: [f32],
     eps: f64
 ) -> [f32]:
-    n_dim = to_f64(len(x_t))
+    n_dim = len(x_t)
     escala = 1.0 / sqrt(n_dim)
 
-    # Memória de trabalho combinada com estabilização homeostática RMSNorm
+    # Memória de trabalho com estabilização homeostática RMSNorm
     mem_combinada = (mem_ampa * 0.6) + (mem_nmda * 0.4)
     mem_norm = rmsnorm(mem_combinada, gamma_norm, eps)
-    expectativa: [f32] = matmul(W_rpe, mem_norm) * (escala * 0.25)
+    expectativa = matmul(W_rpe, mem_norm) * (escala * 0.25)
     erro_pred = x_t - expectativa
 
     # Energia fásica de novidade / erro de predição (RPE)
     energia_rpe = sqrt(dot(erro_pred, erro_pred) / n_dim)
 
-    # Disparo dopaminérgico proporcional à discrepância contextual
+    # Disparo dopaminérgico fásico proporcional à discrepância contextual
     proj_da = (W_da @ x_norm) * escala
     potencial_da = proj_da + (energia_rpe * 1.35) - 1.45
     return sigmoid(potencial_da)
@@ -42,7 +43,7 @@ fn modular_gaba(
     gamma_norm: [f32],
     eps: f64
 ) -> [f32]:
-    n_dim = to_f64(len(x_norm))
+    n_dim = len(x_norm)
     escala = 1.0 / sqrt(n_dim)
 
     nmda_norm = rmsnorm(mem_nmda, gamma_norm, eps)
@@ -115,45 +116,36 @@ fn main():
     print(f"Trecho de Teste Tokenizado ({n_tokens} tokens):")
     print(f"\"{trecho_wikitext}\"")
 
-    # 2. Hiperparâmetros
+    # 2. Hiperparâmetros e Semente Global de Reprodutibilidade
+    seed(42)
     d_model = 64
     d_ffn = 128
     limiar_da = 0.65
     eps = 0.000001
-    escala_dim = 1.0 / sqrt(to_f64(d_model))
+    escala_dim = 1.0 / sqrt(d_model)
 
     print(f"\nDimensao Cortical: {d_model} neuronios | Dendritos: {d_ffn} neuronios")
     print(f"Limiar de Saliencia Dopaminergica: DA > {limiar_da:.2f}")
     print("Mecanismo: AMPA/NMDA O(1) + Gating GABA + TurboQuant 2-bit Episodico")
 
-    # 3. Pesos Sinápticos Ternários (1.58 bits)
-    W_exc: tensor[t2] = random_ternary([d_model, d_model])
-    W_da: tensor[t2] = random_ternary([d_model, d_model])
-    W_rpe: tensor[t2] = random_ternary([d_model, d_model])
-    W_gaba: tensor[t2] = random_ternary([d_model, d_model])
-    U_gaba: tensor[t2] = random_ternary([d_model, d_model])
+    # 3. Pesos Sinápticos Ternários Determinísticos (1.58 bits, sementes explícitas)
+    W_exc: tensor[t2] = random_ternary([d_model, d_model], 101)
+    W_da: tensor[t2] = random_ternary([d_model, d_model], 102)
+    W_rpe: tensor[t2] = random_ternary([d_model, d_model], 103)
+    W_gaba: tensor[t2] = random_ternary([d_model, d_model], 104)
+    U_gaba: tensor[t2] = random_ternary([d_model, d_model], 105)
 
     mem_ampa: [f32] = zeros([d_model])
     mem_nmda: [f32] = zeros([d_model])
     gamma_norm: [f32] = ones([d_model])
 
-    # 4. Banco Hipocampal Episódico (Prealocação para 16 engramas)
+    # 4. Banco Hipocampal Episódico inicializado de forma concisa via fill()
     vec_vazio: [f32] = zeros([d_model])
     engrama_nulo = turbo_quant(vec_vazio, 2)
-    hipo_k = [
-        engrama_nulo, engrama_nulo, engrama_nulo, engrama_nulo,
-        engrama_nulo, engrama_nulo, engrama_nulo, engrama_nulo,
-        engrama_nulo, engrama_nulo, engrama_nulo, engrama_nulo,
-        engrama_nulo, engrama_nulo, engrama_nulo, engrama_nulo
-    ]
-    hipo_v = [
-        engrama_nulo, engrama_nulo, engrama_nulo, engrama_nulo,
-        engrama_nulo, engrama_nulo, engrama_nulo, engrama_nulo,
-        engrama_nulo, engrama_nulo, engrama_nulo, engrama_nulo,
-        engrama_nulo, engrama_nulo, engrama_nulo, engrama_nulo
-    ]
-    hipo_token_pos = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
-    hipo_token_id = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+    hipo_k = fill(16, engrama_nulo)
+    hipo_v = fill(16, engrama_nulo)
+    hipo_token_pos = fill(16, 0)
+    hipo_token_id = fill(16, 0)
     total_engramas = 0
 
     chave_agulha_robert: [f32] = zeros([d_model])
@@ -195,7 +187,7 @@ fn main():
         gaba_vec = modular_gaba(x_norm, mem_nmda, da_vec, W_gaba, U_gaba, gamma_norm, eps)
         nivel_gaba = mean(gaba_vec)
 
-        excit_vec: [f32] = matmul(W_exc, x_norm) * escala_dim
+        excit_vec = matmul(W_exc, x_norm) * escala_dim
         foco_vec = inibicao_lateral_wta(excit_vec, da_vec, gaba_vec)
 
         mem_ampa = atualizar_ampa(mem_ampa, foco_vec, da_vec, gaba_vec)
@@ -232,11 +224,11 @@ fn main():
     print("ESTATISTICAS DE SPARSIDADE NEUROQUIMICA NO WIKITEXT-2")
     print("--------------------------------------------------------------------------")
     filtrados_gaba = n_tokens - total_engramas
-    taxa_filtragem = (to_f64(filtrados_gaba) / to_f64(n_tokens)) * 100.0
+    taxa_filtragem = (filtrados_gaba / n_tokens) * 100.0
     print(f"Total de Tokens Avaliados:       {n_tokens} tokens")
     print(f"Tokens Filtrados pelo GABA:      {filtrados_gaba} tokens ({taxa_filtragem:.1f}% do fluxo)")
     print(f"Engramas Gravados no Hipocampo:  {total_engramas} engramas em 2 bits")
-    print(f"Tempo de Execucao no Nativa:     {tempo_ms:.2f} ms ({to_f64(n_tokens) / (tempo_ms / 1000.0):.1f} tokens/s)")
+    print(f"Tempo de Execucao no Nativa:     {tempo_ms:.2f} ms ({n_tokens / (tempo_ms / 1000.0):.1f} tokens/s)")
 
     # ==========================================================================
     # TESTE NEEDLE-IN-A-HAYSTACK NATIVO: RECALL ASSOCIATIVO EM 2 BITS
@@ -311,11 +303,11 @@ fn main():
     print("\n--------------------------------------------------------------------------")
     print("AUDITORIA DE MEMORIA COMPARATIVA (PROJECAO EM 131.072 TOKENS)")
     print("--------------------------------------------------------------------------")
-    mem_tf_fp32_mb = (131072.0 * 2.0 * to_f64(d_model) * 4.0) / (1024.0 * 1024.0)
+    mem_tf_fp32_mb = (131072.0 * 2.0 * d_model * 4.0) / (1024.0 * 1024.0)
     mem_tf_fp16_mb = mem_tf_fp32_mb / 2.0
 
     # Híbrido: Córtex fixo 512B + engramas (apenas fração retida com 2 bits por dimensão)
-    fracao_retida = to_f64(total_engramas) / to_f64(n_tokens)
+    fracao_retida = total_engramas / n_tokens
     engramas_128k = 131072.0 * fracao_retida
     mem_hibrido_kb = (512.0 + (engramas_128k * 40.0)) / 1024.0
 
