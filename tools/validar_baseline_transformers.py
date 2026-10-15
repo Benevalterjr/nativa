@@ -113,7 +113,7 @@ def main():
         print(f"{pos:<4} | {t_str:<12} | {max_diff:<14.6f} | {mean_diff:<14.6f} | {cos_sim:<16.8f} | {match_str}")
 
     print("=" * 80)
-    print(f"Resumo da Validação Baseline:")
+    print("Resumo da Validação Baseline:")
     print(f"- Acurácia de Pareamento Top-1: {top1_matches}/{n_tokens} ({100.0 * top1_matches / n_tokens:.1f}%)")
     print(f"- Maior diferença absoluta global: {max_overall_diff:.6f}")
     if max_overall_diff < 0.05:

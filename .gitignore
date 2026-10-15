@@ -18,6 +18,8 @@ scratch/
 *.pdb
 *.ilk
 _temp_build.bat
+tests/*.c
+!tests/teste_opencl_benchmark.c
 
 # Modelos Grandes, Pesos e Datasets Binários (>100MB / GitHub Limit)
 *.safetensors

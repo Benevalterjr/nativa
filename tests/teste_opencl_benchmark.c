@@ -48,7 +48,37 @@ static double get_time_sec(void) {
 #endif
 }
 
+static void cleanup_cl_resources(NativaCLContext* ctx, float* a, float* b, float* c,
+                                cl_mem da, cl_mem db, cl_mem dc, cl_kernel k, cl_program p) {
+    if (a) free(a);
+    if (b) free(b);
+    if (c) free(c);
+    if (da && ctx) ctx->clReleaseMemObject(da);
+    if (db && ctx) ctx->clReleaseMemObject(db);
+    if (dc && ctx) ctx->clReleaseMemObject(dc);
+    if (k && ctx) ctx->clReleaseKernel(k);
+    if (p && ctx) ctx->clReleaseProgram(p);
+}
+
+static int validate_results(const float* h_A, const float* h_B, const float* h_C, int N) {
+    int errors = 0;
+    for (int i = 0; i < N; i++) {
+        float expected = h_A[i] * h_B[i] + 0.5f;
+        if (expected < 0.0f) expected = 0.0f;
+        if (fabsf(h_C[i] - expected) > 1e-4f) {
+            errors++;
+            if (errors <= 3) {
+                printf("    [FALHA] Indice %d: obtido=%f esperado=%f\n", i, h_C[i], expected);
+            }
+        }
+    }
+    return errors;
+}
+
 static bool run_tensor_test_on_device(NativaCLContext* ctx, int dev_idx, int N) {
+    if (!ctx || dev_idx < 0 || dev_idx >= ctx->device_count || N < 2) {
+        return false;
+    }
     const NativaCLDevice* dev = &ctx->devices[dev_idx];
     printf("\n>>> Testando no Dispositivo [%d]: [%s] %s <<<\n",
            dev_idx, dev->is_gpu ? "GPU" : "CPU", dev->name);
@@ -84,9 +114,7 @@ static bool run_tensor_test_on_device(NativaCLContext* ctx, int dev_idx, int N) 
     float* h_B = (float*)malloc(bytes);
     float* h_C = (float*)malloc(bytes);
     if (!h_A || !h_B || !h_C) {
-        free(h_A); free(h_B); free(h_C);
-        ctx->clReleaseKernel(kernel);
-        ctx->clReleaseProgram(prog);
+        cleanup_cl_resources(ctx, h_A, h_B, h_C, NULL, NULL, NULL, kernel, prog);
         return false;
     }
 
@@ -103,12 +131,7 @@ static bool run_tensor_test_on_device(NativaCLContext* ctx, int dev_idx, int N) 
 
     if (!d_A || !d_B || !d_C) {
         fprintf(stderr, "[ERRO] Falha na alocacao de buffers cl_mem\n");
-        free(h_A); free(h_B); free(h_C);
-        if (d_A) ctx->clReleaseMemObject(d_A);
-        if (d_B) ctx->clReleaseMemObject(d_B);
-        if (d_C) ctx->clReleaseMemObject(d_C);
-        ctx->clReleaseKernel(kernel);
-        ctx->clReleaseProgram(prog);
+        cleanup_cl_resources(ctx, h_A, h_B, h_C, d_A, d_B, d_C, kernel, prog);
         return false;
     }
 
@@ -119,7 +142,7 @@ static bool run_tensor_test_on_device(NativaCLContext* ctx, int dev_idx, int N) 
     ctx->clSetKernelArg(kernel, 3, sizeof(int), &N);
 
     // 5. Executa o Kernel e mede o tempo de computação
-    size_t global_size = ((size_t)N + 255) / 256 * 256; // Arredonda para múltiplo do workgroup
+    size_t global_size = ((size_t)N + 255) / 256 * 256;
     size_t local_size = 256;
     if (local_size > dev->max_workgroup_size) local_size = dev->max_workgroup_size;
 
@@ -135,17 +158,7 @@ static bool run_tensor_test_on_device(NativaCLContext* ctx, int dev_idx, int N) 
     ctx->clEnqueueReadBuffer(ctx->queue, d_C, CL_TRUE, 0, bytes, h_C, 0, NULL, NULL);
 
     // 7. Validação numérica rigorosa
-    int errors = 0;
-    for (int i = 0; i < N; i++) {
-        float expected = h_A[i] * h_B[i] + 0.5f;
-        if (expected < 0.0f) expected = 0.0f;
-        if (fabsf(h_C[i] - expected) > 1e-4f) {
-            errors++;
-            if (errors <= 3) {
-                printf("    [FALHA] Indice %d: obtido=%f esperado=%f\n", i, h_C[i], expected);
-            }
-        }
-    }
+    int errors = validate_results(h_A, h_B, h_C, N);
 
     if (errors == 0) {
         double mflops = ((double)N * 3.0) / (t_exec * 1e6);
@@ -155,14 +168,7 @@ static bool run_tensor_test_on_device(NativaCLContext* ctx, int dev_idx, int N) 
         printf("    [ERRO] Foram encontrados %d erros numericos!\n", errors);
     }
 
-    // Limpeza
-    free(h_A); free(h_B); free(h_C);
-    ctx->clReleaseMemObject(d_A);
-    ctx->clReleaseMemObject(d_B);
-    ctx->clReleaseMemObject(d_C);
-    ctx->clReleaseKernel(kernel);
-    ctx->clReleaseProgram(prog);
-
+    cleanup_cl_resources(ctx, h_A, h_B, h_C, d_A, d_B, d_C, kernel, prog);
     return (errors == 0);
 }
 

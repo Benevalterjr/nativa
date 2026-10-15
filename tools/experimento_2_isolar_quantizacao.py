@@ -41,7 +41,7 @@ from tools.experimento_real_cortex_hipocampo import (
 def quantize_int8(x: np.ndarray) -> Tuple[np.ndarray, float]:
     """Quantização simétrica INT8 com fator de escala."""
     max_val = float(np.max(np.abs(x)))
-    if max_val == 0.0:
+    if max_val < 1e-12:
         return np.zeros_like(x, dtype=np.int8), 1.0
     scale = max_val / 127.0
     q = np.clip(np.round(x / scale), -127, 127).astype(np.int8)

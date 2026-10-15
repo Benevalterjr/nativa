@@ -247,17 +247,17 @@ def forward_step(
         cache.append(pos, k_rot, v, surprisal=surprisal_prev, threshold_surprisal=threshold_surprisal)
 
         # Recupera chaves e valores ativos
-        K_all, V_all = cache.get_keys_and_values()
-        # K_all: [ctx_len, num_kv_heads, head_dim]
+        k_all, v_all = cache.get_keys_and_values()
+        # k_all: [ctx_len, num_kv_heads, head_dim]
         # Expande para GQA (7 query heads por KV head)
-        K_exp = np.repeat(K_all, GROUP_SIZE, axis=1)  # [ctx_len, num_heads, head_dim]
-        V_exp = np.repeat(V_all, GROUP_SIZE, axis=1)
+        k_exp = np.repeat(k_all, GROUP_SIZE, axis=1)  # [ctx_len, num_heads, head_dim]
+        v_exp = np.repeat(v_all, GROUP_SIZE, axis=1)
 
         # Calcula scores de atenção
         # Q: [num_heads, head_dim]
-        # K_exp: [ctx_len, num_heads, head_dim]
+        # k_exp: [ctx_len, num_heads, head_dim]
         # Produto escalar por cabeça: sum_d Q[h, d] * K[c, h, d]
-        scores = np.einsum('hd,chd->hc', q_rot, K_exp) / math.sqrt(HEAD_DIM)
+        scores = np.einsum('hd,chd->hc', q_rot, k_exp) / math.sqrt(HEAD_DIM)
         
         # Softmax estável
         max_s = np.max(scores, axis=-1, keepdims=True)
@@ -270,7 +270,7 @@ def forward_step(
             e.cum_attn += float(avg_attn_per_token[c_idx])
 
         # Agregação dos valores V
-        out_heads = np.einsum('hc,chd->hd', attn_probs, V_exp)  # [num_heads, head_dim]
+        out_heads = np.einsum('hc,chd->hd', attn_probs, v_exp)  # [num_heads, head_dim]
         out_flat = out_heads.reshape(-1)
         attended = (layer.wo.data @ out_flat)
 
@@ -399,12 +399,16 @@ def main():
     print("BENCHMARK CIENTÍFICO: AVALIAÇÃO DE KV-CACHE E COMPRESSÃO NO WIKITEXT-2")
     print(f"Modelo: Qwen2.5-0.5B ({args.layers} camadas) | Dataset: WikiText-2 Test")
     print(f"Config: {args.tokens} tokens | Janela={args.window} | Sinks={args.sinks} | Percentil={args.percentile}%")
-    print(f"Metodologia: Métricas Reais de Perplexidade (PPL), Cross-Entropy e Memória")
+    print("Metodologia: Métricas Reais de Perplexidade (PPL), Cross-Entropy e Memória")
     print("=" * 80)
 
     # 1. Carregamento do Tokenizer e Corpus
     tok = nativa.Tokenizer(args.tokenizer)
-    with open(args.corpus, "r", encoding="utf-8") as f:
+    corpus_file = os.path.realpath(args.corpus)
+    if not os.path.isfile(corpus_file):
+        print(f"[ERRO] Corpus não encontrado: {corpus_file}")
+        sys.exit(1)
+    with open(corpus_file, "r", encoding="utf-8") as f:
         text = f.read()
     
     # Pega linhas contínuas do WikiText-2
