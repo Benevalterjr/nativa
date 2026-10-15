@@ -18,6 +18,7 @@ import math
 import time
 import argparse
 from dataclasses import dataclass
+from pathlib import Path
 from typing import List, Dict, Tuple, Optional, Any
 import numpy as np
 
@@ -404,12 +405,11 @@ def main():
 
     # 1. Carregamento do Tokenizer e Corpus
     tok = nativa.Tokenizer(args.tokenizer)
-    corpus_file = os.path.realpath(args.corpus)
-    if not os.path.isfile(corpus_file):
+    corpus_file = Path(args.corpus).resolve()
+    if not corpus_file.is_file():
         print(f"[ERRO] Corpus não encontrado: {corpus_file}")
         sys.exit(1)
-    with open(corpus_file, "r", encoding="utf-8") as f:
-        text = f.read()
+    text = corpus_file.read_text(encoding="utf-8")
     
     # Pega linhas contínuas do WikiText-2
     paragraphs = [p.strip() for p in text.split("\n") if len(p.strip()) > 200 and not p.strip().startswith("=")]
