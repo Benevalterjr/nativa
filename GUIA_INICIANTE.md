@@ -1,31 +1,43 @@
-# Guia de início: aprendendo Nativa
+# Guia de Início: Aprendendo a Linguagem Nativa
 
-Este guia apresenta os recursos básicos da linguagem Nativa com exemplos executados pelo interpretador do projeto (`nativa.py`). Salve cada exemplo em um arquivo com extensão `.nat`.
+Este guia apresenta os recursos da linguagem **Nativa (v0.3)** através de exemplos práticos e diretos.
 
-## 1. Instalação e primeiro programa
+---
 
-O runtime precisa de Python e NumPy. Na pasta do projeto, instale a dependência e crie `ola.nat`:
+## 1. Instalação e Primeiro Programa
+
+O Nativa requer apenas Python 3.9+ e NumPy instalados. Na pasta do projeto:
 
 ```powershell
 python -m pip install -r requirements.txt
 ```
+
+Crie um arquivo chamado `ola.nat`:
 
 ```nativa
 fn main():
     print("Olá, mundo!")
 ```
 
-Execute o programa com:
+### Como Executar
+
+Você pode executar diretamente com a CLI do Nativa no PowerShell / Prompt de Comando ou chamando o Python:
 
 ```powershell
-python nativa.py ola.nat --run
+# Usando a CLI do Nativa (PowerShell / CMD)
+nativa run ola.nat
+
+# Ou usando o Python diretamente
+python nativa.py run ola.nat
 ```
 
-`main` é o ponto de entrada. Os blocos são definidos pela indentação, como em Python. Comentários começam com `#`.
+> **Nota:** `main` é o ponto de entrada obrigatório. Os blocos de código são definidos pela indentação (como em Python). Comentários começam com `#`.
 
-## 2. Variáveis, constantes e tipos
+---
 
-Uma atribuição cria uma variável. Você também pode declarar seu tipo explicitamente. Use `const` para valores que não devem ser reatribuídos:
+## 2. Variáveis, Constantes e Tipos
+
+Uma atribuição cria uma variável. Você também pode declarar seu tipo explicitamente. Use `const` para valores imutáveis:
 
 ```nativa
 const LIMITE: i64 = 10
@@ -36,41 +48,53 @@ fn main():
     altura: f64 = 1.65
     estudante: bool = false
 
-    print(f"{nome} tem {idade} anos.")
+    print(f"{nome} tem {idade} anos e mede {altura}m.")
 ```
 
-Os tipos numéricos incluem `i8`, `i16`, `i32`, `i64`, `u8`, `u16`, `u32`, `u64`, `f16`, `bf16`, `f32` e `f64`. Também há `str`, `bool` e o tipo ternário `t2` (valores `-1`, `0` e `1`). Anotações ajudam o analisador semântico a encontrar incompatibilidades antes da execução.
+### Tipos Nativos Suportados
+* **Inteiros com sinal:** `i8`, `i16`, `i32`, `i64`
+* **Inteiros sem sinal:** `u8`, `u16`, `u32`, `u64`
+* **Ponto Flutuante:** `f16`, `bf16`, `f32`, `f64`
+* **Texto e Lógica:** `str`, `bool` (`true` / `false`)
+* **Computação Ternária (BitNet b1.58):** `t2` (valores restritos a `-1`, `0` e `1`)
 
-Strings aceitam aspas simples ou duplas. Para interpolar valores, use uma f-string:
+Strings aceitam aspas simples ou duplas. Para interpolar variáveis, use f-strings:
 
 ```nativa
-valor = 7
-print(f"O valor é {valor}.")
+valor = 42
+print(f"O resultado é: {valor}")
 ```
 
-## 3. Operações e decisões
+---
 
-Nativa oferece operações aritméticas (`+`, `-`, `*`, `/`, `%`, `//`, `**`), comparações (`==`, `!=`, `<`, `<=`, `>`, `>=`) e operadores booleanos (`and`, `or`, `not`). O operador `@` é usado para multiplicação matricial.
+## 3. Decisões e Funções
+
+Nativa oferece operadores aritméticos (`+`, `-`, `*`, `/`, `%`, `//`, `**`), relacionais (`==`, `!=`, `<`, `<=`, `>`, `>=`) e lógicos (`and`, `or`, `not`). O operador `@` é nativo para multiplicação matricial de tensores.
 
 ```nativa
 fn classificar(nota: f64) -> str:
     if nota >= 7.0:
-        return "aprovado"
+        return "Aprovado"
+    elif nota >= 5.0:
+        return "Recuperação"
     else:
-        return "precisa estudar"
+        return "Reprovado"
 
 fn main():
     print(classificar(8.5))
 ```
 
-Uma função declara parâmetros tipados e pode indicar seu tipo de retorno depois de `->`. Use `return` para devolver um valor.
+Uma função declara parâmetros tipados e indica o tipo de retorno com `->`.
 
-## 4. Repetições
+---
 
-O laço `for` percorre uma lista ou um intervalo. Em `inicio..fim`, o limite final não é incluído:
+## 4. Laços de Repetição (`for` e `while`)
+
+O laço `for` itera sobre intervalos ou listas. No intervalo `inicio..fim`, o limite final não é incluído:
 
 ```nativa
 fn main():
+    # Imprime de 1 a 5
     for numero in 1..6:
         print(numero)
 ```
@@ -85,11 +109,13 @@ fn main():
         contador -= 1
 ```
 
-`break` encerra o laço atual e `continue` pula para a próxima repetição.
+Use `break` para interromper o laço e `continue` para saltar para a próxima iteração.
 
-## 5. Funções e listas
+---
 
-Separe uma tarefa em uma função para poder chamá-la de vários lugares. Listas usam colchetes, índices começam em zero e `len` retorna seu tamanho:
+## 5. Listas e Fatiamento
+
+Listas são declaradas com colchetes e indexadas a partir de zero. A função `len` retorna a quantidade de itens:
 
 ```nativa
 fn soma(valores: [i64]) -> i64:
@@ -99,95 +125,88 @@ fn soma(valores: [i64]) -> i64:
     return total
 
 fn main():
-    numeros = [4, 8, 15]
-    print(soma(numeros))
-    print(f"Quantidade: {len(numeros)}")
+    numeros = [10, 20, 30, 40]
+    print(f"Soma: {soma(numeros)}")
+    print(f"Tamanho: {len(numeros)}")
 ```
 
-Exemplo recursivo, calculando Fibonacci:
+---
 
-```nativa
-fn fibonacci(n: i64) -> i64:
-    if n <= 1:
-        return n
-    return fibonacci(n - 1) + fibonacci(n - 2)
+## 6. Tensores e Operações de IA
 
-fn main():
-    for i in 0..10:
-        print(fibonacci(i))
-```
-
-## 6. Matemática e tensores
-
-Funções matemáticas comuns estão disponíveis como built-ins. O módulo `math` também pode ser importado:
-
-```nativa
-import math
-
-fn main():
-    print(sqrt(81.0))
-    print(math.cos(0.0))
-```
-
-Para trabalhar com matrizes, use `tensor` e `@`:
+A Linguagem Nativa possui suporte de primeira classe a tensores densos e operações matriciais aceleradas:
 
 ```nativa
 fn main():
-    a = tensor([[1.0, 2.0], [3.0, 4.0]])
-    b = tensor([[2.0], [1.0]])
-    resultado = a @ b
-    print(resultado)
+    # Criação de tensores
+    A = tensor([[1.0, 2.0], [3.0, 4.0]])
+    B = tensor([[2.0], [1.0]])
+
+    # Multiplicação matricial com o operador @
+    C = A @ B
+    print(C)
+    print(f"Formato: {shape(C)}")
 ```
 
-Há também funções para criar tensores (`zeros`, `ones`, `randn`), inspecionar e transformar dados (`shape`, `reshape`, `transpose`, `sum`, `mean`) e para operações de IA, como `rmsnorm`, `silu`, `softmax` e `sdpa`.
+### Funções Built-in de Tensores:
+* **Geração:** `zeros(shape)`, `ones(shape)`, `randn(shape)`
+* **Transformação:** `shape(t)`, `reshape(t, novo_shape)`, `transpose(t)`
+* **Redução:** `sum(t)`, `mean(t)`, `max(t)`, `min(t)`, `argmax(t)`
+* **Operadores de IA:** `relu(t)`, `sigmoid(t)`, `tanh(t)`, `rmsnorm(t, w)`, `softmax(t)`, `sdpa(q, k, v)`
 
-## 7. SafeTensors e recursos de IA
+---
 
-O runtime inclui funções para listar e carregar tensores de arquivos SafeTensors:
+## 7. Exemplos Prontos Embutidos
 
-```nativa
-fn main():
-    nomes = safetensors_keys("pesos.safetensors")
-    print(nomes)
-    peso = load_safetensors("pesos.safetensors", nomes[0])
-    print(shape(peso))
-```
-
-O arquivo precisa existir no caminho indicado ou no diretório `data/`. O projeto também oferece recursos de tokenização, KV cache e quantização ternária/BitNet; consulte os exemplos em `models/` e `tests/` para ver esses recursos em contexto.
-
-## 8. Verificar e compilar programas
-
-O CLI pode analisar o programa sem executá-lo e mostrar tokens ou a AST:
+Você pode rodar exemplos completos incluídos diretamente no Nativa usando o prefixo `@`:
 
 ```powershell
-python nativa.py ola.nat
-python nativa.py ola.nat --tokens
-python nativa.py ola.nat --ast
+nativa run @riemann      # Zeros não-triviais da Função Zeta de Riemann
+nativa run @rede         # Treinamento de Rede Neural Perceptron
+nativa run @ia_tensor    # Operações matriciais avançadas e Autodiff
+nativa run @ternario     # Computação Ternária BitNet 1.58b pura
 ```
 
-Para executar os testes embutidos no projeto:
+---
+
+## 8. Compilação AOT para Binário Nativo (.exe)
+
+O Nativa permite compilar programas `.nat` diretamente para código de máquina C99 de alta velocidade:
 
 ```powershell
-python nativa.py --test
+# Compila e gera o binário executável
+nativa build ola.nat
+
+# Executa o binário nativo gerado
+./ola.exe
 ```
 
-Para emitir código C ou compilar um executável nativo, use `--emit-c` ou `--build`:
+A compilação utiliza automaticamente o compilador C disponível no seu sistema (MSVC, GCC ou Clang). O código gerado é **universal** e não exige hardwares proprietários.
+
+---
+
+## 9. Descoberta de Hardware e Testes
+
+### Inspecionar Dispositivos (CPU & OpenCL)
+Para saber quais placas de vídeo e processadores estão disponíveis para aceleração:
 
 ```powershell
-python nativa.py ola.nat --emit-c
-python nativa.py ola.nat --build
+nativa opencl
+# ou: nativa --devices
 ```
 
-A compilação nativa requer um compilador C compatível disponível no sistema. O interpretador é a forma mais direta de começar. Nem todos os recursos de tensores e IA necessariamente têm suporte equivalente no transpiler C.
+### Executar a Suíte de Validação
+Para rodar a bateria com os **73 testes automatizados** do compilador:
 
-## 9. Dicas para resolver erros
+```powershell
+nativa test
+```
 
-- Confira a indentação: o corpo de uma função, condição ou laço precisa estar recuado.
-- Declare os tipos dos parâmetros das funções, por exemplo `fn dobro(x: i64) -> i64:`.
-- Verifique se os tipos combinam; o analisador informa o arquivo e a linha do problema.
-- Um aviso sobre variável não usada geralmente significa que um nome foi digitado ou usado de forma diferente do esperado.
-- Comece executando exemplos pequenos com `--run` antes de explorar modelos grandes.
+---
 
-## Próximos passos
+## Próximos Passos
 
-Depois deste guia, explore `tests/riemann.nat` para um exemplo numérico e os programas em `models/` para exemplos de tensores, tokenização e modelos de linguagem. O [README](README.md) descreve a arquitetura do projeto e suas dependências.
+Após este guia, explore:
+- [`README.md`](README.md): Documentação aprofundada da arquitetura e dos modelos suportados.
+- [`models/`](models/): Implementações completas de modelos de linguagem (Mini LLM, Transformers e Qwen2.5).
+- [`tools/`](tools/): Motores de inferência nativa em C99 e utilitários de quantização.
