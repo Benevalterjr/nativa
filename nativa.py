@@ -94,7 +94,7 @@ KEYWORDS = {
 OPS3 = {"..=", "**=", "//="}
 OPS2 = {"->", "==", "!=", "<=", ">=", "+=", "-=", "*=", "/=", "%=",
         "**", "//", "..", "@="}
-OPS1 = set("+-*/%<>=()[],:.@")
+OPS1 = set("+-*/%<>=()[],:.@?")
 CLOSERS = {")": "(", "]": "["}
 
 ESCAPES = {"n": "\n", "t": "\t", "r": "\r", "0": "\0",
@@ -375,8 +375,12 @@ class Attr(Node):
     obj: "Expr"
     name: str
 
+@dataclass
+class TryUnwrap(Node):
+    expr: "Expr"
+
 Expr = Union[Int, Float, Str, FString, Bool, Name, ListLit, Unary, Binary,
-             Range, Call, Index, Attr]
+             Range, Call, Index, Attr, TryUnwrap]
 
 # --- comandos ---
 @dataclass
@@ -801,6 +805,9 @@ class Parser:
             elif self.is_op("."):
                 self.advance()
                 e = Attr(e, self.expect_name("nome do atributo").value, line=t.line)
+            elif self.is_op("?"):
+                self.advance()
+                e = TryUnwrap(e, line=t.line)
             else:
                 return e
 
@@ -1113,6 +1120,16 @@ BUILTINS: dict[str, FuncSig] = {
     "concat":                FuncSig([ANY], TensorT(F32), builtin=True, min_args=1, max_args=2),
     "sample":                FuncSig([ANY], I64, builtin=True, min_args=1, max_args=3),
     "read_file":             FuncSig([STR], STR, builtin=True, min_args=1, max_args=1),
+    "read_file_safe":        FuncSig([STR], ANY, builtin=True, min_args=1, max_args=1),
+    "exists_file":           FuncSig([STR], BOOL, builtin=True, min_args=1, max_args=1),
+    "load_tokenizer_safe":   FuncSig([STR], ANY, builtin=True, min_args=0, max_args=1),
+    "ok":                    FuncSig([ANY], ANY, builtin=True, min_args=1, max_args=1),
+    "err":                   FuncSig([STR], ANY, builtin=True, min_args=1, max_args=1),
+    "is_ok":                 FuncSig([ANY], BOOL, builtin=True, min_args=1, max_args=1),
+    "is_err":                FuncSig([ANY], BOOL, builtin=True, min_args=1, max_args=1),
+    "unwrap":                FuncSig([ANY], ANY, builtin=True, min_args=1, max_args=1),
+    "unwrap_or":             FuncSig([ANY, ANY], ANY, builtin=True, min_args=2, max_args=2),
+    "error_message":         FuncSig([ANY], STR, builtin=True, min_args=1, max_args=1),
     "fill":                  FuncSig([I64, ANY], ListT(ANY), builtin=True, min_args=2, max_args=2, ret_builder=lambda ats: ListT(ats[1] if len(ats) > 1 else ANY)),
     "seed":                  FuncSig([I64], VOID, builtin=True, min_args=1, max_args=1),
 }
@@ -1539,6 +1556,9 @@ class SemanticAnalyzer:
         if ot != ANY:
             self.report(f"um valor {ot} não pode ser indexado", node)
         return ANY
+
+    def visit_TryUnwrap(self, node: TryUnwrap):
+        return self.expr(node.expr)
 
     def visit_Unary(self, node: Unary):
         t = self.expr(node.operand)
@@ -2091,6 +2111,18 @@ class AOTKernelEngine:
             ctypes.c_int64
         ]
         dll.nat_c_softmax.restype = None
+
+
+@dataclass
+class NatResult:
+    value: Any = None
+    error: Optional[str] = None
+    is_ok: bool = True
+
+    def __repr__(self) -> str:
+        if self.is_ok:
+            return f"Ok({self.value!r})"
+        return f"Err({self.error!r})"
 
 
 class Tensor:
@@ -2990,7 +3022,9 @@ class Tokenizer:
         self.byte_decoder = {v: k for k, v in self.byte_encoder.items()}
         self._pre_regex = re.compile(r"""'s|'t|'re|'ve|'m|'ll|'d| ?[a-zA-ZÀ-ÿ_]+| ?[0-9]+| ?[^\s\w]+|\s+""")
 
-        if vocab_file and os.path.exists(vocab_file):
+        if vocab_file is not None:
+            if not os.path.exists(vocab_file):
+                raise FileNotFoundError(f"Arquivo de vocabulário do tokenizador não encontrado: '{vocab_file}'")
             self.load(vocab_file)
         else:
             self._init_default_vocab()
@@ -3471,6 +3505,30 @@ def save_safetensors_fn(path: str, tensor_name: str, data: Any) -> None:
         f.write(raw_bytes)
 
 
+def read_file_fn(path: str) -> str:
+    if not os.path.exists(path):
+        raise FileNotFoundError(f"Arquivo não encontrado: '{path}'")
+    with open(path, "r", encoding="utf-8", newline="") as f:
+        return f.read()
+
+
+def read_file_safe_fn(path: str) -> NatResult:
+    try:
+        if not os.path.exists(path):
+            return NatResult(error=f"Arquivo não encontrado: '{path}'", is_ok=False)
+        with open(path, "r", encoding="utf-8", newline="") as f:
+            return NatResult(value=f.read(), is_ok=True)
+    except Exception as e:
+        return NatResult(error=str(e), is_ok=False)
+
+
+def load_tokenizer_safe_fn(path: Optional[str] = None) -> NatResult:
+    try:
+        return NatResult(value=Tokenizer(path), is_ok=True)
+    except Exception as e:
+        return NatResult(error=str(e), is_ok=False)
+
+
 BUILTIN_IMPLS: dict[str, Callable] = {
     "print": print,
     "len": len,
@@ -3542,7 +3600,17 @@ BUILTIN_IMPLS: dict[str, Callable] = {
     "gemv_vec_lut": gemv_vec_lut_fn,
     "concat": concat_fn,
     "sample": sample_fn,
-    "read_file": lambda p: open(p, "r", encoding="utf-8").read(),
+    "read_file": read_file_fn,
+    "read_file_safe": read_file_safe_fn,
+    "exists_file": lambda p: os.path.exists(p),
+    "load_tokenizer_safe": load_tokenizer_safe_fn,
+    "ok": lambda v: NatResult(value=v, is_ok=True),
+    "err": lambda m: NatResult(error=str(m), is_ok=False),
+    "is_ok": lambda r: getattr(r, "is_ok", True) if isinstance(r, NatResult) else True,
+    "is_err": lambda r: not getattr(r, "is_ok", True) if isinstance(r, NatResult) else False,
+    "unwrap": lambda r: (r.value if r.is_ok else (_ for _ in ()).throw(RuntimeError(f"unwrap em Result com erro: {r.error}"))) if isinstance(r, NatResult) else r,
+    "unwrap_or": lambda r, d: (r.value if r.is_ok else d) if isinstance(r, NatResult) else r,
+    "error_message": lambda r: (r.error if (isinstance(r, NatResult) and not r.is_ok) else ""),
     "fill": lambda n, v: [copy.deepcopy(v) if isinstance(v, (dict, list)) else v for _ in range(int(n))],
     "seed": lambda s: np.random.seed(int(s)),
 }
@@ -3737,6 +3805,13 @@ class Interpreter:
         if isinstance(e, Attr):
             obj = self.eval_expr(e.obj)
             return getattr(obj, e.name)
+        if isinstance(e, TryUnwrap):
+            val = self.eval_expr(e.expr)
+            if isinstance(val, NatResult):
+                if not val.is_ok:
+                    raise RuntimeError(f"Erro propagado por '?': {val.error}")
+                return val.value
+            return val
         if isinstance(e, Unary):
             operand = self.eval_expr(e.operand)
             return self.eval_unary_op(e.op, operand)
@@ -4447,6 +4522,8 @@ class CTranspiler:
             "bool": "bool", "str": "const char*", "void": "void"
         }
         self.var_types: dict[str, str] = {}
+        self.var_lengths: dict[str, int] = {}
+        self.var_shapes: dict[str, tuple[int, ...]] = {}
         self.func_signatures: dict[str, tuple[str, list[tuple[str, str]]]] = {}
         self._collect_signatures()
 
@@ -4482,6 +4559,15 @@ class CTranspiler:
             return "bool"
         if isinstance(expr, Str):
             return "const char*"
+        if isinstance(expr, ListLit):
+            if not expr.items:
+                return "double*"
+            it = self.infer_type(expr.items[0])
+            if "int" in it:
+                return "int64_t*"
+            if it == "const char*":
+                return "const char**"
+            return "double*"
         if isinstance(expr, Name):
             return self.var_types.get(expr.id, "double")
         if isinstance(expr, Binary):
@@ -4489,11 +4575,15 @@ class CTranspiler:
                 return "bool"
             if expr.op == "/":
                 return "double"
+            if expr.op == "@":
+                return "double*"
             t_left = self.infer_type(expr.left)
             t_right = self.infer_type(expr.right)
             if "double" in (t_left, t_right) or "float" in (t_left, t_right):
                 return "double"
             return t_left
+        if isinstance(expr, TryUnwrap):
+            return "const char*"
         if isinstance(expr, Unary):
             if expr.op == "not":
                 return "bool"
@@ -4501,10 +4591,23 @@ class CTranspiler:
         if isinstance(expr, Call):
             if isinstance(expr.func, Name):
                 fname = expr.func.id
-                if fname in ("sqrt", "exp", "sin", "cos", "ln", "to_f64", "tanh", "mean"):
+                if fname in ("sqrt", "exp", "sin", "cos", "ln", "to_f64", "tanh", "mean", "sum", "dot", "min", "max"):
                     return "double"
                 if fname in ("floor", "to_i64", "len", "argmax"):
                     return "int64_t"
+                if fname in ("read_file", "unwrap", "unwrap_or", "error_message"):
+                    return "const char*"
+                if fname in ("is_ok", "is_err", "exists_file"):
+                    return "bool"
+                if fname in ("read_file_safe", "ok", "err"):
+                    return "NatResult"
+                if fname == "fill":
+                    v_t = self.infer_type(expr.args[1]) if len(expr.args) > 1 else "double"
+                    return "int64_t*" if "int" in v_t else "double*"
+                if fname in ("zeros", "ones"):
+                    return "double*"
+                if fname == "random_ternary":
+                    return "int8_t*"
                 if fname in self.func_signatures:
                     return self.func_signatures[fname][0]
         return "double"
@@ -4513,7 +4616,9 @@ class CTranspiler:
         out = []
         out.append("/* ========================================================================= */")
         out.append("/* Gerado automaticamente pelo compilador Nativa (AOT C99 Transpiler)        */")
-        out.append("/* ========================================================================= */")
+        out.append("#ifndef _CRT_SECURE_NO_WARNINGS")
+        out.append("#define _CRT_SECURE_NO_WARNINGS")
+        out.append("#endif")
         out.append("#include <stdio.h>")
         out.append("#include <stdlib.h>")
         out.append("#include <stdint.h>")
@@ -4742,6 +4847,166 @@ class CTranspiler:
         out.append("    return den > 0.0 ? (dot / den) : 0.0;")
         out.append("}")
         out.append("")
+        out.append("/* Inicializadores e operações de vetores/tensores em C */")
+        out.append("static inline double* nat_fill_f64(double* arr, int64_t n, double val) {")
+        out.append("    for (int64_t i = 0; i < n; i++) arr[i] = val; return arr;")
+        out.append("}")
+        out.append("static inline int64_t* nat_fill_i64(int64_t* arr, int64_t n, int64_t val) {")
+        out.append("    for (int64_t i = 0; i < n; i++) arr[i] = val; return arr;")
+        out.append("}")
+        out.append("static inline double* nat_zeros_f64(double* arr, int64_t n) {")
+        out.append("    memset(arr, 0, n * sizeof(double)); return arr;")
+        out.append("}")
+        out.append("static inline double* nat_ones_f64(double* arr, int64_t n) {")
+        out.append("    for (int64_t i = 0; i < n; i++) arr[i] = 1.0; return arr;")
+        out.append("}")
+        out.append("static inline double nat_dot(const double* a, const double* b, int64_t n) {")
+        out.append("    double acc = 0.0; for (int64_t i = 0; i < n; i++) acc += a[i] * b[i]; return acc;")
+        out.append("}")
+        out.append("static inline double nat_sum(const double* a, int64_t n) {")
+        out.append("    double acc = 0.0; for (int64_t i = 0; i < n; i++) acc += a[i]; return acc;")
+        out.append("}")
+        out.append("static inline double nat_mean(const double* a, int64_t n) {")
+        out.append("    return n > 0 ? (nat_sum(a, n) / (double)n) : 0.0;")
+        out.append("}")
+        out.append("static inline double nat_min(const double* a, int64_t n) {")
+        out.append("    if (n <= 0) return 0.0;")
+        out.append("    double m = a[0];")
+        out.append("    for (int64_t i = 1; i < n; i++) if (a[i] < m) m = a[i];")
+        out.append("    return m;")
+        out.append("}")
+        out.append("static inline double nat_max(const double* a, int64_t n) {")
+        out.append("    if (n <= 0) return 0.0;")
+        out.append("    double m = a[0];")
+        out.append("    for (int64_t i = 1; i < n; i++) if (a[i] > m) m = a[i];")
+        out.append("    return m;")
+        out.append("}")
+        out.append("")
+        out.append("/* Álgebra Linear Contínua C99 Nativa */")
+        out.append("/* GEMV Row-Major: y = A @ x, onde A é M x K, x é K, y é M */")
+        out.append("static inline void nat_gemv_f64(const double* A, const double* x, double* y, int64_t M, int64_t K) {")
+        out.append("    for (int64_t i = 0; i < M; i++) {")
+        out.append("        double acc = 0.0;")
+        out.append("        const double* row = A + i * K;")
+        out.append("        for (int64_t k = 0; k < K; k++) acc += row[k] * x[k];")
+        out.append("        y[i] = acc;")
+        out.append("    }")
+        out.append("}")
+        out.append("static inline void nat_gemv_scaled_f64(const double* A, const double* x, double* y, int64_t M, int64_t K, double scale) {")
+        out.append("    for (int64_t i = 0; i < M; i++) {")
+        out.append("        double acc = 0.0;")
+        out.append("        const double* row = A + i * K;")
+        out.append("        for (int64_t k = 0; k < K; k++) acc += row[k] * x[k];")
+        out.append("        y[i] = acc * scale;")
+        out.append("    }")
+        out.append("}")
+        out.append("static inline void nat_ternary_matmul_vec_scaled(const int8_t* W, const double* x, double* y, int64_t M, int64_t K, double scale) {")
+        out.append("    for (int64_t i = 0; i < M; i++) {")
+        out.append("        double acc = 0.0;")
+        out.append("        const int8_t* row = W + i * K;")
+        out.append("        for (int64_t k = 0; k < K; k++) {")
+        out.append("            int8_t w = row[k];")
+        out.append("            if (w == 1) acc += x[k];")
+        out.append("            else if (w == -1) acc -= x[k];")
+        out.append("        }")
+        out.append("        y[i] = acc * scale;")
+        out.append("    }")
+        out.append("}")
+        out.append("/* Transposed GEMV: y = x @ A, onde x é M, A é M x N, y é N */")
+        out.append("static inline void nat_gemv_trans_f64(const double* A, const double* x, double* y, int64_t M, int64_t N) {")
+        out.append("    for (int64_t j = 0; j < N; j++) {")
+        out.append("        double acc = 0.0;")
+        out.append("        for (int64_t i = 0; i < M; i++) acc += x[i] * A[i * N + j];")
+        out.append("        y[j] = acc;")
+        out.append("    }")
+        out.append("}")
+        out.append("/* GEMM Row-Major: C = A @ B, onde A é M x K, B é K x N, C é M x N */")
+        out.append("static inline void nat_gemm_f64(const double* A, const double* B, double* C, int64_t M, int64_t K, int64_t N) {")
+        out.append("    for (int64_t i = 0; i < M; i++) {")
+        out.append("        for (int64_t j = 0; j < N; j++) {")
+        out.append("            double acc = 0.0;")
+        out.append("            for (int64_t k = 0; k < K; k++) acc += A[i * K + k] * B[k * N + j];")
+        out.append("            C[i * N + j] = acc;")
+        out.append("        }")
+        out.append("    }")
+        out.append("}")
+        out.append("/* Gerador de tensores ternários determinístico {-1, 0, +1} */")
+        out.append("static inline void nat_random_ternary(int8_t* out, int64_t length, uint64_t seed) {")
+        out.append("    uint64_t state = (seed != 0) ? seed : 123456789ULL;")
+        out.append("    for (int64_t i = 0; i < length; i++) {")
+        out.append("        state = state * 6364136223846793005ULL + 1442695040888963407ULL;")
+        out.append("        int r = (int)((state >> 32) % 3);")
+        out.append("        out[i] = (int8_t)(r - 1);")
+        out.append("    }")
+        out.append("}")
+        out.append("/* Impressão formatada de tensores e matrizes */")
+        out.append("static inline void nat_print_vec_f64(const double* v, int64_t n) {")
+        out.append("    printf(\"[\");")
+        out.append("    for (int64_t i = 0; i < n; i++) printf(\"%g%s\", v[i], (i < n - 1) ? \", \" : \"\");")
+        out.append("    printf(\"]\");")
+        out.append("}")
+        out.append("static inline void nat_print_mat_f64(const double* A, int64_t M, int64_t N) {")
+        out.append("    printf(\"[\");")
+        out.append("    for (int64_t i = 0; i < M; i++) {")
+        out.append("        printf(\"[\");")
+        out.append("        for (int64_t j = 0; j < N; j++) printf(\"%g%s\", A[i * N + j], (j < N - 1) ? \", \" : \"\");")
+        out.append("        printf(\"]%s\", (i < M - 1) ? \", \" : \"\");")
+        out.append("    }")
+        out.append("    printf(\"]\");")
+        out.append("}")
+        out.append("/* Sistema de Tratamento de Erros (Result) e I/O Seguro em C99 */")
+        out.append("typedef struct {")
+        out.append("    const char* val_str;")
+        out.append("    double val_f64;")
+        out.append("    int64_t val_i64;")
+        out.append("    const char* err;")
+        out.append("    bool is_ok;")
+        out.append("} NatResult;")
+        out.append("")
+        out.append("static inline NatResult nat_ok_str(const char* val) {")
+        out.append("    NatResult r; memset(&r, 0, sizeof(r)); r.val_str = val; r.is_ok = true; return r;")
+        out.append("}")
+        out.append("static inline NatResult nat_err(const char* err_msg) {")
+        out.append("    NatResult r; memset(&r, 0, sizeof(r)); r.err = err_msg; r.is_ok = false; return r;")
+        out.append("}")
+        out.append("static inline bool nat_is_ok(NatResult r) { return r.is_ok; }")
+        out.append("static inline bool nat_is_err(NatResult r) { return !r.is_ok; }")
+        out.append("static inline const char* nat_unwrap_str(NatResult r) {")
+        out.append("    if (!r.is_ok) {")
+        out.append("        fprintf(stderr, \"Erro de execucao: tentativa de unwrap em Result com erro: %s\\n\", r.err ? r.err : \"desconhecido\");")
+        out.append("        exit(1);")
+        out.append("    }")
+        out.append("    return r.val_str ? r.val_str : \"\";")
+        out.append("}")
+        out.append("static inline const char* nat_unwrap_or_str(NatResult r, const char* def) {")
+        out.append("    return r.is_ok ? (r.val_str ? r.val_str : \"\") : def;")
+        out.append("}")
+        out.append("static inline const char* nat_error_message(NatResult r) {")
+        out.append("    return (r.is_ok || !r.err) ? \"\" : r.err;")
+        out.append("}")
+        out.append("static inline bool nat_exists_file(const char* path) {")
+        out.append("    FILE* f = fopen(path, \"rb\");")
+        out.append("    if (f) { fclose(f); return true; }")
+        out.append("    return false;")
+        out.append("}")
+        out.append("static inline NatResult nat_read_file_safe(const char* path) {")
+        out.append("    FILE* f = fopen(path, \"rb\");")
+        out.append("    if (!f) return nat_err(\"arquivo nao encontrado ou inacessivel\");")
+        out.append("    fseek(f, 0, SEEK_END);")
+        out.append("    long sz = ftell(f);")
+        out.append("    fseek(f, 0, SEEK_SET);")
+        out.append("    char* buf = (char*)malloc(sz + 1);")
+        out.append("    if (!buf) { fclose(f); return nat_err(\"falha de alocacao de memoria para leitura\"); }")
+        out.append("    size_t rd = fread(buf, 1, sz, f);")
+        out.append("    buf[rd] = '\\0';")
+        out.append("    fclose(f);")
+        out.append("    return nat_ok_str(buf);")
+        out.append("}")
+        out.append("static inline const char* nat_read_file(const char* path) {")
+        out.append("    NatResult r = nat_read_file_safe(path);")
+        out.append("    return nat_unwrap_str(r);")
+        out.append("}")
+        out.append("")
 
         # Constantes de nível superior
         for it in self.program.items:
@@ -4777,6 +5042,8 @@ class CTranspiler:
         p_str = "int argc, char** argv" if is_main else (", ".join(f"{self.c_type(p.type)} {p.name}" for p in fn.params) if fn.params else "void")
 
         old_vars = dict(self.var_types)
+        old_lens = dict(self.var_lengths)
+        old_shapes = dict(self.var_shapes)
         for p in fn.params:
             self.var_types[p.name] = self.c_type(p.type)
 
@@ -4792,17 +5059,292 @@ class CTranspiler:
         lines.append("}")
 
         self.var_types = old_vars
+        self.var_lengths = old_lens
+        self.var_shapes = old_shapes
         return "\n".join(lines)
+
+    def _emit_buffer_init(self, name: str, val_expr: Expr, ind: str, is_const: bool = False) -> Optional[str]:
+        const_p = "const " if is_const else ""
+
+        # 1. fill(n, val)
+        if isinstance(val_expr, Call) and isinstance(val_expr.func, Name) and val_expr.func.id == "fill":
+            n_arg = val_expr.args[0]
+            v_arg = val_expr.args[1]
+            val_code = self.emit_expr(v_arg)
+            val_t = self.infer_type(v_arg)
+            elem_t = "int64_t" if "int" in val_t else "double"
+            fill_fn = "nat_fill_i64" if "int" in val_t else "nat_fill_f64"
+            if isinstance(n_arg, Int) and n_arg.value is not None:
+                n_int = n_arg.value
+                self.var_types[name] = f"{elem_t}*"
+                self.var_lengths[name] = n_int
+                self.var_shapes[name] = (n_int,)
+                return f"{ind}{const_p}{elem_t} {name}[{n_int}]; {fill_fn}({name}, {n_int}, {val_code});"
+            else:
+                n_code = self.emit_expr(n_arg)
+                self.var_types[name] = f"{elem_t}*"
+                return f"{ind}{const_p}{elem_t}* {name} = ({elem_t}*)malloc(({n_code}) * sizeof({elem_t})); if ({name}) {fill_fn}({name}, {n_code}, {val_code});"
+
+        # 2. zeros(shape) ou ones(shape)
+        if isinstance(val_expr, Call) and isinstance(val_expr.func, Name) and val_expr.func.id in ("zeros", "ones"):
+            fn = val_expr.func.id
+            d_arg = val_expr.args[0]
+            if isinstance(d_arg, ListLit) and len(d_arg.items) == 2 and isinstance(d_arg.items[0], Int) and isinstance(d_arg.items[1], Int):
+                M = d_arg.items[0].value
+                K = d_arg.items[1].value
+                total = M * K
+                self.var_types[name] = "double*"
+                self.var_lengths[name] = total
+                self.var_shapes[name] = (M, K)
+                if fn == "zeros":
+                    return f"{ind}{const_p}double {name}[{total}]; memset({name}, 0, sizeof({name}));"
+                else:
+                    return f"{ind}{const_p}double {name}[{total}]; nat_ones_f64({name}, {total});"
+            elif isinstance(d_arg, ListLit) and len(d_arg.items) == 1 and isinstance(d_arg.items[0], Int):
+                n_int = d_arg.items[0].value
+                self.var_types[name] = "double*"
+                self.var_lengths[name] = n_int
+                self.var_shapes[name] = (n_int,)
+                if fn == "zeros":
+                    return f"{ind}{const_p}double {name}[{n_int}]; memset({name}, 0, sizeof({name}));"
+                else:
+                    return f"{ind}{const_p}double {name}[{n_int}]; nat_ones_f64({name}, {n_int});"
+            elif isinstance(d_arg, Int) and d_arg.value is not None:
+                n_int = d_arg.value
+                self.var_types[name] = "double*"
+                self.var_lengths[name] = n_int
+                self.var_shapes[name] = (n_int,)
+                if fn == "zeros":
+                    return f"{ind}{const_p}double {name}[{n_int}]; memset({name}, 0, sizeof({name}));"
+                else:
+                    return f"{ind}{const_p}double {name}[{n_int}]; nat_ones_f64({name}, {n_int});"
+            else:
+                d_code = self.emit_expr(d_arg)
+                self.var_types[name] = "double*"
+                if fn == "zeros":
+                    return f"{ind}{const_p}double* {name} = (double*)calloc({d_code}, sizeof(double));"
+                else:
+                    return f"{ind}{const_p}double* {name} = (double*)malloc(({d_code}) * sizeof(double)); if ({name}) nat_ones_f64({name}, {d_code});"
+
+        # 3. random_ternary(shape, seed=None)
+        if isinstance(val_expr, Call) and isinstance(val_expr.func, Name) and val_expr.func.id == "random_ternary":
+            s_arg = val_expr.args[0]
+            seed_code = self.emit_expr(val_expr.args[1]) if len(val_expr.args) > 1 else "12345LL"
+            if isinstance(s_arg, ListLit) and len(s_arg.items) == 2 and isinstance(s_arg.items[0], Int) and isinstance(s_arg.items[1], Int):
+                M = s_arg.items[0].value
+                K = s_arg.items[1].value
+                total = M * K
+                self.var_types[name] = "int8_t*"
+                self.var_lengths[name] = total
+                self.var_shapes[name] = (M, K)
+                return f"{ind}{const_p}int8_t {name}[{total}]; nat_random_ternary({name}, {total}, (uint64_t)({seed_code}));"
+            elif isinstance(s_arg, ListLit) and len(s_arg.items) == 1 and isinstance(s_arg.items[0], Int):
+                n_int = s_arg.items[0].value
+                self.var_types[name] = "int8_t*"
+                self.var_lengths[name] = n_int
+                self.var_shapes[name] = (n_int,)
+                return f"{ind}{const_p}int8_t {name}[{n_int}]; nat_random_ternary({name}, {n_int}, (uint64_t)({seed_code}));"
+            elif isinstance(s_arg, Int) and s_arg.value is not None:
+                n_int = s_arg.value
+                self.var_types[name] = "int8_t*"
+                self.var_lengths[name] = n_int
+                self.var_shapes[name] = (n_int,)
+                return f"{ind}{const_p}int8_t {name}[{n_int}]; nat_random_ternary({name}, {n_int}, (uint64_t)({seed_code}));"
+
+        # 4. ListLit (1D e 2D)
+        if isinstance(val_expr, ListLit):
+            if val_expr.items and isinstance(val_expr.items[0], ListLit):
+                M = len(val_expr.items)
+                K = len(val_expr.items[0].items)
+                total = M * K
+                flat_items = []
+                for row in val_expr.items:
+                    if isinstance(row, ListLit):
+                        flat_items.extend(row.items)
+                it_t = self.infer_type(flat_items[0]) if flat_items else "double"
+                elem_t = "int64_t" if "int" in it_t else "double"
+                items_code = ", ".join(self.emit_expr(it) for it in flat_items)
+                self.var_types[name] = f"{elem_t}*"
+                self.var_lengths[name] = total
+                self.var_shapes[name] = (M, K)
+                return f"{ind}{const_p}{elem_t} {name}[{total}] = {{ {items_code} }};"
+            else:
+                n_elems = len(val_expr.items)
+                it_t = self.infer_type(val_expr.items[0]) if val_expr.items else "double"
+                elem_t = "int64_t" if "int" in it_t else "double"
+                items_code = ", ".join(self.emit_expr(it) for it in val_expr.items)
+                self.var_types[name] = f"{elem_t}*"
+                self.var_lengths[name] = n_elems
+                self.var_shapes[name] = (n_elems,)
+                return f"{ind}{const_p}{elem_t} {name}[{n_elems}] = {{ {items_code} }};"
+
+        # 5. Fatiamento de array obj[start..end]
+        if isinstance(val_expr, Index) and isinstance(val_expr.index, Range):
+            arr_code = self.emit_expr(val_expr.obj)
+            r = val_expr.index
+            start_code = self.emit_expr(r.start) if r.start else "0"
+            elem_t = self.infer_type(val_expr.obj)
+            if not elem_t.endswith("*"):
+                elem_t = "double*"
+            slice_len = None
+            if isinstance(r.start, Int) and isinstance(r.end, Int) and r.start.value is not None and r.end.value is not None:
+                slice_len = r.end.value - r.start.value
+            elif r.start is None and isinstance(r.end, Int) and r.end.value is not None:
+                slice_len = r.end.value
+            if slice_len is not None:
+                self.var_lengths[name] = slice_len
+                self.var_shapes[name] = (slice_len,)
+            self.var_types[name] = elem_t
+            return f"{ind}{const_p}{elem_t} {name} = ({arr_code}) + ({start_code});"
+
+        # 6. Indexação de linha em Matriz 2D: row = A[i]
+        if isinstance(val_expr, Index) and isinstance(val_expr.obj, Name) and val_expr.obj.id in self.var_shapes:
+            sh = self.var_shapes[val_expr.obj.id]
+            if len(sh) == 2:
+                M, K = sh
+                idx_code = self.emit_expr(val_expr.index)
+                elem_t = self.var_types.get(val_expr.obj.id, "double*")
+                self.var_types[name] = elem_t
+                self.var_lengths[name] = K
+                self.var_shapes[name] = (K,)
+                return f"{ind}{const_p}{elem_t} {name} = ({val_expr.obj.id}) + ({idx_code}) * {K};"
+
+        # 7. Multiplicação Matricial: y = W @ x, C = A @ B, y = (W @ x) * gamma, etc.
+        is_matmul = False
+        scale_expr = None
+        left_expr, right_expr = None, None
+
+        if isinstance(val_expr, Binary) and val_expr.op == "@":
+            is_matmul = True
+            left_expr = val_expr.left
+            right_expr = val_expr.right
+        elif isinstance(val_expr, Call) and isinstance(val_expr.func, Name) and val_expr.func.id == "matmul":
+            is_matmul = True
+            left_expr = val_expr.args[0]
+            right_expr = val_expr.args[1]
+        elif isinstance(val_expr, Binary) and val_expr.op == "*" and isinstance(val_expr.left, Binary) and val_expr.left.op == "@":
+            is_matmul = True
+            left_expr = val_expr.left.left
+            right_expr = val_expr.left.right
+            scale_expr = val_expr.right
+        elif isinstance(val_expr, Binary) and val_expr.op == "*" and isinstance(val_expr.right, Binary) and val_expr.right.op == "@":
+            is_matmul = True
+            left_expr = val_expr.right.left
+            right_expr = val_expr.right.right
+            scale_expr = val_expr.left
+
+        if is_matmul and left_expr is not None and right_expr is not None:
+            def get_shape(e: Expr) -> Optional[tuple[int, ...]]:
+                if isinstance(e, Name):
+                    if e.id in self.var_shapes: return self.var_shapes[e.id]
+                    if e.id in self.var_lengths: return (self.var_lengths[e.id],)
+                if isinstance(e, ListLit):
+                    if e.items and isinstance(e.items[0], ListLit):
+                        return (len(e.items), len(e.items[0].items))
+                    return (len(e.items),)
+                return None
+
+            l_shape = get_shape(left_expr)
+            r_shape = get_shape(right_expr)
+            l_code = self.emit_expr(left_expr)
+            r_code = self.emit_expr(right_expr)
+            l_type = self.var_types.get(left_expr.id, "double*") if isinstance(left_expr, Name) else "double*"
+            sc_code = self.emit_expr(scale_expr) if scale_expr is not None else None
+
+            # Caso 1: 1D @ 1D (Produto Escalar / Dot Product)
+            if l_shape and r_shape and len(l_shape) == 1 and len(r_shape) == 1:
+                K = l_shape[0]
+                self.var_types[name] = "double"
+                if sc_code:
+                    return f"{ind}{const_p}double {name} = nat_dot({l_code}, {r_code}, {K}LL) * ({sc_code});"
+                return f"{ind}{const_p}double {name} = nat_dot({l_code}, {r_code}, {K}LL);"
+
+            # Caso 2: 2D @ 1D (GEMV - Matriz por Vetor)
+            if l_shape and r_shape and len(l_shape) == 2 and len(r_shape) == 1:
+                M, K = l_shape
+                self.var_types[name] = "double*"
+                self.var_lengths[name] = M
+                self.var_shapes[name] = (M,)
+                if "int8" in l_type:
+                    if sc_code:
+                        return f"{ind}{const_p}double {name}[{M}]; nat_ternary_matmul_vec_scaled({l_code}, {r_code}, {name}, {M}LL, {K}LL, (double)({sc_code}));"
+                    return f"{ind}{const_p}double {name}[{M}]; nat_ternary_matmul_vec({l_code}, {r_code}, {name}, {M}LL, {K}LL);"
+                else:
+                    if sc_code:
+                        return f"{ind}{const_p}double {name}[{M}]; nat_gemv_scaled_f64({l_code}, {r_code}, {name}, {M}LL, {K}LL, (double)({sc_code}));"
+                    return f"{ind}{const_p}double {name}[{M}]; nat_gemv_f64({l_code}, {r_code}, {name}, {M}LL, {K}LL);"
+
+            # Caso 3: 2D @ 2D (GEMM - Matriz por Matriz)
+            if l_shape and r_shape and len(l_shape) == 2 and len(r_shape) == 2:
+                M, K = l_shape
+                K2, N = r_shape
+                total = M * N
+                self.var_types[name] = "double*"
+                self.var_lengths[name] = total
+                self.var_shapes[name] = (M, N)
+                if sc_code:
+                    return f"{ind}{const_p}double {name}[{total}]; nat_gemm_f64({l_code}, {r_code}, {name}, {M}LL, {K}LL, {N}LL); for (int64_t _i = 0; _i < {total}; _i++) {name}[_i] *= ({sc_code});"
+                return f"{ind}{const_p}double {name}[{total}]; nat_gemm_f64({l_code}, {r_code}, {name}, {M}LL, {K}LL, {N}LL);"
+
+            # Caso 4: 1D @ 2D (GEMV Transposto - Vetor por Matriz)
+            if l_shape and r_shape and len(l_shape) == 1 and len(r_shape) == 2:
+                M = l_shape[0]
+                M2, N = r_shape
+                self.var_types[name] = "double*"
+                self.var_lengths[name] = N
+                self.var_shapes[name] = (N,)
+                if sc_code:
+                    return f"{ind}{const_p}double {name}[{N}]; nat_gemv_trans_f64({r_code}, {l_code}, {name}, {M}LL, {N}LL); for (int64_t _i = 0; _i < {N}; _i++) {name}[_i] *= ({sc_code});"
+                return f"{ind}{const_p}double {name}[{N}]; nat_gemv_trans_f64({r_code}, {l_code}, {name}, {M}LL, {N}LL);"
+
+        # 8. Operações Aritméticas Elemento a Elemento (Vetor-Vetor e Vetor-Escalar)
+        if isinstance(val_expr, Binary) and val_expr.op in ("+", "-", "*", "/"):
+            l_is_name = isinstance(val_expr.left, Name)
+            r_is_name = isinstance(val_expr.right, Name)
+            l_in_lens = l_is_name and val_expr.left.id in self.var_lengths
+            r_in_lens = r_is_name and val_expr.right.id in self.var_lengths
+
+            if l_in_lens and r_in_lens:
+                total = self.var_lengths[val_expr.left.id]
+                shape = self.var_shapes.get(val_expr.left.id, (total,))
+                self.var_types[name] = "double*"
+                self.var_lengths[name] = total
+                self.var_shapes[name] = shape
+                return f"{ind}{const_p}double {name}[{total}]; for (int64_t _i = 0; _i < {total}; _i++) {name}[_i] = {val_expr.left.id}[_i] {val_expr.op} {val_expr.right.id}[_i];"
+            elif l_in_lens and not r_in_lens:
+                total = self.var_lengths[val_expr.left.id]
+                shape = self.var_shapes.get(val_expr.left.id, (total,))
+                r_code = self.emit_expr(val_expr.right)
+                self.var_types[name] = "double*"
+                self.var_lengths[name] = total
+                self.var_shapes[name] = shape
+                return f"{ind}{const_p}double {name}[{total}]; for (int64_t _i = 0; _i < {total}; _i++) {name}[_i] = {val_expr.left.id}[_i] {val_expr.op} ({r_code});"
+            elif r_in_lens and not l_in_lens:
+                total = self.var_lengths[val_expr.right.id]
+                shape = self.var_shapes.get(val_expr.right.id, (total,))
+                l_code = self.emit_expr(val_expr.left)
+                self.var_types[name] = "double*"
+                self.var_lengths[name] = total
+                self.var_shapes[name] = shape
+                return f"{ind}{const_p}double {name}[{total}]; for (int64_t _i = 0; _i < {total}; _i++) {name}[_i] = ({l_code}) {val_expr.op} {val_expr.right.id}[_i];"
+
+        return None
 
     def emit_stmt(self, s: Node) -> str:
         ind = self.indent()
         if isinstance(s, VarDecl):
-            ctype = self.c_type(s.type)
+            buf = self._emit_buffer_init(s.name, s.value, ind, is_const=False)
+            if buf is not None:
+                return buf
+            ctype = self.c_type(s.type) if s.type else self.infer_type(s.value)
             self.var_types[s.name] = ctype
             val = self.emit_expr(s.value)
             return f"{ind}{ctype} {s.name} = {val};"
 
         if isinstance(s, ConstDecl):
+            buf = self._emit_buffer_init(s.name, s.value, ind, is_const=True)
+            if buf is not None:
+                return buf
             ctype = self.c_type(s.type) if s.type else self.infer_type(s.value)
             self.var_types[s.name] = ctype
             val = self.emit_expr(s.value)
@@ -4812,6 +5354,10 @@ class CTranspiler:
             tgt = s.target
             if isinstance(tgt, Name):
                 name = tgt.id
+                if s.op == "=":
+                    buf = self._emit_buffer_init(name, s.value, ind, is_const=False)
+                    if buf is not None:
+                        return buf
                 if name not in self.var_types and s.op == "=":
                     ctype = self.infer_type(s.value)
                     self.var_types[name] = ctype
@@ -4947,13 +5493,28 @@ class CTranspiler:
                 )
             return f"(({l}) {e.op} ({r}))"
 
+        if isinstance(e, ListLit):
+            elem_type = "int64_t" if self.infer_type(e) == "int64_t*" else "double"
+            items_code = ", ".join(self.emit_expr(it) for it in e.items)
+            return f"(({elem_type}[]){{ {items_code} }})"
+
         if isinstance(e, Call):
             return self.emit_call(e)
 
         if isinstance(e, Index):
+            if isinstance(e.obj, Name) and e.obj.id in self.var_shapes and len(self.var_shapes[e.obj.id]) == 2:
+                M, K = self.var_shapes[e.obj.id]
+                idx = self.emit_expr(e.index)
+                return f"({e.obj.id} + ({idx}) * {K})"
             obj = self.emit_expr(e.obj)
             idx = self.emit_expr(e.index)
             return f"({obj})[{idx}]"
+
+        if isinstance(e, TryUnwrap):
+            inner = self.emit_expr(e.expr)
+            if self.infer_type(e.expr) == "NatResult":
+                return f"nat_unwrap_str({inner})"
+            return inner
 
         if isinstance(e, Attr):
             if isinstance(e.obj, Name) and e.obj.id == "math":
@@ -4970,6 +5531,13 @@ class CTranspiler:
 
     def emit_call(self, c: Call) -> str:
         if isinstance(c.func, Name) and c.func.id == "print":
+            if len(c.args) == 1 and isinstance(c.args[0], Name) and c.args[0].id in self.var_shapes:
+                v_name = c.args[0].id
+                sh = self.var_shapes[v_name]
+                if len(sh) == 2:
+                    return f'nat_print_mat_f64({v_name}, {sh[0]}LL, {sh[1]}LL); printf("\\n");'
+                elif len(sh) == 1:
+                    return f'nat_print_vec_f64({v_name}, {sh[0]}LL); printf("\\n");'
             if len(c.args) == 1 and isinstance(c.args[0], FString):
                 return self.emit_print_fstring(c.args[0])
             elif len(c.args) == 1 and isinstance(c.args[0], Str):
@@ -5019,6 +5587,63 @@ class CTranspiler:
             return f"((int64_t)({self.emit_expr(c.args[0])}))"
         elif fn_name == "to_f64":
             return f"((double)({self.emit_expr(c.args[0])}))"
+        elif fn_name == "len":
+            if c.args:
+                arg = c.args[0]
+                if isinstance(arg, Str):
+                    return f"((int64_t)({len(arg.value)}LL))"
+                if isinstance(arg, Name):
+                    v_id = arg.id
+                    if self.var_types.get(v_id) == "const char*":
+                        return f"((int64_t)strlen({v_id}))"
+                    if v_id in self.var_shapes and len(self.var_shapes[v_id]) == 2:
+                        return f"((int64_t)({self.var_shapes[v_id][0]}LL))"
+                    elif v_id in self.var_lengths:
+                        return f"((int64_t)({self.var_lengths[v_id]}LL))"
+                elif isinstance(arg, ListLit):
+                    return f"((int64_t)({len(arg.items)}LL))"
+                arg_type = self.infer_type(arg)
+                arg_code = self.emit_expr(arg)
+                if arg_type == "const char*":
+                    return f"((int64_t)strlen({arg_code}))"
+                return f"((int64_t)(sizeof({arg_code}) / sizeof(({arg_code})[0])))"
+        elif fn_name == "dot":
+            a_code = self.emit_expr(c.args[0])
+            b_code = self.emit_expr(c.args[1])
+            if c.args and isinstance(c.args[0], Name) and c.args[0].id in self.var_lengths:
+                len_code = f"{self.var_lengths[c.args[0].id]}LL"
+            elif len(c.args) > 1 and isinstance(c.args[1], Name) and c.args[1].id in self.var_lengths:
+                len_code = f"{self.var_lengths[c.args[1].id]}LL"
+            else:
+                len_code = f"((int64_t)(sizeof({a_code}) / sizeof(({a_code})[0])))"
+            return f"nat_dot({a_code}, {b_code}, {len_code})"
+        elif fn_name in ("sum", "mean", "min", "max"):
+            a_code = self.emit_expr(c.args[0])
+            if c.args and isinstance(c.args[0], Name) and c.args[0].id in self.var_lengths:
+                len_code = f"{self.var_lengths[c.args[0].id]}LL"
+            else:
+                len_code = f"((int64_t)(sizeof({a_code}) / sizeof(({a_code})[0])))"
+            return f"nat_{fn_name}({a_code}, {len_code})"
+        elif fn_name == "exists_file":
+            return f"nat_exists_file({self.emit_expr(c.args[0])})"
+        elif fn_name == "read_file":
+            return f"nat_read_file({self.emit_expr(c.args[0])})"
+        elif fn_name == "read_file_safe":
+            return f"nat_read_file_safe({self.emit_expr(c.args[0])})"
+        elif fn_name == "ok":
+            return f"nat_ok_str({self.emit_expr(c.args[0])})"
+        elif fn_name == "err":
+            return f"nat_err({self.emit_expr(c.args[0])})"
+        elif fn_name == "is_ok":
+            return f"nat_is_ok({self.emit_expr(c.args[0])})"
+        elif fn_name == "is_err":
+            return f"nat_is_err({self.emit_expr(c.args[0])})"
+        elif fn_name == "unwrap":
+            return f"nat_unwrap_str({self.emit_expr(c.args[0])})"
+        elif fn_name == "unwrap_or":
+            return f"nat_unwrap_or_str({self.emit_expr(c.args[0])}, {self.emit_expr(c.args[1])})"
+        elif fn_name == "error_message":
+            return f"nat_error_message({self.emit_expr(c.args[0])})"
 
         args_code = ", ".join(self.emit_expr(a) for a in c.args)
         return f"{fn_name}({args_code})"
@@ -5050,7 +5675,7 @@ class CTranspiler:
                         args.append(f"(double)({expr_code})")
                     elif itype == "bool":
                         fmt_parts.append("%s")
-                        args.append(f"(({expr_code}) ? \"true\" : \"false\")")
+                        args.append(f"(({expr_code}) ? \"True\" : \"False\")")
                     elif itype == "const char*":
                         fmt_parts.append("%s")
                         args.append(expr_code)

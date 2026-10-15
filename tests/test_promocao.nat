@@ -1,0 +1,6 @@
+fn main():
+    x = [10.0, 20.0, 30.0, 40.0]
+    n = len(x)
+    raiz = sqrt(n)
+    escala = 1.0 / sqrt(len(x))
+    print(f"Tamanho: {n}, Raiz: {raiz}, Escala: {escala}")

@@ -1,0 +1,16 @@
+fn main():
+    v = fill(8, 2.5)
+    o = ones([8])
+    z = zeros([8])
+    
+    s = sum(v)
+    m = mean(v)
+    d = dot(v, o)
+    sz = sum(z)
+    
+    fatia = v[1..4]
+    tam_fatia = len(fatia)
+    primeiro_fatia = fatia[0]
+
+    print(f"Soma v: {s:.1f}, Media v: {m:.1f}, Dot: {d:.1f}, Soma z: {sz:.1f}")
+    print(f"Tam fatia: {tam_fatia}, Primeiro fatia: {primeiro_fatia:.1f}")

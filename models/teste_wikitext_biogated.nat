@@ -1,7 +1,8 @@
 # ==============================================================================
-# teste_wikitext_biogated.nat — Benchmark Córtex + Hipocampo na DSL Nativa v0.3
-# Avaliação de Sparsidade Neuroquímica, Recall em 2 bits e KV-Cache no WikiText-2
-# Sintaxe: Inferência de Tipos Local, fill(), seed() e Promoção Numérica
+# teste_wikitext_biogated.nat — Teste de Integração e Sintaxe da DSL Nativa v0.3
+# Validação funcional dos primitivos da linguagem (fill, seed, rmsnorm, turbo_quant, matmul)
+# NOTA CIENTÍFICA: Para o benchmark empírico rigoroso com pesos reais do Qwen2.5-0.5B,
+# Perplexidade (PPL) e NLL no WikiText-2, execute: `tools/experimento_real_cortex_hipocampo.py`
 # ==============================================================================
 
 # 1. Modulação Dopaminérgica com Normalização Homeostática

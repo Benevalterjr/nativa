@@ -1,0 +1,33 @@
+# test_result_error.nat
+# Validação do Sistema de Tratamento de Erros: Result, ok, err, is_ok, is_err, unwrap_or e operador ?
+
+fn main():
+    print("=== Teste de Tratamento de Erros e Result em Nativa ===")
+    
+    # 1. Verificação de existência de arquivo
+    arq_existente = "tests/test_result_error.nat"
+    arq_fantasma = "arquivo_que_nao_existe_12345.txt"
+    
+    existe_1 = exists_file(arq_existente)
+    existe_2 = exists_file(arq_fantasma)
+    print(f"Existe real: {existe_1}, Existe fantasma: {existe_2}")
+    
+    # 2. Leitura Segura de Arquivo (Retorna Result)
+    res_erro = read_file_safe(arq_fantasma)
+    falhou = is_err(res_erro)
+    passou = is_ok(res_erro)
+    print(f"Leitura de fantasma falhou: {falhou}, passou: {passou}")
+    
+    # 3. Fallback Seguro com unwrap_or
+    conteudo_fallback = unwrap_or(res_erro, "conteudo_padrao_seguro")
+    print(f"Fallback obtido: {conteudo_fallback}")
+    
+    # 4. Leitura com Sucesso e unwrap direto
+    res_ok = read_file_safe(arq_existente)
+    if is_ok(res_ok):
+        tam_lido = len(unwrap(res_ok))
+        print(f"Arquivo lido com sucesso! Bytes lidos: {tam_lido}")
+    
+    # 5. Operador Postfix ? para Desempacotamento Automático
+    conteudo_interrogacao = read_file(arq_existente)?
+    print(f"Leitura via operador '?' bem sucedida! Tamanho: {len(conteudo_interrogacao)}")
