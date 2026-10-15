@@ -2340,14 +2340,27 @@ class Tensor:
         res = self.data + val
         return Tensor(res, dtype=self.dtype, device=self.device)
 
+    def __radd__(self, other: Any) -> "Tensor":
+        return self.__add__(other)
+
     def __sub__(self, other: Any) -> "Tensor":
         val = other.data if isinstance(other, Tensor) else other
         res = self.data - val
         return Tensor(res, dtype=self.dtype, device=self.device)
 
+    def __rsub__(self, other: Any) -> "Tensor":
+        val = other.data if isinstance(other, Tensor) else other
+        res = val - self.data
+        return Tensor(res, dtype=self.dtype, device=self.device)
+
     def __truediv__(self, other: Any) -> "Tensor":
         val = other.data if isinstance(other, Tensor) else other
         res = self.data / val
+        return Tensor(res, dtype=self.dtype, device=self.device)
+
+    def __rtruediv__(self, other: Any) -> "Tensor":
+        val = other.data if isinstance(other, Tensor) else other
+        res = val / self.data
         return Tensor(res, dtype=self.dtype, device=self.device)
 
     def __repr__(self) -> str:
@@ -5194,7 +5207,8 @@ fn main():
         interp_out = buf.getvalue().strip()
 
         c_code = CTranspiler(prog).transpile()
-        with tempfile.TemporaryDirectory() as tmpdir:
+        kwargs = {"ignore_cleanup_errors": True} if sys.version_info >= (3, 10) else {}
+        with tempfile.TemporaryDirectory(**kwargs) as tmpdir:
             c_path = os.path.join(tmpdir, "diff_fat.c")
             exe_path = os.path.join(tmpdir, "diff_fat.exe")
             with open(c_path, "w", encoding="utf-8") as f:
