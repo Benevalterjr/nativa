@@ -1,37 +1,51 @@
 # models/qwen2.5_bitnet_quant.nat
-# Quantizacao BitNet b1.58 Canônica sob demanda do Modelo Qwen2.5-0.5B
+# Quantizacao BitNet b1.58 Canonica sob demanda do Modelo Qwen2.5-0.5B
 # Converte pesos float32 para trits {-1, 0, 1} com AbsMean Scaling e empacotamento base-3 (1.58 bits)
 # Compara memoria, tempo de execucao e fidelidade numerica
 
+const PADRAO_ARQUIVO: str = "data/qwen2.5_0.5b.safetensors"
+const FALLBACK_ARQUIVO: str = "qwen2.5_0.5b.safetensors"
+const CAMADA: i64 = 0
+
 fn main():
     print("==========================================================================")
-    print("  NATIVA v0.3: QUANTIZACAO BITNET b1.58 SOB DEMANDA — QWEN2.5-0.5B")
+    print("  NATIVA v0.4: QUANTIZACAO BITNET b1.58 SOB DEMANDA — QWEN2.5-0.5B")
     print("  Conversao Float32 -> Trits {-1, 0, 1} (1.58 bits / 5 trits por byte)")
     print("==========================================================================")
 
-    arquivo = "qwen2.5_0.5b.safetensors"
+    # 0. Resolucao segura do caminho dos pesos com fallback
+    arquivo = PADRAO_ARQUIVO
+    if not exists_file(arquivo):
+        if exists_file(FALLBACK_ARQUIVO):
+            arquivo = FALLBACK_ARQUIVO
+        else:
+            print("[AVISO] Arquivo de pesos nao encontrado:")
+            print(f"        {arquivo}")
+            print("Para baixar o modelo Qwen2.5-0.5B, execute o utilitario:")
+            print("  python tools/baixar_qwen.py")
+            return
 
     # 1. Carregamento das projecoes de uma camada real do Qwen2.5
-    camada = 0
-    print(f"\n[1] Carregando pesos Float32 da Camada {camada} do Qwen2.5...")
+    print(f"\n[1] Carregando pesos Float32 da Camada {CAMADA} do Qwen2.5...")
+    print(f"    - Fonte de pesos: {arquivo}")
     
     t0 = clock()
-    W_q_f32    = load_safetensors(arquivo, f"model.layers.{camada}.self_attn.q_proj.weight")
-    W_k_f32    = load_safetensors(arquivo, f"model.layers.{camada}.self_attn.k_proj.weight")
-    W_v_f32    = load_safetensors(arquivo, f"model.layers.{camada}.self_attn.v_proj.weight")
-    W_o_f32    = load_safetensors(arquivo, f"model.layers.{camada}.self_attn.o_proj.weight")
-    W_gate_f32 = load_safetensors(arquivo, f"model.layers.{camada}.mlp.gate_proj.weight")
-    W_up_f32   = load_safetensors(arquivo, f"model.layers.{camada}.mlp.up_proj.weight")
-    W_down_f32 = load_safetensors(arquivo, f"model.layers.{camada}.mlp.down_proj.weight")
+    W_q_f32    = load_safetensors(arquivo, f"model.layers.{CAMADA}.self_attn.q_proj.weight")
+    W_k_f32    = load_safetensors(arquivo, f"model.layers.{CAMADA}.self_attn.k_proj.weight")
+    W_v_f32    = load_safetensors(arquivo, f"model.layers.{CAMADA}.self_attn.v_proj.weight")
+    W_o_f32    = load_safetensors(arquivo, f"model.layers.{CAMADA}.self_attn.o_proj.weight")
+    W_gate_f32 = load_safetensors(arquivo, f"model.layers.{CAMADA}.mlp.gate_proj.weight")
+    W_up_f32   = load_safetensors(arquivo, f"model.layers.{CAMADA}.mlp.up_proj.weight")
+    W_down_f32 = load_safetensors(arquivo, f"model.layers.{CAMADA}.mlp.down_proj.weight")
 
-    norm1 = load_safetensors(arquivo, f"model.layers.{camada}.input_layernorm.weight")
-    norm2 = load_safetensors(arquivo, f"model.layers.{camada}.post_attention_layernorm.weight")
-    b_q   = load_safetensors(arquivo, f"model.layers.{camada}.self_attn.q_proj.bias")
-    b_k   = load_safetensors(arquivo, f"model.layers.{camada}.self_attn.k_proj.bias")
-    b_v   = load_safetensors(arquivo, f"model.layers.{camada}.self_attn.v_proj.bias")
+    norm1 = load_safetensors(arquivo, f"model.layers.{CAMADA}.input_layernorm.weight")
+    norm2 = load_safetensors(arquivo, f"model.layers.{CAMADA}.post_attention_layernorm.weight")
+    b_q   = load_safetensors(arquivo, f"model.layers.{CAMADA}.self_attn.q_proj.bias")
+    b_k   = load_safetensors(arquivo, f"model.layers.{CAMADA}.self_attn.k_proj.bias")
+    b_v   = load_safetensors(arquivo, f"model.layers.{CAMADA}.self_attn.v_proj.bias")
 
     t_load = clock() - t0
-    print(f"    - Pesos da Camada {camada} carregados em {t_load*1000.0:.1f} ms")
+    print(f"    - Pesos da Camada {CAMADA} carregados em {t_load*1000.0:.1f} ms")
 
     # 2. Quantizacao BitNet b1.58 (AbsMean Scaling) + Compactacao 5-trits (1.58-bit)
     print("\n[2] Aplicando Quantizacao BitNet b1.58 Canônica e Empacotamento denso de base-3...")
