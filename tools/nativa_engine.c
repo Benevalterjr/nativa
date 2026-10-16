@@ -21,6 +21,10 @@
 #include <windows.h>
 #else
 #include <time.h>
+#include <fcntl.h>
+#include <unistd.h>
+#include <sys/mman.h>
+#include <sys/stat.h>
 #endif
 #include <immintrin.h>
 #include <omp.h>
@@ -743,6 +747,10 @@ int main(int argc, char** argv) {
     }
 
     // 3. Mapear arquivo .natq4
+    uint64_t model_file_size = 0;
+    const uint8_t* model_bytes = NULL;
+
+#ifdef _WIN32
     HANDLE hFile = CreateFileA(model_path, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
     if (hFile == INVALID_HANDLE_VALUE) {
         fprintf(stderr, "[ERRO] Nao foi possivel abrir %s (Codigo: %lu)\n", model_path, GetLastError());
@@ -755,6 +763,7 @@ int main(int argc, char** argv) {
         CloseHandle(hFile);
         return 1;
     }
+    model_file_size = (uint64_t)model_size.QuadPart;
 
     HANDLE hMapping = CreateFileMappingA(hFile, NULL, PAGE_READONLY, 0, 0, NULL);
     if (!hMapping) {
@@ -763,7 +772,7 @@ int main(int argc, char** argv) {
         return 1;
     }
 
-    const uint8_t* model_bytes = (const uint8_t*)MapViewOfFile(hMapping, FILE_MAP_READ, 0, 0, 0);
+    model_bytes = (const uint8_t*)MapViewOfFile(hMapping, FILE_MAP_READ, 0, 0, 0);
     if (!model_bytes) {
         fprintf(stderr, "[ERRO] Falha ao mapear arquivo na memoria\n");
         CloseHandle(hMapping);
@@ -771,12 +780,43 @@ int main(int argc, char** argv) {
         return 1;
     }
 
+    #define UNMAP_AND_CLOSE() do { \
+        if (model_bytes) UnmapViewOfFile(model_bytes); \
+        if (hMapping) CloseHandle(hMapping); \
+        if (hFile != INVALID_HANDLE_VALUE) CloseHandle(hFile); \
+    } while (0)
+#else
+    int fd = open(model_path, O_RDONLY);
+    if (fd < 0) {
+        fprintf(stderr, "[ERRO] Nao foi possivel abrir %s\n", model_path);
+        return 1;
+    }
+
+    struct stat st;
+    if (fstat(fd, &st) != 0 || (uint64_t)st.st_size < NATQ4_HEADER_SIZE) {
+        fprintf(stderr, "[ERRO] Arquivo NATQ4 menor que o cabeçalho obrigatório de %u bytes.\n", NATQ4_HEADER_SIZE);
+        close(fd);
+        return 1;
+    }
+    model_file_size = (uint64_t)st.st_size;
+
+    model_bytes = (const uint8_t*)mmap(NULL, (size_t)model_file_size, PROT_READ, MAP_SHARED, fd, 0);
+    if (model_bytes == MAP_FAILED || !model_bytes) {
+        fprintf(stderr, "[ERRO] Falha ao mapear arquivo na memoria\n");
+        close(fd);
+        return 1;
+    }
+
+    #define UNMAP_AND_CLOSE() do { \
+        if (model_bytes && model_bytes != MAP_FAILED) munmap((void*)model_bytes, (size_t)model_file_size); \
+        if (fd >= 0) close(fd); \
+    } while (0)
+#endif
+
     // 4. Validar cabeçalho do modelo
     const NativaModelHeader* hdr = (const NativaModelHeader*)model_bytes;
-    if (!validate_model_header(hdr, (uint64_t)model_size.QuadPart)) {
-        UnmapViewOfFile(model_bytes);
-        CloseHandle(hMapping);
-        CloseHandle(hFile);
+    if (!validate_model_header(hdr, model_file_size)) {
+        UNMAP_AND_CLOSE();
         return 1;
     }
 
@@ -784,9 +824,7 @@ int main(int argc, char** argv) {
         (hdr->version >= 3 && g_vocab_size != hdr->tokenizer_vocab_size))) {
         fprintf(stderr, "[ERRO] O vocabulário carregado cobre %u IDs; o modelo requer %u IDs ativos e tem %u linhas.\n",
                 g_vocab_size, hdr->version >= 3 ? hdr->tokenizer_vocab_size : g_vocab_size, hdr->vocab_size);
-        UnmapViewOfFile(model_bytes);
-        CloseHandle(hMapping);
-        CloseHandle(hFile);
+        UNMAP_AND_CLOSE();
         return 1;
     }
 
@@ -802,9 +840,7 @@ int main(int argc, char** argv) {
     // 5. Alocar arena dinamica
     if (!arena_allocate(hdr)) {
         fprintf(stderr, "[ERRO] Falha ao alocar arena dinamica de memoria!\n");
-        UnmapViewOfFile(model_bytes);
-        CloseHandle(hMapping);
-        CloseHandle(hFile);
+        UNMAP_AND_CLOSE();
         return 1;
     }
 
@@ -816,9 +852,7 @@ int main(int argc, char** argv) {
         char* line_buf = (char*)malloc(131072);
         if (!line_buf) {
             fprintf(stderr, "[ERRO] Falha ao alocar buffer de linha!\n");
-            UnmapViewOfFile(model_bytes);
-            CloseHandle(hMapping);
-            CloseHandle(hFile);
+            UNMAP_AND_CLOSE();
             return 1;
         }
 
@@ -910,8 +944,6 @@ int main(int argc, char** argv) {
         printf("====================================================================\n");
     }
 
-    UnmapViewOfFile(model_bytes);
-    CloseHandle(hMapping);
-    CloseHandle(hFile);
+    UNMAP_AND_CLOSE();
     return 0;
 }

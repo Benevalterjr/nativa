@@ -8,15 +8,21 @@
 #ifdef _WIN32
 #include <intrin.h>
 #include <windows.h>
+static inline void nat_cpuid(int cpuInfo[4], int infoType) {
+    __cpuid(cpuInfo, infoType);
+}
+static inline void nat_cpuidex(int cpuInfo[4], int infoType, int count) {
+    __cpuidex(cpuInfo, infoType, count);
+}
 #else
 #include <cpuid.h>
 #include <unistd.h>
 #include <stdlib.h>
-static inline void __cpuid(int cpuInfo[4], int infoType) {
-    __get_cpuid(infoType, (unsigned int*)&cpuInfo[0], (unsigned int*)&cpuInfo[1], (unsigned int*)&cpuInfo[2], (unsigned int*)&cpuInfo[3]);
+static inline void nat_cpuid(int cpuInfo[4], int infoType) {
+    __get_cpuid((unsigned int)infoType, (unsigned int*)&cpuInfo[0], (unsigned int*)&cpuInfo[1], (unsigned int*)&cpuInfo[2], (unsigned int*)&cpuInfo[3]);
 }
-static inline void __cpuidex(int cpuInfo[4], int infoType, int count) {
-    __get_cpuid_count(infoType, count, (unsigned int*)&cpuInfo[0], (unsigned int*)&cpuInfo[1], (unsigned int*)&cpuInfo[2], (unsigned int*)&cpuInfo[3]);
+static inline void nat_cpuidex(int cpuInfo[4], int infoType, int count) {
+    __get_cpuid_count((unsigned int)infoType, (unsigned int)count, (unsigned int*)&cpuInfo[0], (unsigned int*)&cpuInfo[1], (unsigned int*)&cpuInfo[2], (unsigned int*)&cpuInfo[3]);
 }
 #endif
 
@@ -42,7 +48,7 @@ static inline void cpu_detect(CPUInfo* cpu) {
     memset(cpu, 0, sizeof(CPUInfo));
 
     int info[4];
-    __cpuid(info, 0);
+    nat_cpuid(info, 0);
     int max_ids = info[0];
 
     *(int*)&cpu->vendor[0] = info[1];
@@ -51,7 +57,7 @@ static inline void cpu_detect(CPUInfo* cpu) {
     cpu->vendor[12] = '\0';
 
     if (max_ids >= 1) {
-        __cpuid(info, 1);
+        nat_cpuid(info, 1);
         cpu->ssse3 = (info[2] & (1 << 9)) != 0;
         cpu->fma3  = (info[2] & (1 << 12)) != 0;
         cpu->sse41 = (info[2] & (1 << 19)) != 0;
@@ -60,18 +66,18 @@ static inline void cpu_detect(CPUInfo* cpu) {
     }
 
     if (max_ids >= 7) {
-        __cpuidex(info, 7, 0);
+        nat_cpuidex(info, 7, 0);
         cpu->avx2       = (info[1] & (1 << 5)) != 0;
         cpu->avx512f    = (info[1] & (1 << 16)) != 0;
         cpu->avx512vnni = (info[2] & (1 << 11)) != 0;
     }
 
     int ext[4];
-    __cpuid(ext, 0x80000000);
+    nat_cpuid(ext, (int)0x80000000);
     if ((unsigned int)ext[0] >= 0x80000004) {
-        __cpuid((int*)&cpu->brand[0],  0x80000002);
-        __cpuid((int*)&cpu->brand[16], 0x80000003);
-        __cpuid((int*)&cpu->brand[32], 0x80000004);
+        nat_cpuid((int*)&cpu->brand[0],  (int)0x80000002);
+        nat_cpuid((int*)&cpu->brand[16], (int)0x80000003);
+        nat_cpuid((int*)&cpu->brand[32], (int)0x80000004);
         cpu->brand[48] = '\0';
     } else {
         strcpy(cpu->brand, "CPU x86_64 Generica");
