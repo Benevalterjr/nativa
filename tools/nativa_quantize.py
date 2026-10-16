@@ -142,8 +142,9 @@ def q4x4_matrix(values: np.ndarray) -> bytes:
 
     groups, _, num_blocks, _ = blocks.shape
     result = np.empty((groups, num_blocks, 72), dtype=np.uint8)
-    result[:, :, :8] = scale_bf16.transpose(0, 2, 1).astype("<u2", copy=False).view(np.uint8).reshape(groups, num_blocks, 8)
-    result[:, :, 8:] = packed.transpose(0, 2, 1, 3).reshape(groups, num_blocks, 64)
+    scale_trans = np.ascontiguousarray(scale_bf16.transpose(0, 2, 1)).astype("<u2", copy=False)
+    result[:, :, :8] = scale_trans.view(np.uint8).reshape(groups, num_blocks, 8)
+    result[:, :, 8:] = np.ascontiguousarray(packed.transpose(0, 2, 1, 3)).reshape(groups, num_blocks, 64)
     return result.tobytes()
 
 
@@ -232,11 +233,12 @@ def quantize_qwen(model_dir: str, out_file: str, max_seq_len: int = 2048) -> Non
     heads = int(cfg["num_attention_heads"])
     kv_heads = int(cfg.get("num_key_value_heads", heads))
     head_dim = int(cfg.get("head_dim", dim // heads))
+    q_dim = heads * head_dim
     vocab = int(cfg["vocab_size"])
     model_context = int(cfg.get("max_position_embeddings", MAX_CONTEXT))
     if (layers_n < 1 or layers_n > MAX_LAYERS or dim < 32 or dim % 32 or inter < 32 or inter % 32
             or vocab < 4 or vocab % 4 or heads < 1 or kv_heads < 1 or heads % kv_heads
-            or head_dim != dim // heads or head_dim % 16 or (kv_heads * head_dim) % 4):
+            or (model_type != "qwen3" and head_dim != dim // heads) or q_dim % 32 != 0 or head_dim % 16 or (kv_heads * head_dim) % 4):
         raise ValueError("Dimensões do modelo incompatíveis com o layout/runtime Q4x4.")
     if max_seq_len < 2 or max_seq_len > model_context or max_seq_len > MAX_CONTEXT:
         raise ValueError(f"max_seq_len deve estar entre 2 e {min(model_context, MAX_CONTEXT)}.")
@@ -281,7 +283,7 @@ def quantize_qwen(model_dir: str, out_file: str, max_seq_len: int = 2048) -> Non
                 lo["norm1"] = write_norm(out, prefix + "input_layernorm.weight", dim)
                 lo["norm2"] = write_norm(out, prefix + "post_attention_layernorm.weight", dim)
 
-                for short, proj, size in (("bq", "q_proj", dim), ("bk", "k_proj", kv_heads * head_dim), ("bv", "v_proj", kv_heads * head_dim)):
+                for short, proj, size in (("bq", "q_proj", q_dim), ("bk", "k_proj", kv_heads * head_dim), ("bv", "v_proj", kv_heads * head_dim)):
                     key = prefix + f"self_attn.{proj}.bias"
                     if has_bias:
                         lo[short] = out.tell()
@@ -290,10 +292,10 @@ def quantize_qwen(model_dir: str, out_file: str, max_seq_len: int = 2048) -> Non
                         lo[short] = 0
 
                 for short, key, rows, cols in (
-                    ("wq", "q_proj", dim, dim),
+                    ("wq", "q_proj", q_dim, dim),
                     ("wk", "k_proj", kv_heads * head_dim, dim),
                     ("wv", "v_proj", kv_heads * head_dim, dim),
-                    ("wo", "o_proj", dim, dim),
+                    ("wo", "o_proj", dim, q_dim),
                 ):
                     lo[short] = write_matrix(out, prefix + f"self_attn.{key}.weight", rows, cols)
 

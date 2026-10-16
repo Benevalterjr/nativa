@@ -17,7 +17,11 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include <math.h>
+#ifdef _WIN32
 #include <windows.h>
+#else
+#include <time.h>
+#endif
 #include <immintrin.h>
 #include <omp.h>
 
@@ -95,6 +99,7 @@ static inline void print_token(int token_id) {
 // ----------------------------------------------------------------------------
 // TIMER
 // ----------------------------------------------------------------------------
+#ifdef _WIN32
 static LARGE_INTEGER g_timer_freq;
 
 static inline void timer_init(void) {
@@ -106,6 +111,15 @@ static inline double timer_now(void) {
     QueryPerformanceCounter(&counter);
     return (double)counter.QuadPart / (double)g_timer_freq.QuadPart;
 }
+#else
+static inline void timer_init(void) {}
+
+static inline double timer_now(void) {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (double)ts.tv_sec + (double)ts.tv_nsec * 1e-9;
+}
+#endif
 
 // ----------------------------------------------------------------------------
 // MEMORY ARENA DINÂMICA
@@ -133,6 +147,7 @@ typedef struct {
 static ModelArena g_arena;
 
 static bool arena_allocate(const NativaModelHeader* hdr) {
+    uint32_t q_dim = hdr->num_heads * hdr->head_dim;
     uint32_t kv_dim = hdr->num_kv_heads * hdr->head_dim;
     size_t kv_cache_elements = (size_t)hdr->num_layers * hdr->max_seq_len * kv_dim;
 
@@ -141,17 +156,17 @@ static bool arena_allocate(const NativaModelHeader* hdr) {
 
     g_arena.x        = (float*)malloc(hdr->dim * sizeof(float));
     g_arena.xn       = (float*)malloc(hdr->dim * sizeof(float));
-    g_arena.q        = (float*)malloc(hdr->dim * sizeof(float));
+    g_arena.q        = (float*)malloc(q_dim * sizeof(float));
     g_arena.k        = (float*)malloc(kv_dim * sizeof(float));
     g_arena.v        = (float*)malloc(kv_dim * sizeof(float));
-    g_arena.attn_out = (float*)malloc(hdr->dim * sizeof(float));
+    g_arena.attn_out = (float*)malloc(q_dim * sizeof(float));
     g_arena.h_mlp    = (float*)malloc(hdr->intermediate_dim * sizeof(float));
     g_arena.x_final  = (float*)malloc(hdr->dim * sizeof(float));
     g_arena.logits   = (float*)malloc(hdr->vocab_size * sizeof(float));
     g_arena.scores   = (float*)malloc((size_t)hdr->num_heads * hdr->max_seq_len * sizeof(float));
 
     g_arena.xn_q8      = (BlockQ8*)malloc((hdr->dim / 32) * sizeof(BlockQ8));
-    g_arena.attn_q8    = (BlockQ8*)malloc((hdr->dim / 32) * sizeof(BlockQ8));
+    g_arena.attn_q8    = (BlockQ8*)malloc((q_dim / 32) * sizeof(BlockQ8));
     g_arena.h_mlp_q8   = (BlockQ8*)malloc((hdr->intermediate_dim / 32) * sizeof(BlockQ8));
     g_arena.x_final_q8 = (BlockQ8*)malloc((hdr->dim / 32) * sizeof(BlockQ8));
 
@@ -204,8 +219,10 @@ static bool validate_model_header(const NativaModelHeader* hdr, uint64_t file_si
         hdr->vocab_size % 4 != 0 || hdr->num_heads == 0 || hdr->num_heads > 256 ||
         hdr->num_kv_heads == 0 || hdr->num_kv_heads > hdr->num_heads ||
         hdr->num_heads % hdr->num_kv_heads != 0 || hdr->head_dim == 0 ||
-        hdr->head_dim != hdr->dim / hdr->num_heads || hdr->head_dim % 16 != 0 ||
+        hdr->num_heads % hdr->num_kv_heads != 0 || hdr->head_dim == 0 ||
+        (hdr->arch != NAT_ARCH_QWEN3 && hdr->head_dim != hdr->dim / hdr->num_heads) || hdr->head_dim % 16 != 0 ||
         ((uint64_t)hdr->num_kv_heads * hdr->head_dim) % 4 != 0 ||
+        ((uint64_t)hdr->num_heads * hdr->head_dim) % 32 != 0 ||
         hdr->has_attn_bias > 1 || hdr->tie_embeddings > 1 ||
         (hdr->version >= 3 && (hdr->tokenizer_vocab_size < 4 || hdr->tokenizer_vocab_size > hdr->vocab_size)) ||
         hdr->max_seq_len < 2 || hdr->max_seq_len > 32768 ||
@@ -216,6 +233,7 @@ static bool validate_model_header(const NativaModelHeader* hdr, uint64_t file_si
     }
 
     const uint64_t norm_bytes = (uint64_t)hdr->dim * sizeof(uint16_t);
+    const uint32_t q_dim = hdr->num_heads * hdr->head_dim;
     const uint32_t kv_dim = hdr->num_kv_heads * hdr->head_dim;
     if (!matrix_range_is_valid(hdr->embed_tokens_off, hdr->vocab_size, hdr->dim, file_size, hdr->data_start_off) ||
         !range_is_valid(hdr->norm_off, norm_bytes, file_size, hdr->data_start_off)) {
@@ -232,10 +250,10 @@ static bool validate_model_header(const NativaModelHeader* hdr, uint64_t file_si
         const NativaLayerOffsets* lo = &hdr->layers[l];
         if (!range_is_valid(lo->norm1, norm_bytes, file_size, hdr->data_start_off) ||
             !range_is_valid(lo->norm2, norm_bytes, file_size, hdr->data_start_off) ||
-            !matrix_range_is_valid(lo->wq, hdr->dim, hdr->dim, file_size, hdr->data_start_off) ||
+            !matrix_range_is_valid(lo->wq, q_dim, hdr->dim, file_size, hdr->data_start_off) ||
             !matrix_range_is_valid(lo->wk, kv_dim, hdr->dim, file_size, hdr->data_start_off) ||
             !matrix_range_is_valid(lo->wv, kv_dim, hdr->dim, file_size, hdr->data_start_off) ||
-            !matrix_range_is_valid(lo->wo, hdr->dim, hdr->dim, file_size, hdr->data_start_off) ||
+            !matrix_range_is_valid(lo->wo, hdr->dim, q_dim, file_size, hdr->data_start_off) ||
             !matrix_range_is_valid(lo->wgate, hdr->intermediate_dim, hdr->dim, file_size, hdr->data_start_off) ||
             !matrix_range_is_valid(lo->wup, hdr->intermediate_dim, hdr->dim, file_size, hdr->data_start_off) ||
             !matrix_range_is_valid(lo->wdown, hdr->dim, hdr->intermediate_dim, file_size, hdr->data_start_off)) {
@@ -487,6 +505,7 @@ static void forward_token_universal(const NativaModelHeader* hdr, const uint8_t*
     const int num_heads = hdr->num_heads;
     const int num_kv_heads = hdr->num_kv_heads;
     const int head_dim = hdr->head_dim;
+    const int q_dim = num_heads * head_dim;
     const int kv_dim = num_kv_heads * head_dim;
     const int heads_per_kv = num_heads / num_kv_heads;
 
@@ -549,7 +568,7 @@ static void forward_token_universal(const NativaModelHeader* hdr, const uint8_t*
 
         // Fused QKV
         const int nb = dim / 32;
-        const int gq = dim / 4;
+        const int gq = q_dim / 4;
         const int gk = kv_dim / 4;
         int g;
         #pragma omp parallel for schedule(static)
@@ -633,8 +652,8 @@ static void forward_token_universal(const NativaModelHeader* hdr, const uint8_t*
             }
         }
 
-        quantize_x_to_q8(g_arena.attn_out, g_arena.attn_q8, dim);
-        matvec_q4x4(g_arena.x, wo_w, g_arena.attn_q8, NULL, dim, dim, 1);
+        quantize_x_to_q8(g_arena.attn_out, g_arena.attn_q8, q_dim);
+        matvec_q4x4(g_arena.x, wo_w, g_arena.attn_q8, NULL, dim, q_dim, 1);
         g_prof_attn += (timer_now() - t_a0);
 
         // MLP
@@ -681,7 +700,9 @@ static void forward_token_universal(const NativaModelHeader* hdr, const uint8_t*
 // MAIN ENGINE
 // ----------------------------------------------------------------------------
 int main(int argc, char** argv) {
+#ifdef _WIN32
     SetConsoleOutputCP(CP_UTF8);
+#endif
     timer_init();
 
     if (argc < 2) {

@@ -2,5 +2,7 @@
 numpy>=1.24.0
 
 # Ferramentas de Pesquisa e Modelos (tools/) — Opcional
-# Necessário apenas para baixar e converter modelos oficiais do HuggingFace em data/
+fastapi>=0.100.0
+uvicorn>=0.22.0
+pydantic>=2.0.0
 # Para instalar tudo de uma vez para desenvolvimento: pip install -r requirements-tools.txt

@@ -4,8 +4,22 @@
 #include <stdio.h>
 #include <stdbool.h>
 #include <string.h>
+
+#ifdef _WIN32
 #include <intrin.h>
 #include <windows.h>
+#else
+#include <cpuid.h>
+#include <unistd.h>
+#include <stdlib.h>
+static inline void __cpuid(int cpuInfo[4], int infoType) {
+    __get_cpuid(infoType, (unsigned int*)&cpuInfo[0], (unsigned int*)&cpuInfo[1], (unsigned int*)&cpuInfo[2], (unsigned int*)&cpuInfo[3]);
+}
+static inline void __cpuidex(int cpuInfo[4], int infoType, int count) {
+    __get_cpuid_count(infoType, count, (unsigned int*)&cpuInfo[0], (unsigned int*)&cpuInfo[1], (unsigned int*)&cpuInfo[2], (unsigned int*)&cpuInfo[3]);
+}
+#endif
+
 #include <omp.h>
 
 typedef struct {
@@ -63,9 +77,14 @@ static inline void cpu_detect(CPUInfo* cpu) {
         strcpy(cpu->brand, "CPU x86_64 Generica");
     }
 
+#ifdef _WIN32
     SYSTEM_INFO sys;
     GetSystemInfo(&sys);
     cpu->logical_threads = (int)sys.dwNumberOfProcessors;
+#else
+    cpu->logical_threads = (int)sysconf(_SC_NPROCESSORS_ONLN);
+    if (cpu->logical_threads < 1) cpu->logical_threads = 1;
+#endif
     // Em CPUs dual-core com HyperThreading, 4 threads costumam dar o melhor pico de barramento
     cpu->physical_cores = (cpu->logical_threads > 1) ? (cpu->logical_threads / 2) : 1;
     cpu->recommended_omp_threads = cpu->logical_threads;
@@ -91,16 +110,16 @@ static inline void cpu_print_info(const CPUInfo* cpu) {
 }
 
 static inline void cpu_apply_auto_tune(const CPUInfo* cpu) {
-    // Defina a policy antes da primeira chamada OpenMP, pois o runtime pode
-    // ler OMP_WAIT_POLICY durante sua inicializacao.
+#ifdef _WIN32
     DWORD wait_len = GetEnvironmentVariableA("OMP_WAIT_POLICY", NULL, 0);
     if (!wait_len) SetEnvironmentVariableA("OMP_WAIT_POLICY", "PASSIVE");
-
-    // Respeite OMP_NUM_THREADS quando o usuario ou o chamador o definiu.
-    // omp_get_max_threads() incorpora esse valor sem precisar reinterpretar
-    // variantes validas da sintaxe da OpenMP (por exemplo, listas por nivel).
     DWORD env_len = GetEnvironmentVariableA("OMP_NUM_THREADS", NULL, 0);
     int threads = env_len ? omp_get_max_threads() : cpu->recommended_omp_threads;
+#else
+    if (!getenv("OMP_WAIT_POLICY")) setenv("OMP_WAIT_POLICY", "PASSIVE", 1);
+    char* env_threads = getenv("OMP_NUM_THREADS");
+    int threads = env_threads ? omp_get_max_threads() : cpu->recommended_omp_threads;
+#endif
     if (threads < 1) threads = cpu->recommended_omp_threads;
     omp_set_num_threads(threads);
 }

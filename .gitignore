@@ -37,6 +37,7 @@ data/*.parquet
 
 # Manter arquivos leves essenciais de dados/configuração no git
 !data/tokenizer_qwen.json
+!data/qwen3_0.6b.natq4.tokenizer.json
 !data/pesos_llama.safetensors
 !data/qwen3b/
 !data/qwen3b/config.json

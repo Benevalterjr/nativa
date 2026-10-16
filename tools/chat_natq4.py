@@ -21,7 +21,16 @@ def write_vocab_file(tokenizer, path):
     with open(path, "wb") as f:
         f.write(struct.pack("<I", vocab_size))
         for token_id in range(vocab_size):
-            token = tokenizer.inv_vocab.get(token_id, "").encode("utf-8")
+            piece = tokenizer.inv_vocab.get(token_id, "")
+            if piece.startswith("<0x") and len(piece) == 6 and piece.endswith(">"):
+                try:
+                    token = bytes([int(piece[3:5], 16)])
+                except ValueError:
+                    token = piece.encode("utf-8", errors="replace")
+            elif piece and all(c in tokenizer.byte_decoder for c in piece):
+                token = bytes(tokenizer.byte_decoder[c] for c in piece)
+            else:
+                token = piece.encode("utf-8", errors="replace")
             if len(token) > 65535:
                 raise ValueError(f"Token {token_id} excede o limite de 65535 bytes do runtime.")
             f.write(struct.pack("<H", len(token)))
