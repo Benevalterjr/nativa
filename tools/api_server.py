@@ -35,6 +35,7 @@ if ROOT_DIR not in sys.path:
     sys.path.insert(0, ROOT_DIR)
 
 import nativa
+from tools.nativa_bundle import write_vocab_file
 
 try:
     from fastapi import FastAPI, HTTPException
@@ -68,28 +69,6 @@ def extract_thinking(text: str) -> Tuple[Optional[str], str]:
         answer = parts[1].strip()
         return (reasoning or None), answer
     return None, text.replace(TAG_THINK, "").strip()
-
-
-def write_vocab_file(tokenizer, path: str) -> None:
-    """Exporta o vocabulário para o formato binário lido pelo motor C."""
-    vocab_size = max(tokenizer.inv_vocab, default=-1) + 1
-    with open(path, "wb") as f:
-        f.write(struct.pack("<I", vocab_size))
-        for token_id in range(vocab_size):
-            piece = tokenizer.inv_vocab.get(token_id, "")
-            if piece.startswith("<0x") and len(piece) == 6 and piece.endswith(">"):
-                try:
-                    token = bytes([int(piece[3:5], 16)])
-                except ValueError:
-                    token = piece.encode("utf-8", errors="replace")
-            elif piece and hasattr(tokenizer, "byte_decoder") and all(c in tokenizer.byte_decoder for c in piece):
-                token = bytes(tokenizer.byte_decoder[c] for c in piece)
-            else:
-                token = piece.encode("utf-8", errors="replace")
-            if len(token) > 65535:
-                raise ValueError(f"Token {token_id} excede 65535 bytes.")
-            f.write(struct.pack("<H", len(token)))
-            f.write(token)
 
 
 def _compute_safe_len(buf: str, printed_idx: int) -> int:

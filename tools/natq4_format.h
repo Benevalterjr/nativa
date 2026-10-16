@@ -75,4 +75,21 @@ typedef struct {
 } NativaModelHeader;
 #pragma pack(pop)
 
+#define NATIVA_BUNDLE_MAGIC 0x4E4154495641464CULL // "NATIVAF\0"
+#define NATIVA_BUNDLE_ALIGN 65536                  // 64 KB page/allocation alignment
+
+#pragma pack(push, 1)
+typedef struct {
+    uint64_t magic;         // NATIVA_BUNDLE_MAGIC (8B)
+    uint64_t engine_size;   // Tamanho original do binário executável (8B)
+    uint64_t vocab_offset;  // Offset onde o vocabulário começa (8B)
+    uint64_t vocab_size;    // Tamanho do vocabulário em bytes (8B)
+    uint64_t model_offset;  // Offset onde o .natq4 começa (8B)
+    uint64_t model_size;    // Tamanho do .natq4 em bytes (8B)
+    uint32_t version;       // Versão do formato do bundle (1) (4B)
+    uint32_t flags;         // Flags: 0 = chat interativo, 1 = benchmark (4B)
+    uint8_t  reserved[8];   // Zeros para alinhamento e expansão (8B) -> total = exatamente 64B
+} NativaBundleTrailer;
+#pragma pack(pop)
+
 #endif // NATQ4_FORMAT_H

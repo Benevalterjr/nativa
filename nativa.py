@@ -9076,6 +9076,7 @@ Comandos principais:
   nativa run <arquivo.nat>           Executa o arquivo no interpretador Nativa
   nativa run <arquivo.nat> --native  Compila AOT para C99/Machine Code e executa
   nativa build <arquivo.nat>         Compila AOT gerando executavel nativo (.exe)
+  nativa bundle <modelo.natq4> [-o]  Gera executavel autocontido estilo llamafile
   nativa chat [modelo.natq4]         Inicia chat local Qwen2 em INT4
   nativa quantize <dir_hf> [out]     Converte Qwen2 SafeTensors para .natq4 Q4x4
   nativa test                        Executa a suite completa de 100 testes
@@ -9185,6 +9186,12 @@ def main(argv: Optional[list[str]] = None) -> int:
             print(f"[ERRO] Script de quantização não encontrado: {quant_script}", file=sys.stderr)
             return 1
         return subprocess.call([sys.executable, quant_script] + raw_args[1:])
+    elif subcmd == "bundle":
+        bundle_script = os.path.join(os.path.dirname(__file__), "tools", "nativa_bundle.py")
+        if not os.path.isfile(bundle_script):
+            print(f"[ERRO] Script de empacotamento não encontrado: {bundle_script}", file=sys.stderr)
+            return 1
+        return subprocess.call([sys.executable, bundle_script] + raw_args[1:])
     elif subcmd in ("devices", "--devices", "opencl", "--opencl"):
         return print_detected_devices()
 

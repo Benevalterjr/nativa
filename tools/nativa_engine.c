@@ -64,15 +64,12 @@ typedef struct {
 static VocabEntry* g_vocab = NULL;
 static uint32_t g_vocab_size = 0;
 
-static bool load_vocab(const char* vocab_path) {
-    FILE* f = fopen(vocab_path, "rb");
-    if (!f) return false;
+static bool load_vocab_stream(FILE* f) {
     if (fread(&g_vocab_size, sizeof(uint32_t), 1, f) != 1) {
-        fclose(f);
         return false;
     }
     g_vocab = (VocabEntry*)malloc(g_vocab_size * sizeof(VocabEntry));
-    if (!g_vocab) { fclose(f); return false; }
+    if (!g_vocab) return false;
 
     uint32_t i;
     for (i = 0; i < g_vocab_size; i++) {
@@ -84,13 +81,78 @@ static bool load_vocab(const char* vocab_path) {
         }
         g_vocab[i].len = len;
         g_vocab[i].str = (char*)malloc(len + 1);
-        if (len > 0) {
-            fread(g_vocab[i].str, 1, len, f);
+        if (g_vocab[i].str) {
+            if (len > 0) {
+                if (fread(g_vocab[i].str, 1, len, f) != len) {
+                    // leitura truncada de token
+                }
+            }
+            g_vocab[i].str[len] = '\0';
         }
-        g_vocab[i].str[len] = '\0';
+    }
+    return true;
+}
+
+static bool load_vocab(const char* vocab_path) {
+    FILE* f = fopen(vocab_path, "rb");
+    if (!f) return false;
+    bool ok = load_vocab_stream(f);
+    fclose(f);
+    return ok;
+}
+
+static bool load_vocab_from_offset(const char* path, uint64_t offset) {
+    FILE* f = fopen(path, "rb");
+    if (!f) return false;
+#if defined(_WIN32)
+    if (_fseeki64(f, (__int64)offset, SEEK_SET) != 0) {
+#else
+    if (fseeko(f, (off_t)offset, SEEK_SET) != 0) {
+#endif
+        fclose(f);
+        return false;
+    }
+    bool ok = load_vocab_stream(f);
+    fclose(f);
+    return ok;
+}
+
+static void get_executable_path(char* out_path, size_t max_len, const char* argv0) {
+#ifdef _WIN32
+    DWORD len = GetModuleFileNameA(NULL, out_path, (DWORD)max_len);
+    if (len == 0 || len >= max_len) {
+        strncpy(out_path, argv0 ? argv0 : "", max_len - 1);
+        out_path[max_len - 1] = '\0';
+    }
+#else
+    ssize_t len = readlink("/proc/self/exe", out_path, max_len - 1);
+    if (len > 0) {
+        out_path[len] = '\0';
+    } else {
+        strncpy(out_path, argv0 ? argv0 : "", max_len - 1);
+        out_path[max_len - 1] = '\0';
+    }
+#endif
+}
+
+static bool detect_bundle(const char* exe_path, NativaBundleTrailer* trailer) {
+    if (!exe_path || !exe_path[0]) return false;
+    FILE* f = fopen(exe_path, "rb");
+    if (!f) return false;
+#if defined(_WIN32)
+    if (_fseeki64(f, -((__int64)sizeof(NativaBundleTrailer)), SEEK_END) != 0) {
+#else
+    if (fseeko(f, -((off_t)sizeof(NativaBundleTrailer)), SEEK_END) != 0) {
+#endif
+        fclose(f);
+        return false;
+    }
+    if (fread(trailer, sizeof(NativaBundleTrailer), 1, f) != 1) {
+        fclose(f);
+        return false;
     }
     fclose(f);
-    return true;
+    return (trailer->magic == NATIVA_BUNDLE_MAGIC && trailer->version == 1);
 }
 
 static inline void print_token(int token_id) {
@@ -708,29 +770,63 @@ int main(int argc, char** argv) {
 #endif
     timer_init();
 
-    int arg_idx = 1;
-    if (argc > 1 && strcmp(argv[1], "--") == 0) {
-        arg_idx = 2;
-    }
-    if (argc <= arg_idx) {
-        printf("Uso: nativa_engine.exe [--] <modelo.natq4> [--chat] [--bench <N>] [--vocab <vocab.bin>]\n");
-        return 1;
-    }
+    char self_exe[1024];
+    get_executable_path(self_exe, sizeof(self_exe), argv[0]);
 
-    const char* model_path = argv[arg_idx];
+    NativaBundleTrailer bundle_trailer;
+    bool is_bundle = detect_bundle(self_exe, &bundle_trailer);
+
+    const char* model_path = NULL;
+    uint64_t model_offset = 0;
+    uint64_t model_file_size = 0;
     const char* vocab_path = "data/qwen_vocab.bin";
     bool chat_mode = false;
     bool bench_mode = false;
     int bench_tokens = 25;
 
-    for (int a = arg_idx + 1; a < argc; a++) {
-        if (strcmp(argv[a], "--chat") == 0 || strcmp(argv[a], "--interactive") == 0) {
-            chat_mode = true;
-        } else if (strcmp(argv[a], "--bench") == 0 && a + 1 < argc) {
-            bench_mode = true;
-            bench_tokens = atoi(argv[++a]);
-        } else if (strcmp(argv[a], "--vocab") == 0 && a + 1 < argc) {
-            vocab_path = argv[++a];
+    if (is_bundle) {
+        printf("[*] [NATIVA BUNDLE] Executavel autocontido detectado!\n");
+        model_path = self_exe;
+        model_offset = bundle_trailer.model_offset;
+        model_file_size = bundle_trailer.model_size;
+        chat_mode = (bundle_trailer.flags == 0);
+
+        for (int a = 1; a < argc; a++) {
+            if (strcmp(argv[a], "--chat") == 0 || strcmp(argv[a], "--interactive") == 0) {
+                chat_mode = true;
+                bench_mode = false;
+            } else if (strcmp(argv[a], "--bench") == 0) {
+                bench_mode = true;
+                chat_mode = false;
+                if (a + 1 < argc && argv[a + 1][0] != '-') {
+                    bench_tokens = atoi(argv[++a]);
+                }
+            } else if (strcmp(argv[a], "--vocab") == 0 && a + 1 < argc) {
+                vocab_path = argv[++a];
+            }
+        }
+    } else {
+        int arg_idx = 1;
+        if (argc > 1 && strcmp(argv[1], "--") == 0) {
+            arg_idx = 2;
+        }
+        if (argc <= arg_idx) {
+            printf("Uso: nativa_engine [--] <modelo.natq4> [--chat] [--bench <N>] [--vocab <vocab.bin>]\n");
+            return 1;
+        }
+
+        model_path = argv[arg_idx];
+        for (int a = arg_idx + 1; a < argc; a++) {
+            if (strcmp(argv[a], "--chat") == 0 || strcmp(argv[a], "--interactive") == 0) {
+                chat_mode = true;
+            } else if (strcmp(argv[a], "--bench") == 0) {
+                bench_mode = true;
+                if (a + 1 < argc && argv[a + 1][0] != '-') {
+                    bench_tokens = atoi(argv[++a]);
+                }
+            } else if (strcmp(argv[a], "--vocab") == 0 && a + 1 < argc) {
+                vocab_path = argv[++a];
+            }
         }
     }
 
@@ -745,28 +841,35 @@ int main(int argc, char** argv) {
     }
 
     // 2. Carregar vocabulario
-    if (!load_vocab(vocab_path)) {
-        fprintf(stderr, "[AVISO] Vocabulario %s nao carregado (apenas token_ids serao usados)\n", vocab_path);
+    if (is_bundle) {
+        if (!load_vocab_from_offset(self_exe, bundle_trailer.vocab_offset)) {
+            fprintf(stderr, "[AVISO] Vocabulario embutido nao carregado (apenas token_ids serao usados)\n");
+        }
+    } else {
+        if (!load_vocab(vocab_path)) {
+            fprintf(stderr, "[AVISO] Vocabulario %s nao carregado (apenas token_ids serao usados)\n", vocab_path);
+        }
     }
 
     // 3. Mapear arquivo .natq4
-    uint64_t model_file_size = 0;
     const uint8_t* model_bytes = NULL;
 
 #ifdef _WIN32
-    HANDLE hFile = CreateFileA(model_path, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+    HANDLE hFile = CreateFileA(model_path, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
     if (hFile == INVALID_HANDLE_VALUE) {
         fprintf(stderr, "[ERRO] Nao foi possivel abrir %s (Codigo: %lu)\n", model_path, GetLastError());
         return 1;
     }
 
-    LARGE_INTEGER model_size;
-    if (!GetFileSizeEx(hFile, &model_size) || model_size.QuadPart < NATQ4_HEADER_SIZE) {
-        fprintf(stderr, "[ERRO] Arquivo NATQ4 menor que o cabeçalho obrigatório de %u bytes.\n", NATQ4_HEADER_SIZE);
-        CloseHandle(hFile);
-        return 1;
+    if (!is_bundle) {
+        LARGE_INTEGER model_size;
+        if (!GetFileSizeEx(hFile, &model_size) || model_size.QuadPart < NATQ4_HEADER_SIZE) {
+            fprintf(stderr, "[ERRO] Arquivo NATQ4 menor que o cabeçalho obrigatório de %u bytes.\n", NATQ4_HEADER_SIZE);
+            CloseHandle(hFile);
+            return 1;
+        }
+        model_file_size = (uint64_t)model_size.QuadPart;
     }
-    model_file_size = (uint64_t)model_size.QuadPart;
 
     HANDLE hMapping = CreateFileMappingA(hFile, NULL, PAGE_READONLY, 0, 0, NULL);
     if (!hMapping) {
@@ -775,7 +878,9 @@ int main(int argc, char** argv) {
         return 1;
     }
 
-    model_bytes = (const uint8_t*)MapViewOfFile(hMapping, FILE_MAP_READ, 0, 0, 0);
+    DWORD off_high = (DWORD)(model_offset >> 32);
+    DWORD off_low  = (DWORD)(model_offset & 0xFFFFFFFF);
+    model_bytes = (const uint8_t*)MapViewOfFile(hMapping, FILE_MAP_READ, off_high, off_low, (SIZE_T)model_file_size);
     if (!model_bytes) {
         fprintf(stderr, "[ERRO] Falha ao mapear arquivo na memoria\n");
         CloseHandle(hMapping);
@@ -795,15 +900,17 @@ int main(int argc, char** argv) {
         return 1;
     }
 
-    struct stat st;
-    if (fstat(fd, &st) != 0 || (uint64_t)st.st_size < NATQ4_HEADER_SIZE) {
-        fprintf(stderr, "[ERRO] Arquivo NATQ4 menor que o cabeçalho obrigatório de %u bytes.\n", NATQ4_HEADER_SIZE);
-        close(fd);
-        return 1;
+    if (!is_bundle) {
+        struct stat st;
+        if (fstat(fd, &st) != 0 || (uint64_t)st.st_size < NATQ4_HEADER_SIZE) {
+            fprintf(stderr, "[ERRO] Arquivo NATQ4 menor que o cabeçalho obrigatório de %u bytes.\n", NATQ4_HEADER_SIZE);
+            close(fd);
+            return 1;
+        }
+        model_file_size = (uint64_t)st.st_size;
     }
-    model_file_size = (uint64_t)st.st_size;
 
-    model_bytes = (const uint8_t*)mmap(NULL, (size_t)model_file_size, PROT_READ, MAP_SHARED, fd, 0);
+    model_bytes = (const uint8_t*)mmap(NULL, (size_t)model_file_size, PROT_READ, MAP_SHARED, fd, (off_t)model_offset);
     if (model_bytes == MAP_FAILED || !model_bytes) {
         fprintf(stderr, "[ERRO] Falha ao mapear arquivo na memoria\n");
         close(fd);
