@@ -8,14 +8,20 @@ import asyncio
 from contextlib import asynccontextmanager
 import json
 import os
-import re
 import struct
 import subprocess
 import sys
 import tempfile
 import time
-from typing import Any, AsyncGenerator, Dict, List, Optional
+from typing import Any, AsyncGenerator, Dict, List, Optional, Tuple
 import uuid
+
+# Constantes para evitar duplicação de literais (SonarQube compliance)
+TAG_THINK = "<think>"
+TAG_THINK_END = "</think>"
+MARKER_TURN_DONE = "[TURN_DONE"
+MSG_ENGINE_NOT_READY = "Motor não inicializado."
+STATUS_503_RESPONSES = {503: {"description": MSG_ENGINE_NOT_READY}}
 
 # Adiciona a raiz do projeto ao sys.path para importar nativa
 ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -25,9 +31,9 @@ if ROOT_DIR not in sys.path:
 import nativa
 
 try:
-    from fastapi import FastAPI, HTTPException, Request
+    from fastapi import FastAPI, HTTPException
     from fastapi.middleware.cors import CORSMiddleware
-    from fastapi.responses import JSONResponse, StreamingResponse
+    from fastapi.responses import StreamingResponse
     from pydantic import BaseModel, Field
 except ImportError:
     print("[ERRO] FastAPI e Uvicorn são necessários: pip install fastapi uvicorn pydantic")
@@ -39,6 +45,16 @@ DEFAULT_TOKENIZER_PATH = os.environ.get("TOKENIZER_PATH", os.path.join(ROOT_DIR,
 IS_WINDOWS = sys.platform.startswith("win")
 ENGINE_EXEC = "nativa_engine.exe" if IS_WINDOWS else "nativa_engine"
 DEFAULT_ENGINE_PATH = os.environ.get("ENGINE_PATH", os.path.join(ROOT_DIR, "tools", ENGINE_EXEC))
+
+
+def extract_thinking(text: str) -> Tuple[Optional[str], str]:
+    """Extrai conteúdo delimitado por <think>...</think> de forma padronizada."""
+    if TAG_THINK in text and TAG_THINK_END in text:
+        parts = text.split(TAG_THINK_END, 1)
+        reasoning = parts[0].replace(TAG_THINK, "").strip()
+        answer = parts[1].strip()
+        return reasoning, answer
+    return None, text
 
 
 def write_vocab_file(tokenizer, path: str) -> None:
@@ -61,6 +77,16 @@ def write_vocab_file(tokenizer, path: str) -> None:
                 raise ValueError(f"Token {token_id} excede 65535 bytes.")
             f.write(struct.pack("<H", len(token)))
             f.write(token)
+
+
+def _compute_safe_len(buf: str, printed_idx: int) -> int:
+    """Calcula tamanho seguro para corte sem quebrar marcador de turn."""
+    safe_len = len(buf)
+    if "[" in buf[printed_idx:]:
+        last_bracket = buf.rfind("[")
+        if last_bracket >= printed_idx and len(buf) - last_bracket < 12:
+            safe_len = last_bracket
+    return safe_len
 
 
 class EngineRunner:
@@ -133,7 +159,7 @@ class EngineRunner:
         print("[*] Nativa Engine finalizado.")
 
     async def generate(self, prompt: str, max_tokens: int = 512) -> AsyncGenerator[str, None]:
-        """Gera tokens em streaming a partir do prompt."""
+        """Gera tokens em streaming a partir do prompt com baixa complexidade cognitiva."""
         async with self.lock:
             tokens = self.tokenizer.encode(prompt).tolist()
             if not tokens:
@@ -147,31 +173,27 @@ class EngineRunner:
             printed_idx = 0
 
             while True:
-                # Permite que o event loop do asyncio continue respondendo
                 ch = await asyncio.to_thread(self.proc.stdout.read, 1)
                 if not ch:
                     break
                 buf += ch
 
-                if "[TURN_DONE" in buf and "]" in buf[buf.find("[TURN_DONE"): ]:
+                if MARKER_TURN_DONE in buf and "]" in buf[buf.find(MARKER_TURN_DONE):]:
                     break
 
-                td_pos = buf.find("[TURN_DONE", printed_idx)
+                td_pos = buf.find(MARKER_TURN_DONE, printed_idx)
                 if td_pos != -1:
                     chunk = buf[printed_idx:td_pos]
                     if chunk:
                         yield chunk
-                        printed_idx = td_pos
-                else:
-                    safe_len = len(buf)
-                    if "[" in buf[printed_idx:]:
-                        last_bracket = buf.rfind("[")
-                        if last_bracket >= printed_idx and len(buf) - last_bracket < 12:
-                            safe_len = last_bracket
-                    if safe_len > printed_idx:
-                        chunk = buf[printed_idx:safe_len]
-                        yield chunk
-                        printed_idx = safe_len
+                    printed_idx = td_pos
+                    continue
+
+                safe_len = _compute_safe_len(buf, printed_idx)
+                if safe_len > printed_idx:
+                    chunk = buf[printed_idx:safe_len]
+                    yield chunk
+                    printed_idx = safe_len
 
 
 runner: Optional[EngineRunner] = None
@@ -204,6 +226,7 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
 
 # ----------------------------------------------------------------------------
 # DTOs (Modelos Pydantic)
@@ -249,23 +272,20 @@ def root():
     }
 
 
-@app.get("/health")
+@app.get("/health", responses=STATUS_503_RESPONSES)
 def health():
     if runner and runner.proc and runner.proc.poll() is None:
         return {"status": "healthy", "engine": "running", "model": runner.model_name}
-    raise HTTPException(status_code=503, detail="Motor C nativo não está pronto.")
+    raise HTTPException(status_code=503, detail=MSG_ENGINE_NOT_READY)
 
 
-@app.post("/v1/chat/completions")
+@app.post("/v1/chat/completions", responses=STATUS_503_RESPONSES)
 async def chat_completions(req: ChatCompletionRequest):
     """Endpoint compatível com OpenAI Chat Completions API."""
     if not runner:
-        raise HTTPException(status_code=503, detail="Motor não inicializado.")
+        raise HTTPException(status_code=503, detail=MSG_ENGINE_NOT_READY)
 
-    # Constrói o prompt de acordo com o template Qwen3
-    prompt_parts = []
-    for msg in req.messages:
-        prompt_parts.append(f"<|im_start|>{msg.role}\n{msg.content}<|im_end|>\n")
+    prompt_parts = [f"<|im_start|>{msg.role}\n{msg.content}<|im_end|>\n" for msg in req.messages]
     prompt_parts.append("<|im_start|>assistant\n")
     full_prompt = "".join(prompt_parts)
 
@@ -280,16 +300,9 @@ async def chat_completions(req: ChatCompletionRequest):
                     "object": "chat.completion.chunk",
                     "created": created_ts,
                     "model": req.model,
-                    "choices": [
-                        {
-                            "index": 0,
-                            "delta": {"content": chunk},
-                            "finish_reason": None,
-                        }
-                    ],
+                    "choices": [{"index": 0, "delta": {"content": chunk}, "finish_reason": None}],
                 }
                 yield f"data: {json.dumps(data)}\n\n"
-            # Finalização
             final_data = {
                 "id": completion_id,
                 "object": "chat.completion.chunk",
@@ -302,20 +315,15 @@ async def chat_completions(req: ChatCompletionRequest):
 
         return StreamingResponse(event_generator(), media_type="text/event-stream")
 
-    # Modo não-streaming
     accumulated = []
     async for chunk in runner.generate(full_prompt, max_tokens=req.max_tokens or 512):
         accumulated.append(chunk)
 
     full_response = "".join(accumulated).strip()
+    reasoning, cleaned_content = extract_thinking(full_response)
 
-    # Separa raciocínio <think> se existir
-    reasoning = None
-    cleaned_content = full_response
-    if "<think>" in full_response and "</think>" in full_response:
-        parts = full_response.split("</think>", 1)
-        reasoning = parts[0].replace("<think>", "").strip()
-        cleaned_content = parts[1].strip()
+    prompt_tokens_len = len(runner.tokenizer.encode(full_prompt).tolist())
+    completion_tokens_len = len(runner.tokenizer.encode(full_response).tolist())
 
     return {
         "id": completion_id,
@@ -334,18 +342,18 @@ async def chat_completions(req: ChatCompletionRequest):
             }
         ],
         "usage": {
-            "prompt_tokens": len(runner.tokenizer.encode(full_prompt).tolist()),
-            "completion_tokens": len(runner.tokenizer.encode(full_response).tolist()),
-            "total_tokens": len(runner.tokenizer.encode(full_prompt).tolist()) + len(runner.tokenizer.encode(full_response).tolist()),
+            "prompt_tokens": prompt_tokens_len,
+            "completion_tokens": completion_tokens_len,
+            "total_tokens": prompt_tokens_len + completion_tokens_len,
         },
     }
 
 
-@app.post("/v1/rag/answer")
+@app.post("/v1/rag/answer", responses=STATUS_503_RESPONSES)
 async def rag_answer(req: RagRequest):
     """Endpoint otimizado para RAG com groundedness estrito."""
     if not runner:
-        raise HTTPException(status_code=503, detail="Motor não inicializado.")
+        raise HTTPException(status_code=503, detail=MSG_ENGINE_NOT_READY)
 
     system_prompt = (
         "Você é um assistente estritamente baseado em fatos. "
@@ -355,7 +363,6 @@ async def rag_answer(req: RagRequest):
     )
 
     user_prompt = f"CONTEXTO:\n\"\"\"\n{req.context}\n\"\"\"\n\nPERGUNTA:\n{req.question}"
-
     prompt = (
         f"<|im_start|>system\n{system_prompt}<|im_end|>\n"
         f"<|im_start|>user\n{user_prompt}<|im_end|>\n"
@@ -367,13 +374,7 @@ async def rag_answer(req: RagRequest):
         accumulated.append(chunk)
 
     raw_text = "".join(accumulated).strip()
-    reasoning = None
-    answer = raw_text
-
-    if "<think>" in raw_text and "</think>" in raw_text:
-        parts = raw_text.split("</think>", 1)
-        reasoning = parts[0].replace("<think>", "").strip()
-        answer = parts[1].strip()
+    reasoning, answer = extract_thinking(raw_text)
 
     return {
         "answer": answer,
@@ -382,11 +383,11 @@ async def rag_answer(req: RagRequest):
     }
 
 
-@app.post("/v1/decide")
+@app.post("/v1/decide", responses=STATUS_503_RESPONSES)
 async def branch_decide(req: DecisionRequest):
     """Endpoint direto para tomada de decisão probabilística do Branch.dev."""
     if not runner:
-        raise HTTPException(status_code=503, detail="Motor não inicializado.")
+        raise HTTPException(status_code=503, detail=MSG_ENGINE_NOT_READY)
 
     choices_text = "\n".join([f"- '{k}': {desc}" for k, desc in req.choices.items()])
     state_str = json.dumps(req.state, ensure_ascii=False) if isinstance(req.state, (dict, list)) else str(req.state)
@@ -415,23 +416,16 @@ async def branch_decide(req: DecisionRequest):
         accumulated.append(chunk)
 
     raw_text = "".join(accumulated).strip()
-    reasoning = None
-    winner_candidate = raw_text
+    reasoning, winner_candidate = extract_thinking(raw_text)
 
-    if "<think>" in raw_text and "</think>" in raw_text:
-        parts = raw_text.split("</think>", 1)
-        reasoning = parts[0].replace("<think>", "").strip()
-        winner_candidate = parts[1].strip()
-
-    # Identifica qual escolha coincide
     selected_winner = None
-    for k in req.choices.keys():
+    for k in req.choices:
         if k.lower() in winner_candidate.lower():
             selected_winner = k
             break
 
     if not selected_winner:
-        selected_winner = list(req.choices.keys())[0]
+        selected_winner = next(iter(req.choices.keys()))
 
     return {
         "winner": selected_winner,
@@ -443,5 +437,7 @@ async def branch_decide(req: DecisionRequest):
 
 if __name__ == "__main__":
     import uvicorn
+    # Por padrão vincula a 127.0.0.1 em dev local; HOST=0.0.0.0 é injetado pelo Docker/Render
+    host = os.environ.get("HOST", "127.0.0.1")
     port = int(os.environ.get("PORT", 8000))
-    uvicorn.run("tools.api_server:app", host="0.0.0.0", port=port, reload=False)
+    uvicorn.run("tools.api_server:app", host=host, port=port, reload=False)

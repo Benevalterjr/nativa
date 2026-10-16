@@ -1,0 +1,12 @@
+.git
+.venv
+venv
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache
+scratch
+data/*.safetensors
+tools/*.exe
+tools/*.obj

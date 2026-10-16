@@ -223,7 +223,6 @@ static bool validate_model_header(const NativaModelHeader* hdr, uint64_t file_si
         hdr->vocab_size % 4 != 0 || hdr->num_heads == 0 || hdr->num_heads > 256 ||
         hdr->num_kv_heads == 0 || hdr->num_kv_heads > hdr->num_heads ||
         hdr->num_heads % hdr->num_kv_heads != 0 || hdr->head_dim == 0 ||
-        hdr->num_heads % hdr->num_kv_heads != 0 || hdr->head_dim == 0 ||
         (hdr->arch != NAT_ARCH_QWEN3 && hdr->head_dim != hdr->dim / hdr->num_heads) || hdr->head_dim % 16 != 0 ||
         ((uint64_t)hdr->num_kv_heads * hdr->head_dim) % 4 != 0 ||
         ((uint64_t)hdr->num_heads * hdr->head_dim) % 32 != 0 ||

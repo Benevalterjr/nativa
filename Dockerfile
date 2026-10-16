@@ -4,6 +4,7 @@
 FROM python:3.11-slim
 
 ENV PYTHONUNBUFFERED=1
+ENV HOST=0.0.0.0
 ENV PORT=8000
 ENV OMP_NUM_THREADS=2
 ENV OMP_WAIT_POLICY=PASSIVE
@@ -11,14 +12,15 @@ ENV OMP_WAIT_POLICY=PASSIVE
 # Dependências do sistema para compilar C99 com OpenMP
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
-    libgomp1 \
     curl \
+    libgomp1 \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
-# Dependências Python mínimas para o servidor FastAPI
-RUN pip install --no-cache-dir fastapi uvicorn pydantic numpy
+# Dependências Python
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
 
 # Copia o código fonte do repositório
 COPY . .
@@ -31,10 +33,12 @@ RUN if [ ! -f "data/qwen3_0.6b.natq4" ]; then \
     fi
 
 # Compila o motor de inferência C99 nativo com OpenMP para Linux x86_64
-RUN gcc -O3 -fopenmp -msse4.1 -mavx tools/nativa_engine.c -o tools/nativa_engine -lm
+RUN gcc -O3 -fopenmp -msse4.1 -mavx tools/nativa_engine.c -o tools/nativa_engine -lm && \
+    chmod +x tools/nativa_engine
 
-# Permissão de execução no binário compilado
-RUN chmod +x tools/nativa_engine
+# Usuário não-root para conformidade de segurança
+RUN useradd -m -u 1000 appuser && chown -R appuser:appuser /app
+USER appuser
 
 EXPOSE 8000
 

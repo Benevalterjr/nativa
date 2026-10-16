@@ -4,6 +4,7 @@
 #include <stdio.h>
 #include <stdbool.h>
 #include <string.h>
+#include <omp.h>
 
 #ifdef _WIN32
 #include <intrin.h>
@@ -25,8 +26,6 @@ static inline void nat_cpuidex(int cpuInfo[4], int infoType, int count) {
     __get_cpuid_count((unsigned int)infoType, (unsigned int)count, (unsigned int*)&cpuInfo[0], (unsigned int*)&cpuInfo[1], (unsigned int*)&cpuInfo[2], (unsigned int*)&cpuInfo[3]);
 }
 #endif
-
-#include <omp.h>
 
 typedef struct {
     char vendor[13];
