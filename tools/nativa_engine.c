@@ -861,6 +861,10 @@ int main(int argc, char** argv) {
 
         while (fgets(line_buf, 131072, stdin)) {
             if (strncmp(line_buf, "QUIT", 4) == 0) break;
+            if (strncmp(line_buf, "RESET", 5) == 0 || strncmp(line_buf, "CLEAR", 5) == 0) {
+                cur_seq_pos = 0;
+                continue;
+            }
             if (strncmp(line_buf, "INPUT", 5) != 0) continue;
 
             char* ptr = line_buf + 5;

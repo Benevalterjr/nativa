@@ -229,7 +229,7 @@ class EngineRunner:
             if not tokens:
                 return
 
-            cmd = f"INPUT {len(tokens)} {max_tokens} " + " ".join(map(str, tokens)) + "\n"
+            cmd = f"RESET\nINPUT {len(tokens)} {max_tokens} " + " ".join(map(str, tokens)) + "\n"
             await asyncio.to_thread(self._write_stdin, cmd)
 
             buf = ""
