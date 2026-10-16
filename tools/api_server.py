@@ -478,6 +478,75 @@ def health():
     raise HTTPException(status_code=503, detail=MSG_ENGINE_NOT_READY)
 
 
+async def _stream_chat_chunks(
+    runner_inst: EngineRunner,
+    prompt: str,
+    max_tokens: int,
+    completion_id: str,
+    created_ts: int,
+    model: str,
+    enable_thinking: bool,
+):
+    is_thinking = True
+    buf = ""
+    async for chunk in runner_inst.generate(prompt, max_tokens=max_tokens):
+        if is_thinking:
+            buf += chunk
+            if TAG_THINK_END in buf:
+                parts = buf.split(TAG_THINK_END, 1)
+                is_thinking = False
+                thought = parts[0].replace(TAG_THINK, "").strip()
+                ans = parts[1].lstrip("\n")
+                if enable_thinking and thought:
+                    data = {
+                        "id": completion_id,
+                        "object": "chat.completion.chunk",
+                        "created": created_ts,
+                        "model": model,
+                        "choices": [{"index": 0, "delta": {"reasoning_content": thought}, "finish_reason": None}],
+                    }
+                    yield f"data: {json.dumps(data, ensure_ascii=False)}\n\n"
+                if ans:
+                    data = {
+                        "id": completion_id,
+                        "object": "chat.completion.chunk",
+                        "created": created_ts,
+                        "model": model,
+                        "choices": [{"index": 0, "delta": {"content": ans}, "finish_reason": None}],
+                    }
+                    yield f"data: {json.dumps(data, ensure_ascii=False)}\n\n"
+            elif enable_thinking:
+                cleaned = chunk.replace(TAG_THINK, "")
+                if cleaned:
+                    data = {
+                        "id": completion_id,
+                        "object": "chat.completion.chunk",
+                        "created": created_ts,
+                        "model": model,
+                        "choices": [{"index": 0, "delta": {"reasoning_content": cleaned}, "finish_reason": None}],
+                    }
+                    yield f"data: {json.dumps(data, ensure_ascii=False)}\n\n"
+        else:
+            data = {
+                "id": completion_id,
+                "object": "chat.completion.chunk",
+                "created": created_ts,
+                "model": model,
+                "choices": [{"index": 0, "delta": {"content": chunk}, "finish_reason": None}],
+            }
+            yield f"data: {json.dumps(data, ensure_ascii=False)}\n\n"
+
+    final_data = {
+        "id": completion_id,
+        "object": "chat.completion.chunk",
+        "created": created_ts,
+        "model": model,
+        "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
+    }
+    yield f"data: {json.dumps(final_data, ensure_ascii=False)}\n\n"
+    yield "data: [DONE]\n\n"
+
+
 @app.post("/v1/chat/completions", responses=STATUS_503_RESPONSES)
 async def chat_completions(req: ChatCompletionRequest):
     """Endpoint compatível com OpenAI Chat Completions API."""
@@ -488,37 +557,30 @@ async def chat_completions(req: ChatCompletionRequest):
         f"<|im_start|>{msg.role}\n{sanitize_chatml(msg.content)}<|im_end|>\n"
         for msg in req.messages
     ]
-    prompt_parts.append(PREFIX_ASSISTANT_THINK if req.enable_thinking else PREFIX_ASSISTANT_NO_THINK)
+    prompt_parts.append(PREFIX_ASSISTANT_THINK)
     full_prompt = "".join(prompt_parts)
 
     created_ts = int(time.time())
     completion_id = f"chatcmpl-{uuid.uuid4().hex[:12]}"
+    user_model = req.model or DEFAULT_MODEL_NAME
+    engine_tokens = (req.max_tokens or 256) + 150
 
     if req.stream:
-        async def event_generator():
-            async for chunk in runner.generate(full_prompt, max_tokens=req.max_tokens or 512):
-                data = {
-                    "id": completion_id,
-                    "object": "chat.completion.chunk",
-                    "created": created_ts,
-                    "model": req.model,
-                    "choices": [{"index": 0, "delta": {"content": chunk}, "finish_reason": None}],
-                }
-                yield f"data: {json.dumps(data, ensure_ascii=False)}\n\n"
-            final_data = {
-                "id": completion_id,
-                "object": "chat.completion.chunk",
-                "created": created_ts,
-                "model": req.model,
-                "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
-            }
-            yield f"data: {json.dumps(final_data, ensure_ascii=False)}\n\n"
-            yield "data: [DONE]\n\n"
-
-        return StreamingResponse(event_generator(), media_type="text/event-stream")
+        return StreamingResponse(
+            _stream_chat_chunks(
+                runner,
+                full_prompt,
+                engine_tokens,
+                completion_id,
+                created_ts,
+                user_model,
+                bool(req.enable_thinking),
+            ),
+            media_type="text/event-stream",
+        )
 
     accumulated = []
-    async for chunk in runner.generate(full_prompt, max_tokens=req.max_tokens or 512):
+    async for chunk in runner.generate(full_prompt, max_tokens=engine_tokens):
         accumulated.append(chunk)
 
     full_response = "".join(accumulated).strip()
@@ -531,14 +593,14 @@ async def chat_completions(req: ChatCompletionRequest):
         "id": completion_id,
         "object": "chat.completion",
         "created": created_ts,
-        "model": req.model,
+        "model": user_model,
         "choices": [
             {
                 "index": 0,
                 "message": {
                     "role": "assistant",
                     "content": cleaned_content,
-                    **({"reasoning_content": reasoning} if reasoning else {}),
+                    **({"reasoning_content": reasoning} if (req.enable_thinking and reasoning) else {}),
                 },
                 "finish_reason": "stop",
             }
@@ -553,29 +615,26 @@ async def chat_completions(req: ChatCompletionRequest):
 
 @app.post("/v1/rag/answer", responses=STATUS_503_RESPONSES)
 async def rag_answer(req: RagRequest):
-    """Endpoint otimizado para RAG com groundedness estrito."""
+    """Endpoint otimizado para RAG com resposta direta e fundamentada."""
     if not runner:
         raise HTTPException(status_code=503, detail=MSG_ENGINE_NOT_READY)
 
     system_prompt = (
-        "Você é um assistente estritamente baseado em fatos. "
-        "Responda à pergunta do usuário usando EXCLUSIVAMENTE o contexto abaixo. "
-        "Se a informação não estiver descrita no contexto, diga apenas: "
-        "'Essa informação não consta nos documentos fornecidos.'"
+        "Com base no contexto fornecido, responda à pergunta do usuário de forma direta e precisa em português."
     )
 
     safe_context = sanitize_chatml(req.context)
     safe_question = sanitize_chatml(req.question)
-    user_prompt = f'CONTEXTO:\n"""\n{safe_context}\n"""\n\nPERGUNTA:\n{safe_question}'
-    assistant_prefix = PREFIX_ASSISTANT_THINK if req.enable_thinking else PREFIX_ASSISTANT_NO_THINK
+    user_prompt = f"Contexto:\n{safe_context}\n\nPergunta:\n{safe_question}"
     prompt = (
         f"<|im_start|>system\n{system_prompt}<|im_end|>\n"
         f"<|im_start|>user\n{user_prompt}<|im_end|>\n"
-        f"{assistant_prefix}"
+        f"{PREFIX_ASSISTANT_THINK}"
     )
 
+    engine_tokens = (req.max_tokens or 256) + 150
     accumulated = []
-    async for chunk in runner.generate(prompt, max_tokens=req.max_tokens or 512):
+    async for chunk in runner.generate(prompt, max_tokens=engine_tokens):
         accumulated.append(chunk)
 
     raw_text = "".join(accumulated).strip()
@@ -583,7 +642,7 @@ async def rag_answer(req: RagRequest):
 
     return {
         "answer": answer,
-        "reasoning": reasoning,
+        "reasoning": reasoning if req.enable_thinking else None,
         "model": runner.model_name,
     }
 
@@ -603,26 +662,26 @@ async def branch_decide(req: DecisionRequest):
 
     system_prompt = (
         "Você é o árbitro de decisões lógicas do Branch.dev (Sistema 2). "
-        "Analise o estado fornecido e a tarefa solicitada. "
-        "Termine indicando APENAS o nome exato da escolha vencedora."
+        "Analise o estado e escolha a opção correta. "
+        "Termine indicando o nome exato da escolha vencedora."
     )
 
     user_prompt = (
-        f"ESTADO DO SISTEMA:\n{sanitize_chatml(state_str)}\n\n"
-        f"ESCOLHAS POSSÍVEIS:\n{sanitize_chatml(choices_text)}\n\n"
-        f"TAREFA:\n{sanitize_chatml(req.task)}\n\n"
-        f"Decida qual das opções acima é a mais correta:"
+        f"Estado:\n{sanitize_chatml(state_str)}\n\n"
+        f"Escolhas:\n{sanitize_chatml(choices_text)}\n\n"
+        f"Tarefa:\n{sanitize_chatml(req.task)}\n\n"
+        f"Qual escolha executar?"
     )
 
-    assistant_prefix = PREFIX_ASSISTANT_THINK if req.enable_thinking else PREFIX_ASSISTANT_NO_THINK
     prompt = (
         f"<|im_start|>system\n{system_prompt}<|im_end|>\n"
         f"<|im_start|>user\n{user_prompt}<|im_end|>\n"
-        f"{assistant_prefix}"
+        f"{PREFIX_ASSISTANT_THINK}"
     )
 
+    engine_tokens = (req.max_tokens or 256) + 150
     accumulated = []
-    async for chunk in runner.generate(prompt, max_tokens=256):
+    async for chunk in runner.generate(prompt, max_tokens=engine_tokens):
         accumulated.append(chunk)
 
     raw_text = "".join(accumulated).strip()
@@ -631,7 +690,7 @@ async def branch_decide(req: DecisionRequest):
 
     return {
         "winner": selected_winner,
-        "reasoning": reasoning,
+        "reasoning": reasoning if req.enable_thinking else None,
         "raw_response": winner_candidate,
         "system": "system_two_nativa",
     }
