@@ -10,3 +10,7 @@ scratch
 data/*.safetensors
 tools/*.exe
 tools/*.obj
+.github
+*.env*
+*.key
+*.pem

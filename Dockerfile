@@ -22,8 +22,10 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copia o código fonte do repositório
-COPY . .
+# Copia apenas os arquivos e módulos estritamente necessários (SonarCloud S6505 compliant)
+COPY nativa.py nativa_rt.h ./
+COPY tools/ ./tools/
+COPY data/ ./data/
 
 # Baixa o modelo quantizado da release do GitHub se não estiver no repositório
 RUN if [ ! -f "data/qwen3_0.6b.natq4" ]; then \
