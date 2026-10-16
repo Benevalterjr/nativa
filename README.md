@@ -45,6 +45,10 @@ It combines a clean, Python-inspired syntax with a dual execution model:
 
 ## Quick Start
 
+New to the language? Read the [English beginner guide](GUIA_INICIANTE_EN.md)
+or the [Portuguese beginner guide](GUIA_INICIANTE.md) for installation, syntax,
+interpreter examples, and native builds.
+
 ```bash
 # Clone
 git clone https://github.com/Benevalterjr/nativa.git
