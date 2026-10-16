@@ -6,7 +6,7 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include <math.h>
-#include <windows.h>
+#include <Windows.h>
 #include <omp.h>
 
 #include "qwen_offsets_3b_raw.h"
@@ -89,9 +89,8 @@ static bool quantize_matrix_q4x4(const uint8_t* in_ptr, int rows, int cols, FILE
 
     const uint16_t* in_bf16 = (const uint16_t*)in_ptr;
 
-    int g;
     #pragma omp parallel for schedule(static)
-    for (g = 0; g < num_groups; g++) {
+    for (int g = 0; g < num_groups; g++) {
         for (int b = 0; b < nb; b++) {
             BlockQ4x4* target = out_buf + (size_t)g * nb + b;
             for (int r = 0; r < 4; r++) {
@@ -168,6 +167,26 @@ static void unmap_shard(MappedShard* shard) {
     }
 }
 
+static bool quantize_layer(const RawLayerLocs* raw_l, const Qwen3bLayerOffsets* q4_l, const uint8_t* const shards[2], FILE* out_file) {
+    if (!copy_raw_bf16(shards[raw_l->norm1.shard] + raw_l->norm1.offset, QWEN3B_DIM, out_file, q4_l->norm1)) return false;
+    if (!copy_raw_bf16(shards[raw_l->norm2.shard] + raw_l->norm2.offset, QWEN3B_DIM, out_file, q4_l->norm2)) return false;
+
+    if (!copy_raw_bf16(shards[raw_l->bq.shard] + raw_l->bq.offset, QWEN3B_DIM, out_file, q4_l->bq)) return false;
+    if (!copy_raw_bf16(shards[raw_l->bk.shard] + raw_l->bk.offset, QWEN3B_NUM_KV_HEADS * QWEN3B_HEAD_DIM, out_file, q4_l->bk)) return false;
+    if (!copy_raw_bf16(shards[raw_l->bv.shard] + raw_l->bv.offset, QWEN3B_NUM_KV_HEADS * QWEN3B_HEAD_DIM, out_file, q4_l->bv)) return false;
+
+    if (!quantize_matrix_q4x4(shards[raw_l->wq.shard] + raw_l->wq.offset, QWEN3B_DIM, QWEN3B_DIM, out_file, q4_l->wq)) return false;
+    if (!quantize_matrix_q4x4(shards[raw_l->wk.shard] + raw_l->wk.offset, QWEN3B_NUM_KV_HEADS * QWEN3B_HEAD_DIM, QWEN3B_DIM, out_file, q4_l->wk)) return false;
+    if (!quantize_matrix_q4x4(shards[raw_l->wv.shard] + raw_l->wv.offset, QWEN3B_NUM_KV_HEADS * QWEN3B_HEAD_DIM, QWEN3B_DIM, out_file, q4_l->wv)) return false;
+    if (!quantize_matrix_q4x4(shards[raw_l->wo.shard] + raw_l->wo.offset, QWEN3B_DIM, QWEN3B_DIM, out_file, q4_l->wo)) return false;
+
+    if (!quantize_matrix_q4x4(shards[raw_l->wgate.shard] + raw_l->wgate.offset, QWEN3B_INTERMEDIATE_DIM, QWEN3B_DIM, out_file, q4_l->wgate)) return false;
+    if (!quantize_matrix_q4x4(shards[raw_l->wup.shard] + raw_l->wup.offset, QWEN3B_INTERMEDIATE_DIM, QWEN3B_DIM, out_file, q4_l->wup)) return false;
+    if (!quantize_matrix_q4x4(shards[raw_l->wdown.shard] + raw_l->wdown.offset, QWEN3B_DIM, QWEN3B_INTERMEDIATE_DIM, out_file, q4_l->wdown)) return false;
+
+    return true;
+}
+
 int main(void) {
     const char* shard1_path = "data/qwen3b/model-00001-of-00002.safetensors";
     const char* shard2_path = "data/qwen3b/model-00002-of-00002.safetensors";
@@ -201,7 +220,9 @@ int main(void) {
         goto cleanup;
     }
 
-    LARGE_INTEGER freq, t0, t1;
+    LARGE_INTEGER freq;
+    LARGE_INTEGER t0;
+    LARGE_INTEGER t1;
     QueryPerformanceFrequency(&freq);
     QueryPerformanceCounter(&t0);
 
@@ -222,28 +243,9 @@ int main(void) {
     // 3. Processar as 36 camadas do Transformer
     printf("[2/3] Quantizando as 36 camadas do Transformer diretamente em Q4x4...\n");
     for (int l = 0; l < QWEN3B_NUM_LAYERS; l++) {
-        const RawLayerLocs* raw_l = &g_raw_model_locs.layers[l];
-        const Qwen3bLayerOffsets* q4_l = &g_qwen3b_offsets.layers[l];
-
-        // Layernorms BF16
-        if (!copy_raw_bf16(shards[raw_l->norm1.shard] + raw_l->norm1.offset, QWEN3B_DIM, out_file, q4_l->norm1)) goto cleanup;
-        if (!copy_raw_bf16(shards[raw_l->norm2.shard] + raw_l->norm2.offset, QWEN3B_DIM, out_file, q4_l->norm2)) goto cleanup;
-
-        // Biases BF16
-        if (!copy_raw_bf16(shards[raw_l->bq.shard] + raw_l->bq.offset, QWEN3B_DIM, out_file, q4_l->bq)) goto cleanup;
-        if (!copy_raw_bf16(shards[raw_l->bk.shard] + raw_l->bk.offset, QWEN3B_NUM_KV_HEADS * QWEN3B_HEAD_DIM, out_file, q4_l->bk)) goto cleanup;
-        if (!copy_raw_bf16(shards[raw_l->bv.shard] + raw_l->bv.offset, QWEN3B_NUM_KV_HEADS * QWEN3B_HEAD_DIM, out_file, q4_l->bv)) goto cleanup;
-
-        // Atencao Q4x4
-        if (!quantize_matrix_q4x4(shards[raw_l->wq.shard] + raw_l->wq.offset, QWEN3B_DIM, QWEN3B_DIM, out_file, q4_l->wq)) goto cleanup;
-        if (!quantize_matrix_q4x4(shards[raw_l->wk.shard] + raw_l->wk.offset, QWEN3B_NUM_KV_HEADS * QWEN3B_HEAD_DIM, QWEN3B_DIM, out_file, q4_l->wk)) goto cleanup;
-        if (!quantize_matrix_q4x4(shards[raw_l->wv.shard] + raw_l->wv.offset, QWEN3B_NUM_KV_HEADS * QWEN3B_HEAD_DIM, QWEN3B_DIM, out_file, q4_l->wv)) goto cleanup;
-        if (!quantize_matrix_q4x4(shards[raw_l->wo.shard] + raw_l->wo.offset, QWEN3B_DIM, QWEN3B_DIM, out_file, q4_l->wo)) goto cleanup;
-
-        // MLP SwiGLU Q4x4
-        if (!quantize_matrix_q4x4(shards[raw_l->wgate.shard] + raw_l->wgate.offset, QWEN3B_INTERMEDIATE_DIM, QWEN3B_DIM, out_file, q4_l->wgate)) goto cleanup;
-        if (!quantize_matrix_q4x4(shards[raw_l->wup.shard] + raw_l->wup.offset, QWEN3B_INTERMEDIATE_DIM, QWEN3B_DIM, out_file, q4_l->wup)) goto cleanup;
-        if (!quantize_matrix_q4x4(shards[raw_l->wdown.shard] + raw_l->wdown.offset, QWEN3B_DIM, QWEN3B_INTERMEDIATE_DIM, out_file, q4_l->wdown)) goto cleanup;
+        if (!quantize_layer(&g_raw_model_locs.layers[l], &g_qwen3b_offsets.layers[l], shards, out_file)) {
+            goto cleanup;
+        }
 
         if ((l + 1) % 6 == 0 || l == QWEN3B_NUM_LAYERS - 1) {
             printf("      -> Camadas %2d/36 quantizadas...\n", l + 1);

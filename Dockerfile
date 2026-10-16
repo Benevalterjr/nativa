@@ -18,9 +18,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /app
 
-# Dependências Python (apenas binários pré-compilados/wheels para evitar execução de setup scripts)
+# Dependências Python (versões estritamente travadas e binários pré-compilados - SonarCloud S8544 e S6581)
 COPY requirements.txt .
-RUN python -m pip install --no-cache-dir --only-binary=:all: -r requirements.txt
+RUN python -m pip install --no-cache-dir --only-binary=:all: numpy==2.2.3 fastapi==0.115.8 uvicorn==0.34.0 pydantic==2.10.6
 
 # Copia apenas os arquivos e módulos estritamente necessários (SonarCloud S6505 compliant)
 COPY nativa.py nativa_rt.h ./
