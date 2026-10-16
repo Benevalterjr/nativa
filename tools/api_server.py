@@ -26,6 +26,8 @@ MSG_ENGINE_NOT_READY = "Motor não inicializado."
 STATUS_503_RESPONSES = {503: {"description": MSG_ENGINE_NOT_READY}}
 PREFIX_ASSISTANT_THINK = "<|im_start|>assistant\n<think>\n"
 PREFIX_ASSISTANT_NO_THINK = "<|im_start|>assistant\n<think>\n</think>\n"
+DEFAULT_MODEL_NAME = "qwen3-0.6b-natq4"
+DEFAULT_CHAT_EXAMPLE_MSG = "Olá! Explique brevemente o que é o motor Nativa."
 
 # Adiciona a raiz do projeto ao sys.path para importar nativa
 ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -306,16 +308,28 @@ class ChatMessage(BaseModel):
         examples=["user"],
     )
     content: str = Field(
-        ...,
+        default=DEFAULT_CHAT_EXAMPLE_MSG,
         min_length=1,
         description="Conteúdo textual da mensagem.",
-        examples=["Olá! Como você funciona?"],
+        examples=[DEFAULT_CHAT_EXAMPLE_MSG],
+    )
+
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {"role": "user", "content": DEFAULT_CHAT_EXAMPLE_MSG},
+            "examples": [{"role": "user", "content": DEFAULT_CHAT_EXAMPLE_MSG}],
+        }
     )
 
 
 class ChatCompletionRequest(BaseModel):
-    model: Optional[str] = Field(default="qwen3-0.6b-natq4", examples=["qwen3-0.6b-natq4"])
-    messages: List[ChatMessage] = Field(..., min_length=1)
+    model: Optional[str] = Field(default=DEFAULT_MODEL_NAME, examples=[DEFAULT_MODEL_NAME])
+    messages: List[ChatMessage] = Field(
+        default_factory=lambda: [ChatMessage(role="user", content=DEFAULT_CHAT_EXAMPLE_MSG)],
+        min_length=1,
+        description="Lista de mensagens da conversa no formato ChatML.",
+        examples=[[{"role": "user", "content": DEFAULT_CHAT_EXAMPLE_MSG}]],
+    )
     temperature: Optional[float] = Field(default=0.7, ge=0.0, le=2.0)
     max_tokens: Optional[int] = Field(default=256, ge=1, le=4096)
     stream: Optional[bool] = Field(default=False)
@@ -324,33 +338,123 @@ class ChatCompletionRequest(BaseModel):
     model_config = ConfigDict(
         json_schema_extra={
             "example": {
-                "model": "qwen3-0.6b-natq4",
+                "model": DEFAULT_MODEL_NAME,
                 "messages": [
-                    {"role": "user", "content": "Olá! Explique brevemente o que é o motor Nativa."}
+                    {"role": "user", "content": DEFAULT_CHAT_EXAMPLE_MSG}
                 ],
                 "temperature": 0.7,
                 "max_tokens": 256,
                 "stream": False,
                 "enable_thinking": False,
-            }
+            },
+            "examples": [
+                {
+                    "model": DEFAULT_MODEL_NAME,
+                    "messages": [
+                        {"role": "user", "content": DEFAULT_CHAT_EXAMPLE_MSG}
+                    ],
+                    "temperature": 0.7,
+                    "max_tokens": 256,
+                    "stream": False,
+                    "enable_thinking": False,
+                }
+            ],
         }
     )
 
 
 class RagRequest(BaseModel):
-    context: str = Field(..., min_length=1, description="Documentos recuperados para embasamento")
-    question: str = Field(..., min_length=1, description="Pergunta do usuário")
+    context: str = Field(
+        default="Nativa é uma linguagem e runtime C99 de alta eficiência para inferência de LLMs em CPU.",
+        min_length=1,
+        description="Documentos recuperados para embasamento",
+        examples=["Nativa é uma linguagem e runtime C99 de alta eficiência para inferência de LLMs em CPU."],
+    )
+    question: str = Field(
+        default="O que é o Nativa?",
+        min_length=1,
+        description="Pergunta do usuário",
+        examples=["O que é o Nativa?"],
+    )
     temperature: Optional[float] = Field(default=0.1, ge=0.0, le=2.0)
     max_tokens: Optional[int] = Field(default=256, ge=1, le=4096)
     enable_thinking: Optional[bool] = Field(default=False)
 
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "context": "Nativa é uma linguagem e runtime C99 de alta eficiência para inferência de LLMs em CPU.",
+                "question": "O que é o Nativa?",
+                "temperature": 0.1,
+                "max_tokens": 128,
+                "enable_thinking": False,
+            },
+            "examples": [
+                {
+                    "context": "Nativa é uma linguagem e runtime C99 de alta eficiência para inferência de LLMs em CPU.",
+                    "question": "O que é o Nativa?",
+                    "temperature": 0.1,
+                    "max_tokens": 128,
+                    "enable_thinking": False,
+                }
+            ],
+        }
+    )
+
 
 class DecisionRequest(BaseModel):
-    state: Any = Field(..., description="Objeto ou texto representando o estado atual")
-    choices: Dict[str, str] = Field(..., min_length=1, description="Dicionário de escolhas (chave -> descrição)")
-    task: str = Field(..., min_length=1, description="Descrição da tarefa ou pergunta de decisão")
+    state: Any = Field(
+        default={"url": "https://example.com/api", "status_code": 500, "retries": 3},
+        description="Objeto ou texto representando o estado atual",
+        examples=[{"url": "https://example.com/api", "status_code": 500, "retries": 3}],
+    )
+    choices: Dict[str, str] = Field(
+        default={
+            "tentar_novamente": "Fazer nova tentativa de requisição",
+            "abortar": "Encerrar e registrar falha definitiva",
+        },
+        min_length=1,
+        description="Dicionário de escolhas (chave -> descrição)",
+        examples=[{
+            "tentar_novamente": "Fazer nova tentativa de requisição",
+            "abortar": "Encerrar e registrar falha definitiva",
+        }],
+    )
+    task: str = Field(
+        default="Qual ação deve ser tomada após 3 tentativas com falha 500?",
+        min_length=1,
+        description="Descrição da tarefa ou pergunta de decisão",
+        examples=["Qual ação deve ser tomada após 3 tentativas com falha 500?"],
+    )
     temperature: Optional[float] = Field(default=0.0, ge=0.0, le=2.0)
     enable_thinking: Optional[bool] = Field(default=True)
+
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "state": {"url": "https://example.com/api", "status_code": 500, "retries": 3},
+                "choices": {
+                    "tentar_novamente": "Fazer nova tentativa de requisição",
+                    "abortar": "Encerrar e registrar falha definitiva",
+                },
+                "task": "Qual ação deve ser tomada após 3 tentativas com falha 500?",
+                "temperature": 0.0,
+                "enable_thinking": True,
+            },
+            "examples": [
+                {
+                    "state": {"url": "https://example.com/api", "status_code": 500, "retries": 3},
+                    "choices": {
+                        "tentar_novamente": "Fazer nova tentativa de requisição",
+                        "abortar": "Encerrar e registrar falha definitiva",
+                    },
+                    "task": "Qual ação deve ser tomada após 3 tentativas com falha 500?",
+                    "temperature": 0.0,
+                    "enable_thinking": True,
+                }
+            ],
+        }
+    )
 
 
 # ----------------------------------------------------------------------------
