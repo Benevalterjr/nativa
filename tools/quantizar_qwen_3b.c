@@ -153,15 +153,16 @@ static bool map_shard(const char* path, MappedShard* shard) {
 }
 
 static void unmap_shard(MappedShard* shard) {
-    if (shard->base) {
+    if (!shard) return;
+    if (shard->base != NULL) {
         UnmapViewOfFile(shard->base);
         shard->base = NULL;
     }
-    if (shard->hMapping) {
+    if (shard->hMapping != NULL) {
         CloseHandle(shard->hMapping);
         shard->hMapping = NULL;
     }
-    if (shard->hFile && shard->hFile != INVALID_HANDLE_VALUE) {
+    if (shard->hFile != INVALID_HANDLE_VALUE) {
         CloseHandle(shard->hFile);
         shard->hFile = INVALID_HANDLE_VALUE;
     }
