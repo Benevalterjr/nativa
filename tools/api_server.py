@@ -172,11 +172,13 @@ class EngineRunner:
             buf = ""
             printed_idx = 0
 
+            fd = self.proc.stdout.fileno()
+
             while True:
-                ch = await asyncio.to_thread(self.proc.stdout.read, 1)
-                if not ch:
+                raw = await asyncio.to_thread(os.read, fd, 1024)
+                if not raw:
                     break
-                buf += ch
+                buf += raw.decode("utf-8", errors="replace")
 
                 if MARKER_TURN_DONE in buf and "]" in buf[buf.find(MARKER_TURN_DONE):]:
                     break
@@ -240,15 +242,17 @@ class ChatCompletionRequest(BaseModel):
     model: Optional[str] = "qwen3-0.6b-natq4"
     messages: List[ChatMessage]
     temperature: Optional[float] = 0.7
-    max_tokens: Optional[int] = 512
+    max_tokens: Optional[int] = 256
     stream: Optional[bool] = False
+    enable_thinking: Optional[bool] = False
 
 
 class RagRequest(BaseModel):
     context: str = Field(..., description="Documentos recuperados para embasamento")
     question: str = Field(..., description="Pergunta do usuário")
     temperature: Optional[float] = 0.1
-    max_tokens: Optional[int] = 512
+    max_tokens: Optional[int] = 256
+    enable_thinking: Optional[bool] = False
 
 
 class DecisionRequest(BaseModel):
@@ -256,6 +260,7 @@ class DecisionRequest(BaseModel):
     choices: Dict[str, str] = Field(..., description="Dicionário de escolhas (chave -> descrição)")
     task: str = Field(..., description="Descrição da tarefa ou pergunta de decisão")
     temperature: Optional[float] = 0.0
+    enable_thinking: Optional[bool] = False
 
 
 # ----------------------------------------------------------------------------
@@ -286,7 +291,10 @@ async def chat_completions(req: ChatCompletionRequest):
         raise HTTPException(status_code=503, detail=MSG_ENGINE_NOT_READY)
 
     prompt_parts = [f"<|im_start|>{msg.role}\n{msg.content}<|im_end|>\n" for msg in req.messages]
-    prompt_parts.append("<|im_start|>assistant\n")
+    if req.enable_thinking:
+        prompt_parts.append("<|im_start|>assistant\n")
+    else:
+        prompt_parts.append("<|im_start|>assistant\n<think>\n</think>\n")
     full_prompt = "".join(prompt_parts)
 
     created_ts = int(time.time())
@@ -363,10 +371,11 @@ async def rag_answer(req: RagRequest):
     )
 
     user_prompt = f"CONTEXTO:\n\"\"\"\n{req.context}\n\"\"\"\n\nPERGUNTA:\n{req.question}"
+    assistant_prefix = "<|im_start|>assistant\n" if req.enable_thinking else "<|im_start|>assistant\n<think>\n</think>\n"
     prompt = (
         f"<|im_start|>system\n{system_prompt}<|im_end|>\n"
         f"<|im_start|>user\n{user_prompt}<|im_end|>\n"
-        f"<|im_start|>assistant\n"
+        f"{assistant_prefix}"
     )
 
     accumulated = []
@@ -405,10 +414,11 @@ async def branch_decide(req: DecisionRequest):
         f"Decida qual das opções acima é a mais correta:"
     )
 
+    assistant_prefix = "<|im_start|>assistant\n" if req.enable_thinking else "<|im_start|>assistant\n<think>\n</think>\n"
     prompt = (
         f"<|im_start|>system\n{system_prompt}<|im_end|>\n"
         f"<|im_start|>user\n{user_prompt}<|im_end|>\n"
-        f"<|im_start|>assistant\n"
+        f"{assistant_prefix}"
     )
 
     accumulated = []
