@@ -1,8 +1,8 @@
-# Linguagem Nativa (v0.3) — Requisitos do Runtime Core
-numpy>=1.24.0
+# Linguagem Nativa (v0.3) — Requisitos do Runtime Core (Locked Versions)
+numpy==2.2.3
 
 # Ferramentas de Pesquisa e Modelos (tools/) — Opcional
-fastapi>=0.100.0
-uvicorn>=0.22.0
-pydantic>=2.0.0
+fastapi==0.115.8
+uvicorn==0.34.0
+pydantic==2.10.6
 # Para instalar tudo de uma vez para desenvolvimento: pip install -r requirements-tools.txt

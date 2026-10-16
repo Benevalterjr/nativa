@@ -708,18 +708,22 @@ int main(int argc, char** argv) {
 #endif
     timer_init();
 
-    if (argc < 2) {
-        printf("Uso: nativa_engine.exe <modelo.natq4> [--chat] [--bench <N>] [--vocab <vocab.bin>]\n");
+    int arg_idx = 1;
+    if (argc > 1 && strcmp(argv[1], "--") == 0) {
+        arg_idx = 2;
+    }
+    if (argc <= arg_idx) {
+        printf("Uso: nativa_engine.exe [--] <modelo.natq4> [--chat] [--bench <N>] [--vocab <vocab.bin>]\n");
         return 1;
     }
 
-    const char* model_path = argv[1];
+    const char* model_path = argv[arg_idx];
     const char* vocab_path = "data/qwen_vocab.bin";
     bool chat_mode = false;
     bool bench_mode = false;
     int bench_tokens = 25;
 
-    for (int a = 2; a < argc; a++) {
+    for (int a = arg_idx + 1; a < argc; a++) {
         if (strcmp(argv[a], "--chat") == 0 || strcmp(argv[a], "--interactive") == 0) {
             chat_mode = true;
         } else if (strcmp(argv[a], "--bench") == 0 && a + 1 < argc) {

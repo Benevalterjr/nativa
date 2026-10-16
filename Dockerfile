@@ -31,7 +31,7 @@ COPY data/ ./data/
 RUN if [ ! -f "data/qwen3_0.6b.natq4" ]; then \
         echo "Baixando modelo da Release GitHub..." && \
         mkdir -p data && \
-        curl -L -f -o data/qwen3_0.6b.natq4 "https://github.com/Benevalterjr/nativa/releases/download/v0.1.0/qwen3_0.6b.natq4"; \
+        curl --proto '=https' --proto-redir '=https' -L -f -o data/qwen3_0.6b.natq4 "https://github.com/Benevalterjr/nativa/releases/download/v0.1.0/qwen3_0.6b.natq4"; \
     fi
 
 # Compila o motor de inferência C99 nativo com OpenMP para Linux x86_64

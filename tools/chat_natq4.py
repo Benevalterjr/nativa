@@ -41,19 +41,20 @@ def main():
     if len(sys.argv) < 2:
         model_path = os.path.join(ROOT_DIR, "data", "qwen2.5_3b.natq4")
     else:
-        raw_path = sys.argv[1]
-        if raw_path.startswith("-"):
-            print(f"[ERRO] Argumento inválido para caminho do modelo: {raw_path}")
+        raw_path = sys.argv[1].strip()
+        if not re.fullmatch(r"^[a-zA-Z0-9_\-./\\:]+$", raw_path) or raw_path.startswith("-"):
+            print(f"[ERRO] Argumento inválido ou caractere não permitido para caminho do modelo: {raw_path}")
             return 1
         model_path = raw_path
 
-    model_path = os.path.abspath(model_path)
-    if not os.path.isfile(model_path):
-        print(f"[ERRO] Arquivo de modelo não encontrado: {model_path}")
+    clean_model_path = os.path.realpath(os.path.abspath(model_path))
+    if not os.path.isfile(clean_model_path):
+        print(f"[ERRO] Arquivo de modelo não encontrado: {clean_model_path}")
         return 1
-    if not model_path.endswith((".natq4", ".bin")):
-        print(f"[ERRO] Arquivo de modelo deve ser .natq4 ou .bin: {model_path}")
+    if not clean_model_path.endswith((".natq4", ".bin")):
+        print(f"[ERRO] Arquivo de modelo deve ser .natq4 ou .bin: {clean_model_path}")
         return 1
+    model_path = clean_model_path
 
     engine_abs = os.path.abspath(ENGINE_PATH)
     if not os.path.isfile(engine_abs):
@@ -89,7 +90,7 @@ def main():
     env.setdefault("OMP_WAIT_POLICY", "PASSIVE")
 
     proc = subprocess.Popen(
-        [engine_abs, model_path, "--chat", "--vocab", os.path.abspath(vocab_path)],
+        [engine_abs, "--", model_path, "--chat", "--vocab", os.path.abspath(vocab_path)],
         stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,

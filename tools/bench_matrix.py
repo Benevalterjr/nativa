@@ -45,16 +45,38 @@ for threads, policy in configs:
         proc = subprocess.run([exe_path], capture_output=True, text=True, env=env, timeout=120)
         out = proc.stdout
         
-        # Parse metrics with robust regex
-        speed_match = re.search(r"(\d+(?:\.\d+)?)\s*tokens/segundo", out)
-        attn_match = re.search(r"cam\)\s*:\s*(\d+(?:\.\d+)?)\s*ms", out)
-        mlp_match = re.search(r"MLP[^:\n]*:\s*(\d+(?:\.\d+)?)\s*ms", out)
-        lm_match = re.search(r"LM Head[^:\n]*:\s*(\d+(?:\.\d+)?)\s*ms", out)
-
-        speed = float(speed_match.group(1)) if speed_match else 0.0
-        attn = float(attn_match.group(1)) if attn_match else 0.0
-        mlp = float(mlp_match.group(1)) if mlp_match else 0.0
-        lm = float(lm_match.group(1)) if lm_match else 0.0
+        # Parse metrics with linear parsing to prevent ReDoS (python:S5852)
+        speed, attn, mlp, lm = 0.0, 0.0, 0.0, 0.0
+        for line in out.splitlines():
+            line_str = line.strip()
+            if "tokens/segundo" in line_str:
+                parts = line_str.split()
+                if parts:
+                    try:
+                        speed = float(parts[0])
+                    except ValueError:
+                        pass
+            elif "cam)" in line_str and "ms" in line_str:
+                parts = line_str.split(":")
+                if len(parts) > 1:
+                    try:
+                        attn = float(parts[1].replace("ms", "").strip())
+                    except ValueError:
+                        pass
+            elif "MLP" in line_str and "ms" in line_str:
+                parts = line_str.split(":")
+                if len(parts) > 1:
+                    try:
+                        mlp = float(parts[1].replace("ms", "").strip())
+                    except ValueError:
+                        pass
+            elif "LM Head" in line_str and "ms" in line_str:
+                parts = line_str.split(":")
+                if len(parts) > 1:
+                    try:
+                        lm = float(parts[1].replace("ms", "").strip())
+                    except ValueError:
+                        pass
 
         results.append({
             "threads": threads,
