@@ -10,10 +10,8 @@ ENV OMP_WAIT_POLICY=PASSIVE
 
 # Dependências do sistema para compilar C99 com OpenMP
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    gcc \
+    build-essential \
     libgomp1 \
-    git \
-    git-lfs \
     curl \
     && rm -rf /var/lib/apt/lists/*
 
