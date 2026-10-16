@@ -84,6 +84,15 @@ python nativa.py build tests/riemann.nat
 ./tests/riemann          # or riemann.exe on Windows
 ```
 
+### REST API Server (OpenAI-compatible)
+
+Nativa provides a zero-GPU, C99-accelerated HTTP server for RAG, local chat, and reasoning agents:
+
+```bash
+pip install -e ".[server]"
+python tools/api_server.py
+```
+
 ---
 
 ## Project Structure
