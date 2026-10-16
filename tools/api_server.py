@@ -496,7 +496,7 @@ async def _stream_chat_chunks(
     model: str,
     enable_thinking: bool,
 ):
-    is_thinking = True
+    is_thinking = bool(enable_thinking)
     buf = ""
     async for chunk in runner_inst.generate(prompt, max_tokens=max_tokens):
         if not is_thinking:
@@ -532,13 +532,16 @@ async def chat_completions(req: ChatCompletionRequest):
         f"<|im_start|>{msg.role}\n{sanitize_chatml(msg.content)}<|im_end|>\n"
         for msg in req.messages
     ]
-    prompt_parts.append(PREFIX_ASSISTANT_THINK)
+    prompt_prefix = (
+        PREFIX_ASSISTANT_THINK if req.enable_thinking else PREFIX_ASSISTANT_NO_THINK
+    )
+    prompt_parts.append(prompt_prefix)
     full_prompt = "".join(prompt_parts)
 
     created_ts = int(time.time())
     completion_id = f"chatcmpl-{uuid.uuid4().hex[:12]}"
     user_model = req.model or DEFAULT_MODEL_NAME
-    engine_tokens = (req.max_tokens or 256) + 150
+    engine_tokens = (req.max_tokens or 256) + (150 if req.enable_thinking else 0)
 
     if req.stream:
         return StreamingResponse(
@@ -601,13 +604,16 @@ async def rag_answer(req: RagRequest):
     safe_context = sanitize_chatml(req.context)
     safe_question = sanitize_chatml(req.question)
     user_prompt = f"Contexto:\n{safe_context}\n\nPergunta:\n{safe_question}"
+    assistant_prefix = (
+        PREFIX_ASSISTANT_THINK if req.enable_thinking else PREFIX_ASSISTANT_NO_THINK
+    )
     prompt = (
         f"<|im_start|>system\n{system_prompt}<|im_end|>\n"
         f"<|im_start|>user\n{user_prompt}<|im_end|>\n"
-        f"{PREFIX_ASSISTANT_THINK}"
+        f"{assistant_prefix}"
     )
 
-    engine_tokens = (req.max_tokens or 256) + 150
+    engine_tokens = (req.max_tokens or 256) + (150 if req.enable_thinking else 0)
     accumulated = []
     async for chunk in runner.generate(prompt, max_tokens=engine_tokens):
         accumulated.append(chunk)
@@ -648,13 +654,16 @@ async def branch_decide(req: DecisionRequest):
         f"Qual escolha executar?"
     )
 
+    assistant_prefix = (
+        PREFIX_ASSISTANT_THINK if req.enable_thinking else PREFIX_ASSISTANT_NO_THINK
+    )
     prompt = (
         f"<|im_start|>system\n{system_prompt}<|im_end|>\n"
         f"<|im_start|>user\n{user_prompt}<|im_end|>\n"
-        f"{PREFIX_ASSISTANT_THINK}"
+        f"{assistant_prefix}"
     )
 
-    engine_tokens = (req.max_tokens or 256) + 150
+    engine_tokens = (req.max_tokens or 256) + (150 if req.enable_thinking else 0)
     accumulated = []
     async for chunk in runner.generate(prompt, max_tokens=engine_tokens):
         accumulated.append(chunk)
