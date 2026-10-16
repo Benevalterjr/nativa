@@ -28,6 +28,13 @@ PREFIX_ASSISTANT_THINK = "<|im_start|>assistant\n<think>\n"
 PREFIX_ASSISTANT_NO_THINK = "<|im_start|>assistant\n<think>\n</think>\n"
 DEFAULT_MODEL_NAME = "qwen3-0.6b-natq4"
 DEFAULT_CHAT_EXAMPLE_MSG = "Olá! Explique brevemente o que é o motor Nativa."
+DEFAULT_RAG_CONTEXT = "Nativa é uma linguagem e runtime C99 de alta eficiência para inferência de LLMs em CPU."
+DEFAULT_RAG_QUESTION = "O que é o Nativa?"
+EXAMPLE_API_URL = "https://example.com/api"
+CHOICE_RETRY_DESC = "Fazer nova tentativa de requisição"
+CHOICE_ABORT_DESC = "Encerrar e registrar falha definitiva"
+EXAMPLE_TASK_DECISION = "Qual ação deve ser tomada após 3 tentativas com falha 500?"
+OBJECT_CHAT_CHUNK = "chat.completion.chunk"
 
 # Adiciona a raiz do projeto ao sys.path para importar nativa
 ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -79,6 +86,39 @@ def _compute_safe_len(buf: str, printed_idx: int) -> int:
         if last_bracket >= printed_idx and len(buf) - last_bracket < 16:
             safe_len = last_bracket
     return safe_len
+
+
+def _extract_stream_chunk(buf: str, printed_idx: int) -> Tuple[Optional[str], int, bool]:
+    """Extrai o próximo fragmento seguro para streaming e indica se o turno finalizou."""
+    td_pos = buf.find(MARKER_TURN_DONE)
+    if td_pos != -1:
+        chunk = buf[printed_idx:td_pos] if td_pos > printed_idx else None
+        is_done = "]" in buf[td_pos:]
+        return chunk, td_pos, is_done
+
+    safe_len = _compute_safe_len(buf, printed_idx)
+    if safe_len > printed_idx:
+        return buf[printed_idx:safe_len], safe_len, False
+    return None, printed_idx, False
+
+
+def _format_sse_chunk(
+    completion_id: str,
+    created_ts: int,
+    model: str,
+    delta: Dict[str, Any],
+    finish_reason: Optional[str] = None,
+) -> str:
+    """Formata um chunk SSE compatível com a API OpenAI."""
+    data = {
+        "id": completion_id,
+        "object": OBJECT_CHAT_CHUNK,
+        "created": created_ts,
+        "model": model,
+        "choices": [{"index": 0, "delta": delta, "finish_reason": finish_reason}],
+    }
+    return f"data: {json.dumps(data, ensure_ascii=False)}\n\n"
+
 
 
 def _select_winner(candidate: str, choices: Dict[str, str]) -> str:
@@ -222,27 +262,17 @@ class EngineRunner:
                 raw = await asyncio.to_thread(os.read, fd, 1024)
                 if not raw:
                     tail = decoder.decode(b"", final=True)
-                    if tail:
-                        buf += tail
-                    if printed_idx < len(buf):
-                        yield buf[printed_idx:]
+                    final_chunk = (buf + tail)[printed_idx:]
+                    if final_chunk:
+                        yield final_chunk
                     break
 
                 buf += decoder.decode(raw, final=False)
-
-                td_pos = buf.find(MARKER_TURN_DONE)
-                if td_pos != -1:
-                    if td_pos > printed_idx:
-                        yield buf[printed_idx:td_pos]
-                        printed_idx = td_pos
-                    if "]" in buf[td_pos:]:
-                        break
-                    continue
-
-                safe_len = _compute_safe_len(buf, printed_idx)
-                if safe_len > printed_idx:
-                    yield buf[printed_idx:safe_len]
-                    printed_idx = safe_len
+                chunk, printed_idx, is_done = _extract_stream_chunk(buf, printed_idx)
+                if chunk:
+                    yield chunk
+                if is_done:
+                    break
 
 
 runner: Optional[EngineRunner] = None
@@ -344,16 +374,16 @@ class ChatCompletionRequest(BaseModel):
 
 class RagRequest(BaseModel):
     context: str = Field(
-        default="Nativa é uma linguagem e runtime C99 de alta eficiência para inferência de LLMs em CPU.",
+        default=DEFAULT_RAG_CONTEXT,
         min_length=1,
         description="Documentos recuperados para embasamento",
-        examples=["Nativa é uma linguagem e runtime C99 de alta eficiência para inferência de LLMs em CPU."],
+        examples=[DEFAULT_RAG_CONTEXT],
     )
     question: str = Field(
-        default="O que é o Nativa?",
+        default=DEFAULT_RAG_QUESTION,
         min_length=1,
         description="Pergunta do usuário",
-        examples=["O que é o Nativa?"],
+        examples=[DEFAULT_RAG_QUESTION],
     )
     temperature: Optional[float] = Field(default=0.1, ge=0.0, le=2.0)
     max_tokens: Optional[int] = Field(default=256, ge=1, le=4096)
@@ -362,16 +392,16 @@ class RagRequest(BaseModel):
     model_config = ConfigDict(
         json_schema_extra={
             "example": {
-                "context": "Nativa é uma linguagem e runtime C99 de alta eficiência para inferência de LLMs em CPU.",
-                "question": "O que é o Nativa?",
+                "context": DEFAULT_RAG_CONTEXT,
+                "question": DEFAULT_RAG_QUESTION,
                 "temperature": 0.1,
                 "max_tokens": 128,
                 "enable_thinking": False,
             },
             "examples": [
                 {
-                    "context": "Nativa é uma linguagem e runtime C99 de alta eficiência para inferência de LLMs em CPU.",
-                    "question": "O que é o Nativa?",
+                    "context": DEFAULT_RAG_CONTEXT,
+                    "question": DEFAULT_RAG_QUESTION,
                     "temperature": 0.1,
                     "max_tokens": 128,
                     "enable_thinking": False,
@@ -383,27 +413,27 @@ class RagRequest(BaseModel):
 
 class DecisionRequest(BaseModel):
     state: Any = Field(
-        default={"url": "https://example.com/api", "status_code": 500, "retries": 3},
+        default={"url": EXAMPLE_API_URL, "status_code": 500, "retries": 3},
         description="Objeto ou texto representando o estado atual",
-        examples=[{"url": "https://example.com/api", "status_code": 500, "retries": 3}],
+        examples=[{"url": EXAMPLE_API_URL, "status_code": 500, "retries": 3}],
     )
     choices: Dict[str, str] = Field(
         default={
-            "tentar_novamente": "Fazer nova tentativa de requisição",
-            "abortar": "Encerrar e registrar falha definitiva",
+            "tentar_novamente": CHOICE_RETRY_DESC,
+            "abortar": CHOICE_ABORT_DESC,
         },
         min_length=1,
         description="Dicionário de escolhas (chave -> descrição)",
         examples=[{
-            "tentar_novamente": "Fazer nova tentativa de requisição",
-            "abortar": "Encerrar e registrar falha definitiva",
+            "tentar_novamente": CHOICE_RETRY_DESC,
+            "abortar": CHOICE_ABORT_DESC,
         }],
     )
     task: str = Field(
-        default="Qual ação deve ser tomada após 3 tentativas com falha 500?",
+        default=EXAMPLE_TASK_DECISION,
         min_length=1,
         description="Descrição da tarefa ou pergunta de decisão",
-        examples=["Qual ação deve ser tomada após 3 tentativas com falha 500?"],
+        examples=[EXAMPLE_TASK_DECISION],
     )
     temperature: Optional[float] = Field(default=0.0, ge=0.0, le=2.0)
     enable_thinking: Optional[bool] = Field(default=True)
@@ -411,23 +441,23 @@ class DecisionRequest(BaseModel):
     model_config = ConfigDict(
         json_schema_extra={
             "example": {
-                "state": {"url": "https://example.com/api", "status_code": 500, "retries": 3},
+                "state": {"url": EXAMPLE_API_URL, "status_code": 500, "retries": 3},
                 "choices": {
-                    "tentar_novamente": "Fazer nova tentativa de requisição",
-                    "abortar": "Encerrar e registrar falha definitiva",
+                    "tentar_novamente": CHOICE_RETRY_DESC,
+                    "abortar": CHOICE_ABORT_DESC,
                 },
-                "task": "Qual ação deve ser tomada após 3 tentativas com falha 500?",
+                "task": EXAMPLE_TASK_DECISION,
                 "temperature": 0.0,
                 "enable_thinking": True,
             },
             "examples": [
                 {
-                    "state": {"url": "https://example.com/api", "status_code": 500, "retries": 3},
+                    "state": {"url": EXAMPLE_API_URL, "status_code": 500, "retries": 3},
                     "choices": {
-                        "tentar_novamente": "Fazer nova tentativa de requisição",
-                        "abortar": "Encerrar e registrar falha definitiva",
+                        "tentar_novamente": CHOICE_RETRY_DESC,
+                        "abortar": CHOICE_ABORT_DESC,
                     },
-                    "task": "Qual ação deve ser tomada após 3 tentativas com falha 500?",
+                    "task": EXAMPLE_TASK_DECISION,
                     "temperature": 0.0,
                     "enable_thinking": True,
                 }
@@ -469,60 +499,26 @@ async def _stream_chat_chunks(
     is_thinking = True
     buf = ""
     async for chunk in runner_inst.generate(prompt, max_tokens=max_tokens):
-        if is_thinking:
-            buf += chunk
-            if TAG_THINK_END in buf:
-                parts = buf.split(TAG_THINK_END, 1)
-                is_thinking = False
-                thought = parts[0].replace(TAG_THINK, "").strip()
-                ans = parts[1].lstrip("\n")
-                if enable_thinking and thought:
-                    data = {
-                        "id": completion_id,
-                        "object": "chat.completion.chunk",
-                        "created": created_ts,
-                        "model": model,
-                        "choices": [{"index": 0, "delta": {"reasoning_content": thought}, "finish_reason": None}],
-                    }
-                    yield f"data: {json.dumps(data, ensure_ascii=False)}\n\n"
-                if ans:
-                    data = {
-                        "id": completion_id,
-                        "object": "chat.completion.chunk",
-                        "created": created_ts,
-                        "model": model,
-                        "choices": [{"index": 0, "delta": {"content": ans}, "finish_reason": None}],
-                    }
-                    yield f"data: {json.dumps(data, ensure_ascii=False)}\n\n"
-            elif enable_thinking:
-                cleaned = chunk.replace(TAG_THINK, "")
-                if cleaned:
-                    data = {
-                        "id": completion_id,
-                        "object": "chat.completion.chunk",
-                        "created": created_ts,
-                        "model": model,
-                        "choices": [{"index": 0, "delta": {"reasoning_content": cleaned}, "finish_reason": None}],
-                    }
-                    yield f"data: {json.dumps(data, ensure_ascii=False)}\n\n"
-        else:
-            data = {
-                "id": completion_id,
-                "object": "chat.completion.chunk",
-                "created": created_ts,
-                "model": model,
-                "choices": [{"index": 0, "delta": {"content": chunk}, "finish_reason": None}],
-            }
-            yield f"data: {json.dumps(data, ensure_ascii=False)}\n\n"
+        if not is_thinking:
+            yield _format_sse_chunk(completion_id, created_ts, model, {"content": chunk})
+            continue
 
-    final_data = {
-        "id": completion_id,
-        "object": "chat.completion.chunk",
-        "created": created_ts,
-        "model": model,
-        "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
-    }
-    yield f"data: {json.dumps(final_data, ensure_ascii=False)}\n\n"
+        buf += chunk
+        if TAG_THINK_END in buf:
+            parts = buf.split(TAG_THINK_END, 1)
+            is_thinking = False
+            thought = parts[0].replace(TAG_THINK, "").strip()
+            ans = parts[1].lstrip("\n")
+            if enable_thinking and thought:
+                yield _format_sse_chunk(completion_id, created_ts, model, {"reasoning_content": thought})
+            if ans:
+                yield _format_sse_chunk(completion_id, created_ts, model, {"content": ans})
+        elif enable_thinking:
+            cleaned = chunk.replace(TAG_THINK, "")
+            if cleaned:
+                yield _format_sse_chunk(completion_id, created_ts, model, {"reasoning_content": cleaned})
+
+    yield _format_sse_chunk(completion_id, created_ts, model, {}, finish_reason="stop")
     yield "data: [DONE]\n\n"
 
 

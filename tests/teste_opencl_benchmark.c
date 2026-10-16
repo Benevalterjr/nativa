@@ -48,16 +48,19 @@ static double get_time_sec(void) {
 #endif
 }
 
-static void cleanup_cl_resources(NativaCLContext* ctx, float* a, float* b, float* c,
-                                cl_mem da, cl_mem db, cl_mem dc, cl_kernel k, cl_program p) {
+static void cleanup_host_buffers(float* a, float* b, float* c) {
     if (a) free(a);
     if (b) free(b);
     if (c) free(c);
-    if (da && ctx) ctx->clReleaseMemObject(da);
-    if (db && ctx) ctx->clReleaseMemObject(db);
-    if (dc && ctx) ctx->clReleaseMemObject(dc);
-    if (k && ctx) ctx->clReleaseKernel(k);
-    if (p && ctx) ctx->clReleaseProgram(p);
+}
+
+static void cleanup_cl_resources(const NativaCLContext* ctx, cl_mem da, cl_mem db, cl_mem dc, cl_kernel k, cl_program p) {
+    if (!ctx) return;
+    if (da) ctx->clReleaseMemObject(da);
+    if (db) ctx->clReleaseMemObject(db);
+    if (dc) ctx->clReleaseMemObject(dc);
+    if (k) ctx->clReleaseKernel(k);
+    if (p) ctx->clReleaseProgram(p);
 }
 
 static int validate_results(const float* h_A, const float* h_B, const float* h_C, int N) {
@@ -131,7 +134,8 @@ static bool run_tensor_test_on_device(NativaCLContext* ctx, int dev_idx, int N) 
 
     if (!d_A || !d_B || !d_C) {
         fprintf(stderr, "[ERRO] Falha na alocacao de buffers cl_mem\n");
-        cleanup_cl_resources(ctx, h_A, h_B, h_C, d_A, d_B, d_C, kernel, prog);
+        cleanup_host_buffers(h_A, h_B, h_C);
+        cleanup_cl_resources(ctx, d_A, d_B, d_C, kernel, prog);
         return false;
     }
 
@@ -168,7 +172,8 @@ static bool run_tensor_test_on_device(NativaCLContext* ctx, int dev_idx, int N) 
         printf("    [ERRO] Foram encontrados %d erros numericos!\n", errors);
     }
 
-    cleanup_cl_resources(ctx, h_A, h_B, h_C, d_A, d_B, d_C, kernel, prog);
+    cleanup_host_buffers(h_A, h_B, h_C);
+    cleanup_cl_resources(ctx, d_A, d_B, d_C, kernel, prog);
     return (errors == 0);
 }
 

@@ -81,12 +81,11 @@ static bool load_vocab_stream(FILE* f) {
         }
         g_vocab[i].len = len;
         g_vocab[i].str = (char*)malloc(len + 1);
+        if (g_vocab[i].str && len > 0) {
+            size_t bytes_read = fread(g_vocab[i].str, 1, len, f);
+            (void)bytes_read;
+        }
         if (g_vocab[i].str) {
-            if (len > 0) {
-                if (fread(g_vocab[i].str, 1, len, f) != len) {
-                    // leitura truncada de token
-                }
-            }
             g_vocab[i].str[len] = '\0';
         }
     }
@@ -481,13 +480,12 @@ static inline __m128 q4x4_dot4(const BlockQ4x4* restrict W4, const BlockQ8* rest
     return acc;
 }
 
-static inline void q4x4_dot4_scalar(const BlockQ4x4* restrict W4, const BlockQ8* restrict x_q8, int nb, float* out4) {
+static inline void q4x4_dot4_scalar(const BlockQ4x4* W4, const BlockQ8* x_q8, int nb, float* out4) {
     float acc0 = 0.0f;
     float acc1 = 0.0f;
     float acc2 = 0.0f;
     float acc3 = 0.0f;
-    int b;
-    for (b = 0; b < nb; b++) {
+    for (int b = 0; b < nb; b++) {
         const BlockQ4x4* blk = &W4[b];
         const BlockQ8* xb = &x_q8[b];
 
@@ -510,10 +508,10 @@ static inline void q4x4_dot4_scalar(const BlockQ4x4* restrict W4, const BlockQ8*
             int8_t x_lo = xb->qs[i * 2];
             int8_t x_hi = xb->qs[i * 2 + 1];
 
-            dot0 += ((int)(b0 & 0x0F) - 8) * (int)x_lo + ((int)(b0 >> 4) - 8) * (int)x_hi;
-            dot1 += ((int)(b1 & 0x0F) - 8) * (int)x_lo + ((int)(b1 >> 4) - 8) * (int)x_hi;
-            dot2 += ((int)(b2 & 0x0F) - 8) * (int)x_lo + ((int)(b2 >> 4) - 8) * (int)x_hi;
-            dot3 += ((int)(b3 & 0x0F) - 8) * (int)x_lo + ((int)(b3 >> 4) - 8) * (int)x_hi;
+            dot0 += ((b0 & 0x0F) - 8) * x_lo + ((b0 >> 4) - 8) * x_hi;
+            dot1 += ((b1 & 0x0F) - 8) * x_lo + ((b1 >> 4) - 8) * x_hi;
+            dot2 += ((b2 & 0x0F) - 8) * x_lo + ((b2 >> 4) - 8) * x_hi;
+            dot3 += ((b3 & 0x0F) - 8) * x_lo + ((b3 >> 4) - 8) * x_hi;
         }
 
         float sc = xb->scale;
@@ -528,8 +526,20 @@ static inline void q4x4_dot4_scalar(const BlockQ4x4* restrict W4, const BlockQ8*
     out4[3] = acc3;
 }
 
-static inline void matvec_q4x4(float* restrict y, const BlockQ4x4* restrict W, const BlockQ8* restrict x_q8,
-                               const uint16_t* restrict bias, int rows, int cols, int add) {
+static inline void matvec_q4x4_scalar_group(float* y, const BlockQ4x4* W, const BlockQ8* x_q8,
+                                            const uint16_t* bias, int g, int nb, int add) {
+    float out4[4];
+    q4x4_dot4_scalar(W + (size_t)g * nb, x_q8, nb, out4);
+    for (int r = 0; r < 4; r++) {
+        float val = out4[r];
+        if (bias) val += bf16_to_fp32(bias[g * 4 + r]);
+        if (add) val += y[g * 4 + r];
+        y[g * 4 + r] = val;
+    }
+}
+
+static inline void matvec_q4x4(float* y, const BlockQ4x4* W, const BlockQ8* x_q8,
+                               const uint16_t* bias, int rows, int cols, int add) {
     int nb = cols / 32;
     int groups = rows / 4;
     int g;
@@ -544,14 +554,7 @@ static inline void matvec_q4x4(float* restrict y, const BlockQ4x4* restrict W, c
     } else {
         #pragma omp parallel for schedule(static)
         for (g = 0; g < groups; g++) {
-            float out4[4];
-            q4x4_dot4_scalar(W + (size_t)g * nb, x_q8, nb, out4);
-            for (int r = 0; r < 4; r++) {
-                float val = out4[r];
-                if (bias) val += bf16_to_fp32(bias[g * 4 + r]);
-                if (add) val += y[g * 4 + r];
-                y[g * 4 + r] = val;
-            }
+            matvec_q4x4_scalar_group(y, W, x_q8, bias, g, nb, add);
         }
     }
 }
@@ -791,18 +794,24 @@ int main(int argc, char** argv) {
         model_file_size = bundle_trailer.model_size;
         chat_mode = (bundle_trailer.flags == 0);
 
-        for (int a = 1; a < argc; a++) {
+        int a = 1;
+        while (a < argc) {
             if (strcmp(argv[a], "--chat") == 0 || strcmp(argv[a], "--interactive") == 0) {
                 chat_mode = true;
                 bench_mode = false;
+                a++;
             } else if (strcmp(argv[a], "--bench") == 0) {
                 bench_mode = true;
                 chat_mode = false;
-                if (a + 1 < argc && argv[a + 1][0] != '-') {
-                    bench_tokens = atoi(argv[++a]);
+                a++;
+                if (a < argc && argv[a][0] != '-') {
+                    bench_tokens = atoi(argv[a++]);
                 }
             } else if (strcmp(argv[a], "--vocab") == 0 && a + 1 < argc) {
-                vocab_path = argv[++a];
+                vocab_path = argv[a + 1];
+                a += 2;
+            } else {
+                a++;
             }
         }
     } else {
@@ -816,16 +825,22 @@ int main(int argc, char** argv) {
         }
 
         model_path = argv[arg_idx];
-        for (int a = arg_idx + 1; a < argc; a++) {
+        int a = arg_idx + 1;
+        while (a < argc) {
             if (strcmp(argv[a], "--chat") == 0 || strcmp(argv[a], "--interactive") == 0) {
                 chat_mode = true;
+                a++;
             } else if (strcmp(argv[a], "--bench") == 0) {
                 bench_mode = true;
-                if (a + 1 < argc && argv[a + 1][0] != '-') {
-                    bench_tokens = atoi(argv[++a]);
+                a++;
+                if (a < argc && argv[a][0] != '-') {
+                    bench_tokens = atoi(argv[a++]);
                 }
             } else if (strcmp(argv[a], "--vocab") == 0 && a + 1 < argc) {
-                vocab_path = argv[++a];
+                vocab_path = argv[a + 1];
+                a += 2;
+            } else {
+                a++;
             }
         }
     }

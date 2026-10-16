@@ -6239,8 +6239,9 @@ class Comandos(unittest.TestCase):
 
 class Erros(unittest.TestCase):
     def falha(self, codigo, trecho, linha=None, expr=False):
+        parse_fn = parse_expression if expr else parse
         with self.assertRaises(NatError) as cm:
-            parse_expression(codigo) if expr else parse(codigo)
+            parse_fn(codigo)
         self.assertIn(trecho, cm.exception.message)
         if linha: self.assertEqual(cm.exception.line, linha)
 
@@ -8407,9 +8408,10 @@ class TesteEscopoInterpretador(unittest.TestCase):
         )
         prog = parse(code)
         erros = [d.msg for d in SemanticAnalyzer().analyze(prog) if d.level == "erro"]
-        self.assertTrue(len(erros) > 0)
+        self.assertGreater(len(erros), 0)
+        interp = Interpreter()
         with self.assertRaises(RuntimeError):
-            Interpreter().run(prog)
+            interp.run(prog)
 
     def test_erro_runtime_rastreia_linha_e_coluna(self):
         # Erro de runtime reporta linha e coluna precisas

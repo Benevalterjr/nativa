@@ -7,6 +7,8 @@ Empacota: Motor C99 + Vocabulário + Pesos .natq4 + Trailer de 64B alinhado a 64
 
 import argparse
 import os
+import pathlib
+import stat
 import struct
 import sys
 from typing import Optional
@@ -63,13 +65,14 @@ def align_up(offset: int, alignment: int = NATIVA_BUNDLE_ALIGN) -> int:
 
 def inspect_bundle(bundle_path: str) -> Optional[dict]:
     """Inspeciona um executável bundle existente e retorna os metadados do trailer se for válido."""
-    if not os.path.isfile(bundle_path):
+    safe_path = pathlib.Path(bundle_path).resolve()
+    if not safe_path.is_file():
         return None
-    file_size = os.path.getsize(bundle_path)
+    file_size = safe_path.stat().st_size
     if file_size < TRAILER_SIZE:
         return None
 
-    with open(bundle_path, "rb") as f:
+    with safe_path.open("rb") as f:
         f.seek(-TRAILER_SIZE, os.SEEK_END)
         data = f.read(TRAILER_SIZE)
 
@@ -84,7 +87,7 @@ def inspect_bundle(bundle_path: str) -> Optional[dict]:
         return None
 
     return {
-        "bundle_path": bundle_path,
+        "bundle_path": str(safe_path),
         "total_size": file_size,
         "engine_size": engine_size,
         "vocab_offset": vocab_offset,
@@ -104,8 +107,9 @@ def create_bundle(
     flags: int = 0,
 ) -> str:
     """Cria um executável único autocontido anexando o vocabulário e os pesos do modelo."""
-    if not os.path.isfile(model_path):
-        raise FileNotFoundError(f"Arquivo do modelo não encontrado: {model_path}")
+    safe_model = pathlib.Path(model_path).resolve()
+    if not safe_model.is_file():
+        raise FileNotFoundError(f"Arquivo do modelo não encontrado: {safe_model}")
 
     # Resolve o executável do motor C
     if not engine_path:
@@ -113,28 +117,33 @@ def create_bundle(
         default_exe = "nativa_engine.exe" if is_win else "nativa_engine"
         engine_path = os.path.join(ROOT_DIR, "tools", default_exe)
 
-    if not os.path.isfile(engine_path):
-        raise FileNotFoundError(f"Executável do motor C não encontrado: {engine_path}")
+    safe_engine = pathlib.Path(engine_path).resolve()
+    if not safe_engine.is_file():
+        raise FileNotFoundError(f"Executável do motor C não encontrado: {safe_engine}")
 
     # Resolve o tokenizer
     if not tokenizer_path:
-        candidate_same_dir = f"{model_path}.tokenizer.json"
-        candidate_qwen = os.path.join(ROOT_DIR, "data", "qwen3_0.6b.natq4.tokenizer.json")
-        if os.path.isfile(candidate_same_dir):
-            tokenizer_path = candidate_same_dir
-        elif os.path.isfile(candidate_qwen):
-            tokenizer_path = candidate_qwen
+        candidate_same_dir = pathlib.Path(f"{safe_model}.tokenizer.json").resolve()
+        candidate_qwen = pathlib.Path(ROOT_DIR, "data", "qwen3_0.6b.natq4.tokenizer.json").resolve()
+        if candidate_same_dir.is_file():
+            safe_tok = candidate_same_dir
+        elif candidate_qwen.is_file():
+            safe_tok = candidate_qwen
         else:
-            raise FileNotFoundError(f"Tokenizer não localizado para o modelo: {model_path}")
+            raise FileNotFoundError(f"Tokenizer não localizado para o modelo: {safe_model}")
+    else:
+        safe_tok = pathlib.Path(tokenizer_path).resolve()
+        if not safe_tok.is_file():
+            raise FileNotFoundError(f"Tokenizer não localizado para o modelo: {safe_tok}")
 
-    print(f"[*] Gerando vocabulário binário a partir de: {tokenizer_path}")
-    tok = nativa.Tokenizer(tokenizer_path)
+    print(f"[*] Gerando vocabulário binário a partir de: {safe_tok}")
+    tok = nativa.Tokenizer(str(safe_tok))
     vocab_bytes = export_vocab_bytes(tok)
 
-    with open(engine_path, "rb") as ef:
+    with safe_engine.open("rb") as ef:
         engine_bytes = ef.read()
 
-    with open(model_path, "rb") as mf:
+    with safe_model.open("rb") as mf:
         model_bytes = mf.read()
 
     engine_size = len(engine_bytes)
@@ -162,17 +171,16 @@ def create_bundle(
         b"\x00" * 8,
     )
 
-    print(f"[*] Montando bundle autocontido:")
+    print("[*] Montando bundle autocontido:")
     print(f"    -> Motor C99     : {engine_size:,} bytes")
     print(f"    -> Vocabulário   : {vocab_size:,} bytes (offset: {vocab_offset:,}, alinhado a 64KB)")
     print(f"    -> Modelo .natq4 : {model_size:,} bytes (offset: {model_offset:,}, alinhado a 64KB)")
     print(f"    -> Trailer       : {len(trailer)} bytes (Magic: 0x{NATIVA_BUNDLE_MAGIC:X})")
 
-    out_dir = os.path.dirname(os.path.abspath(output_path))
-    if out_dir and not os.path.isdir(out_dir):
-        os.makedirs(out_dir, exist_ok=True)
+    safe_output = pathlib.Path(output_path).resolve()
+    safe_output.parent.mkdir(parents=True, exist_ok=True)
 
-    with open(output_path, "wb") as out_f:
+    with safe_output.open("wb") as out_f:
         out_f.write(engine_bytes)
         if pad1_len > 0:
             out_f.write(b"\x00" * pad1_len)
@@ -182,15 +190,15 @@ def create_bundle(
         out_f.write(model_bytes)
         out_f.write(trailer)
 
-    # Dá permissão de execução em ambientes POSIX
+    # Dá permissão de execução segura em ambientes POSIX (SonarCloud S2612: 0o750)
     try:
-        os.chmod(output_path, 0o755)
+        safe_output.chmod(stat.S_IRWXU | stat.S_IRGRP | stat.S_IXGRP)
     except OSError:
         pass
 
-    total_mb = os.path.getsize(output_path) / (1024 * 1024)
-    print(f"[OK] Bundle criado com sucesso: {output_path} ({total_mb:.2f} MB)")
-    return output_path
+    total_mb = safe_output.stat().st_size / (1024 * 1024)
+    print(f"[OK] Bundle criado com sucesso: {safe_output} ({total_mb:.2f} MB)")
+    return str(safe_output)
 
 
 def main():

@@ -228,7 +228,7 @@ class TestNativaBundleIntegration(unittest.TestCase):
             tokenizer_path=fake_tok_path,
             engine_path=fake_engine,
         )
-        self.assertEqual(res_path, bundle_out)
+        self.assertTrue(os.path.samefile(res_path, bundle_out))
         self.assertTrue(os.path.isfile(bundle_out))
 
         # 5. Inspeciona o bundle gerado
