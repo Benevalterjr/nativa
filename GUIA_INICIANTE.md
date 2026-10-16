@@ -267,7 +267,17 @@ nativa test
 
 ## 12. Empacotamento em Binário Único Autocontido (`nativa bundle`)
 
-Inspirado no conceito de executáveis portáteis de IA (como o *llamafile*), o Nativa permite empacotar a engine de inferência C99 e os pesos quantizados (`.natq4`) em um **único arquivo executável autossuficiente** (`.exe` no Windows ou binário ELF no Linux):
+Inspirado no conceito de executáveis portáteis de IA (como o *llamafile*), o Nativa permite empacotar a engine de inferência C99 e os pesos quantizados (`.natq4`) em um **único arquivo executável autossuficiente** (`.exe` no Windows ou binário ELF no Linux).
+
+> **Pré-requisitos:**
+> Como os arquivos de pesos são grandes e a engine C99 é compilada localmente, certifique-se de compilar a engine e obter o modelo antes do empacotamento:
+> ```powershell
+> # 1. Compilar o motor C99 (se ainda não existir em tools/)
+> gcc -O3 -fopenmp -mavx2 tools/nativa_engine.c -o tools/nativa_engine.exe
+>
+> # 2. Baixar os pesos oficiais do Qwen3 (release v0.1.0)
+> curl -L -o data/qwen3_0.6b.natq4 https://github.com/Benevalterjr/nativa/releases/download/v0.1.0/qwen3_0.6b.natq4
+> ```
 
 ```powershell
 # Cria um executável autocontido com o modelo embutido
@@ -292,9 +302,15 @@ nativa bundle --inspect qwen3-assistente.exe
 Para integrar o Nativa com ecossistemas existentes (LangChain, LlamaIndex, interfaces web ou clientes OpenAI), o projeto oferece um servidor FastAPI de alta performance:
 
 ```powershell
-# Inicia o servidor local na porta 8000
+# Inicia o servidor local na porta 8000 (utiliza a engine C e o modelo em data/)
 python tools/api_server.py --port 8000
 ```
+
+> **Alternativa com Docker:** Se preferir não compilar manualmente nem baixar o modelo à parte, o Dockerfile do projeto automatiza todo o setup e download:
+> ```bash
+> docker build -t nativa-api .
+> docker run -p 8000:8000 nativa-api
+> ```
 
 ### Principais Endpoints Disponíveis:
 - **OpenAI Chat Completions (`/v1/chat/completions`):** Suporta streaming de tokens em tempo real via Server-Sent Events (SSE) e modo de raciocínio profundo (`enable_thinking`).

@@ -288,7 +288,21 @@ C compiler. The test count can change as the project grows.
 Following the single-binary distribution concept (similar to *llamafile*),
 Nativa can bundle the compiled C99 inference engine and quantized model
 weights (`.natq4`) into a single standalone executable (`.exe` on Windows or
-an ELF binary on Linux):
+an ELF binary on Linux).
+
+> **Prerequisites:**
+> Large `.natq4` model weights and compiled C engine binaries are not committed to Git.
+> Before creating a bundle or starting the local API server:
+> ```bash
+> # 1. Compile the C99 inference engine (if not already compiled in tools/)
+> # Linux / macOS:
+> gcc -O3 -fopenmp -mavx2 tools/nativa_engine.c -o tools/nativa_engine -lm
+> # Windows PowerShell:
+> gcc -O3 -fopenmp -mavx2 tools/nativa_engine.c -o tools/nativa_engine.exe
+>
+> # 2. Download the official Qwen3 quantized weights (release v0.1.0)
+> curl -L -o data/qwen3_0.6b.natq4 https://github.com/Benevalterjr/nativa/releases/download/v0.1.0/qwen3_0.6b.natq4
+> ```
 
 ```bash
 # Package a model into a standalone binary
@@ -319,6 +333,13 @@ like LangChain, the repository provides an HTTP server based on FastAPI:
 # Start the API server on port 8000
 python tools/api_server.py --port 8000
 ```
+
+> **Docker alternative:**
+> To run the API without manually compiling the C engine or downloading weights:
+> ```bash
+> docker build -t nativa-api .
+> docker run -p 8000:8000 nativa-api
+> ```
 
 ### Supported endpoints:
 - **Chat completions (`/v1/chat/completions`):** Compatible with the OpenAI
