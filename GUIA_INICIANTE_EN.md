@@ -283,9 +283,56 @@ for basic interpreter examples. The last command runs the built-in validation
 suite; review its failures and skips, since native checks depend on the local
 C compiler. The test count can change as the project grows.
 
+## 12. Self-contained single-executable packaging (`nativa bundle`)
+
+Following the single-binary distribution concept (similar to *llamafile*),
+Nativa can bundle the compiled C99 inference engine and quantized model
+weights (`.natq4`) into a single standalone executable (`.exe` on Windows or
+an ELF binary on Linux):
+
+```bash
+# Package a model into a standalone binary
+python nativa.py bundle data/qwen3_0.6b_q4.natq4 -o qwen3-assistant.exe
+
+# Inspect bundle metadata, trailer, and alignment
+python nativa.py bundle --inspect qwen3-assistant.exe
+
+# Run directly without Python, external DLLs, or separate weight files
+./qwen3-assistant.exe "Explain the Nativa runtime in one paragraph."
+```
+
+### Key properties of Nativa bundles:
+- **Zero runtime dependencies:** Runs offline without Python, PyTorch, or
+  separate model files.
+- **Instant memory-mapped loading:** The embedded weights are strictly aligned
+  to 64 KB page boundaries, enabling zero-copy execution via `mmap` on POSIX
+  or `MapViewOfFile` on Windows.
+- **64-byte trailer:** The binary reads its own metadata and model offset
+  from a fixed 64-byte trailer at the end of the file (`NATBNDL1` magic).
+
+## 13. OpenAI-compatible API server and RAG (`tools/api_server.py`)
+
+For integrating Nativa models with existing workflows, frontends, or tools
+like LangChain, the repository provides an HTTP server based on FastAPI:
+
+```bash
+# Start the API server on port 8000
+python tools/api_server.py --port 8000
+```
+
+### Supported endpoints:
+- **Chat completions (`/v1/chat/completions`):** Compatible with the OpenAI
+  API format, supporting real-time Server-Sent Events (SSE) token streaming
+  and optional reasoning / thinking tokens (`enable_thinking`).
+- **Grounding and RAG (`/v1/rag/answer`):** Accepts a context string and a
+  question, returning answers grounded on the provided text.
+- **Interactive documentation:** Visit `http://localhost:8000/docs` for the
+  Swagger UI and pre-filled request examples.
+
 ## Next steps
 
 - [README](README.md): architecture and supported model workflows.
+- [Portuguese Guide](GUIA_INICIANTE.md): original Portuguese beginner guide.
 - [Models](models/): Mini LLM, Transformer, and Qwen examples.
-- [Tools](tools/): native inference, quantization, and research utilities.
+- [Tools](tools/): native inference, bundling, quantization, and research utilities.
 - [Contributing](CONTRIBUTING.md): development setup and contribution checks.
