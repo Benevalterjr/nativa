@@ -271,7 +271,7 @@ Inspirado no conceito de executáveis portáteis de IA (como o *llamafile*), o N
 
 ```powershell
 # Cria um executável autocontido com o modelo embutido
-nativa bundle data/qwen3_0.6b_q4.natq4 -o qwen3-assistente.exe
+nativa bundle data/qwen3_0.6b.natq4 -o qwen3-assistente.exe
 
 # Inspeciona metadados, trailer e alinhamento do bundle
 nativa bundle --inspect qwen3-assistente.exe

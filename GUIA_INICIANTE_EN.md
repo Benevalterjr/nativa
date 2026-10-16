@@ -292,7 +292,7 @@ an ELF binary on Linux):
 
 ```bash
 # Package a model into a standalone binary
-python nativa.py bundle data/qwen3_0.6b_q4.natq4 -o qwen3-assistant.exe
+python nativa.py bundle data/qwen3_0.6b.natq4 -o qwen3-assistant.exe
 
 # Inspect bundle metadata, trailer, and alignment
 python nativa.py bundle --inspect qwen3-assistant.exe
