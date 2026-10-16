@@ -257,7 +257,7 @@ nativa opencl
 ```
 
 ### Executar a Suíte de Validação
-Para rodar a bateria com os **87 testes automatizados** do compilador:
+Para rodar a bateria com os **mais de 100 testes automatizados** do compilador e runtime:
 
 ```powershell
 nativa test
@@ -265,9 +265,48 @@ nativa test
 
 ---
 
+## 12. Empacotamento em Binário Único Autocontido (`nativa bundle`)
+
+Inspirado no conceito de executáveis portáteis de IA (como o *llamafile*), o Nativa permite empacotar a engine de inferência C99 e os pesos quantizados (`.natq4`) em um **único arquivo executável autossuficiente** (`.exe` no Windows ou binário ELF no Linux):
+
+```powershell
+# Cria um executável autocontido com o modelo embutido
+nativa bundle data/qwen3_0.6b_q4.natq4 -o qwen3-assistente.exe
+
+# Inspeciona metadados, trailer e alinhamento do bundle
+nativa bundle --inspect qwen3-assistente.exe
+
+# Executa diretamente sem depender de Python, DLLs ou pesos externos
+./qwen3-assistente.exe "Explique o que é a linguagem Nativa em um parágrafo."
+```
+
+### Características do Bundle Nativo:
+- **Zero Dependências em Runtime:** Não requer Python, PyTorch ou arquivos adicionais; o executável carrega os tensores diretamente da própria imagem.
+- **Carregamento Instantâneo via `mmap`:** O modelo é alinhado estritamente em limites de página de 64 KB, permitindo mapeamento de memória zero-copy (`MapViewOfFile` no Windows / `mmap` no Linux).
+- **Trailer de 64 Bytes com Magic Check:** O executável localiza automaticamente o deslocamento dos tensores e metadados no final do arquivo (`NATBNDL1`).
+
+---
+
+## 13. Servidor de API OpenAI e RAG (`tools/api_server.py`)
+
+Para integrar o Nativa com ecossistemas existentes (LangChain, LlamaIndex, interfaces web ou clientes OpenAI), o projeto oferece um servidor FastAPI de alta performance:
+
+```powershell
+# Inicia o servidor local na porta 8000
+python tools/api_server.py --port 8000
+```
+
+### Principais Endpoints Disponíveis:
+- **OpenAI Chat Completions (`/v1/chat/completions`):** Suporta streaming de tokens em tempo real via Server-Sent Events (SSE) e modo de raciocínio profundo (`enable_thinking`).
+- **Endpoint Especializado em RAG (`/v1/rag/answer`):** Recebe contexto textual e uma pergunta, sintetizando respostas fundamentadas de baixa latência em CPU.
+- **Documentação Interativa (Swagger):** Acesse `http://localhost:8000/docs` para testar as requisições interativamente via navegador.
+
+---
+
 ## Próximos Passos
 
 Após este guia, explore:
 - [`README.md`](README.md): Documentação aprofundada da arquitetura e dos modelos suportados.
+- [`GUIA_INICIANTE_EN.md`](GUIA_INICIANTE_EN.md): English version of this guide.
 - [`models/`](models/): Implementações completas de modelos de linguagem (Mini LLM, Transformers e Qwen2.5).
-- [`tools/`](tools/): Motores de inferência nativa em C99 e utilitários de quantização.
+- [`tools/`](tools/): Motores de inferência nativa em C99, empacotador de bundles e utilitários de quantização.
