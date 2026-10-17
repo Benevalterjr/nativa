@@ -93,6 +93,18 @@ pip install -e ".[server]"
 python tools/api_server.py
 ```
 
+### Official Benchmarks & Performance
+
+Nativa includes a built-in reproducible benchmark suite measuring throughput (tokens/s), time-to-first-token (TTFT), WikiText-2 perplexity (PPL), and memory footprint:
+
+```bash
+# Run full automated benchmark suite
+python nativa.py bench --all
+```
+
+- 📊 [English Benchmark Report](BENCHMARKS_EN.md) — Throughput, PPL, and zero-shot reasoning evaluation.
+- 📊 [Relatório de Benchmarks em Português](BENCHMARKS.md) — Avaliação auditável completa.
+
 ---
 
 ## Project Structure
@@ -101,6 +113,9 @@ python tools/api_server.py
 nativa/
 ├── nativa.py                 # Compiler, interpreter, SafeTensors, AOT engine, CLI
 ├── GUIA_INICIANTE.md         # Beginner guide (Portuguese)
+├── GUIA_INICIANTE_EN.md      # Beginner guide (English)
+├── BENCHMARKS.md             # Official benchmark report (Portuguese)
+├── BENCHMARKS_EN.md          # Official benchmark report (English)
 ├── models/                   # Full model examples (.nat)
 │   ├── qwen2.5_completo.nat
 │   ├── mini_llm_mha_real.nat

@@ -350,8 +350,26 @@ python tools/api_server.py --port 8000
 - **Interactive documentation:** Visit `http://localhost:8000/docs` for the
   Swagger UI and pre-filled request examples.
 
+## 14. Official Performance & Perplexity Benchmarks (`nativa bench`)
+
+To evaluate and audit inference throughput (tokens/second), latency (TTFT), perplexity (PPL on WikiText-2), and RAM footprint (RSS):
+
+```bash
+# Run the complete automated benchmark suite
+python nativa.py bench --all
+
+# Or evaluate specific metrics
+python nativa.py bench --threads 1,2,4,8
+python nativa.py bench --ppl --ppl-tokens 512
+```
+
+See the full benchmark reports:
+- [`BENCHMARKS_EN.md`](BENCHMARKS_EN.md) (Official Benchmark Report in English)
+- [`BENCHMARKS.md`](BENCHMARKS.md) (Relatório Oficial em Português)
+
 ## Next steps
 
+- [Benchmarks (EN)](BENCHMARKS_EN.md): Official benchmark suite with live empirical metrics.
 - [README](README.md): architecture and supported model workflows.
 - [Portuguese Guide](GUIA_INICIANTE.md): original Portuguese beginner guide.
 - [Models](models/): Mini LLM, Transformer, and Qwen examples.

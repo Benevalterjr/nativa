@@ -783,6 +783,8 @@ int main(int argc, char** argv) {
     uint64_t model_offset = 0;
     uint64_t model_file_size = 0;
     const char* vocab_path = "data/qwen_vocab.bin";
+    const char* eval_tokens_path = NULL;
+    int custom_threads = 0;
     bool chat_mode = false;
     bool bench_mode = false;
     int bench_tokens = 25;
@@ -807,6 +809,12 @@ int main(int argc, char** argv) {
                 if (a < argc && argv[a][0] != '-') {
                     bench_tokens = atoi(argv[a++]);
                 }
+            } else if (strcmp(argv[a], "--threads") == 0 && a + 1 < argc) {
+                custom_threads = atoi(argv[a + 1]);
+                a += 2;
+            } else if (strcmp(argv[a], "--eval-tokens") == 0 && a + 1 < argc) {
+                eval_tokens_path = argv[a + 1];
+                a += 2;
             } else if (strcmp(argv[a], "--vocab") == 0 && a + 1 < argc) {
                 vocab_path = argv[a + 1];
                 a += 2;
@@ -820,7 +828,7 @@ int main(int argc, char** argv) {
             arg_idx = 2;
         }
         if (argc <= arg_idx) {
-            printf("Uso: nativa_engine [--] <modelo.natq4> [--chat] [--bench <N>] [--vocab <vocab.bin>]\n");
+            printf("Uso: nativa_engine [--] <modelo.natq4> [--chat] [--bench <N>] [--threads <N>] [--eval-tokens <arq>] [--vocab <vocab.bin>]\n");
             return 1;
         }
 
@@ -836,6 +844,12 @@ int main(int argc, char** argv) {
                 if (a < argc && argv[a][0] != '-') {
                     bench_tokens = atoi(argv[a++]);
                 }
+            } else if (strcmp(argv[a], "--threads") == 0 && a + 1 < argc) {
+                custom_threads = atoi(argv[a + 1]);
+                a += 2;
+            } else if (strcmp(argv[a], "--eval-tokens") == 0 && a + 1 < argc) {
+                eval_tokens_path = argv[a + 1];
+                a += 2;
             } else if (strcmp(argv[a], "--vocab") == 0 && a + 1 < argc) {
                 vocab_path = argv[a + 1];
                 a += 2;
@@ -850,6 +864,10 @@ int main(int argc, char** argv) {
     cpu_detect(&cpu);
     cpu_print_info(&cpu);
     cpu_apply_auto_tune(&cpu);
+    if (custom_threads > 0) {
+        omp_set_num_threads(custom_threads);
+        printf("  [OPENMP] Threads ajustadas manualmente para: %d\n", custom_threads);
+    }
     g_cpu_has_ssse3 = cpu.ssse3;
     if (!g_cpu_has_ssse3) {
         printf("  [NATIVA UNIVERSAL] Processador sem SSSE3 detectado. Modo escalar C99 ativo!\n");
@@ -987,6 +1005,66 @@ int main(int argc, char** argv) {
                 cur_seq_pos = 0;
                 continue;
             }
+            if (strncmp(line_buf, "EVAL_PPL_FILE", 13) == 0) {
+                char* fpath = line_buf + 13;
+                while (*fpath && (*fpath == ' ' || *fpath == '\t')) fpath++;
+                char* end_p = fpath + strlen(fpath) - 1;
+                while (end_p >= fpath && (*end_p == '\r' || *end_p == '\n' || *end_p == ' ' || *end_p == '\t')) {
+                    *end_p = '\0';
+                    end_p--;
+                }
+                FILE* tf = fopen(fpath, "r");
+                if (!tf) {
+                    printf("\n[PPL_ERROR falha ao abrir arquivo: %s]\n", fpath);
+                    fflush(stdout);
+                    continue;
+                }
+                cur_seq_pos = 0;
+                double t_ppl0 = timer_now();
+                int evaluated = 0;
+                int correct = 0;
+                double total_nll = 0.0;
+                int prev_tok = -1;
+                int cur_tok = 0;
+                while (fscanf(tf, "%d", &cur_tok) == 1 && cur_seq_pos < (int)hdr->max_seq_len - 1) {
+                    if (prev_tok != -1) {
+                        float max_l = -1e30f;
+                        for (int v = 0; v < sampling_vocab_size; v++) {
+                            if (g_arena.logits[v] > max_l) max_l = g_arena.logits[v];
+                        }
+                        float sum_exp = 0.0f;
+                        int best_v = 0;
+                        for (int v = 0; v < sampling_vocab_size; v++) {
+                            float exp_v = expf(g_arena.logits[v] - max_l);
+                            sum_exp += exp_v;
+                            if (g_arena.logits[v] > g_arena.logits[best_v]) best_v = v;
+                        }
+                        float target_l = (cur_tok >= 0 && cur_tok < sampling_vocab_size) ? g_arena.logits[cur_tok] : -1e30f;
+                        float log_prob = target_l - max_l - logf(sum_exp);
+                        total_nll -= (double)log_prob;
+                        if (best_v == cur_tok) correct++;
+                        if (evaluated < 64) {
+                            printf("[NLL_STEP %2d] id=%7d nll=%.4f best=%7d acc=%d\n",
+                                   evaluated, cur_tok, -log_prob, best_v, best_v == cur_tok);
+                            fflush(stdout);
+                        }
+                        evaluated++;
+                    }
+                    forward_token_universal(hdr, model_bytes, cur_tok, cur_seq_pos);
+                    cur_seq_pos++;
+                    prev_tok = cur_tok;
+                }
+                fclose(tf);
+                double ppl_sec = timer_now() - t_ppl0;
+                double mean_nll = (evaluated > 0) ? (total_nll / evaluated) : 0.0;
+                double ppl_val = exp(mean_nll);
+                double acc_val = (evaluated > 0) ? (100.0 * correct / evaluated) : 0.0;
+                double ppl_speed = (ppl_sec > 0.0) ? (evaluated / ppl_sec) : 0.0;
+                printf("\n[PPL_DONE tokens=%d nll=%.4f ppl=%.4f acc=%.2f time=%.3f speed=%.2f]\n",
+                       evaluated, mean_nll, ppl_val, acc_val, ppl_sec, ppl_speed);
+                fflush(stdout);
+                continue;
+            }
             if (strncmp(line_buf, "INPUT", 5) != 0) continue;
 
             char* ptr = line_buf + 5;
@@ -1027,6 +1105,122 @@ int main(int argc, char** argv) {
             fflush(stdout);
         }
         free(line_buf);
+    } else if (eval_tokens_path) {
+        FILE* tf = fopen(eval_tokens_path, "r");
+        if (!tf) {
+            fprintf(stderr, "[ERRO] Nao foi possivel abrir arquivo de tokens: %s\n", eval_tokens_path);
+            UNMAP_AND_CLOSE();
+            return 1;
+        }
+
+        int max_cap = 65536;
+        int* token_list = (int*)malloc(max_cap * sizeof(int));
+        if (!token_list) {
+            fprintf(stderr, "[ERRO] Falha ao alocar memoria para lista de tokens.\n");
+            fclose(tf);
+            UNMAP_AND_CLOSE();
+            return 1;
+        }
+        int total_tokens = 0;
+        int val = 0;
+        while (fscanf(tf, "%d", &val) == 1) {
+            if (total_tokens >= max_cap) {
+                max_cap *= 2;
+                int* new_list = (int*)realloc(token_list, max_cap * sizeof(int));
+                if (!new_list) break;
+                token_list = new_list;
+            }
+            token_list[total_tokens++] = val;
+        }
+        fclose(tf);
+
+        if (total_tokens < 2) {
+            fprintf(stderr, "[ERRO] Arquivo de tokens precisa de pelo menos 2 tokens para calcular PPL.\n");
+            free(token_list);
+            UNMAP_AND_CLOSE();
+            return 1;
+        }
+
+        int max_seq = (int)hdr->max_seq_len;
+        if (total_tokens > max_seq) {
+            printf("[AVISO] Truncando tokens para o limite de contexto do modelo (%d tokens).\n", max_seq);
+            total_tokens = max_seq;
+        }
+
+        printf("\n====================================================================\n");
+        printf("  [NATIVA BENCHMARK] AVALIACAO DE PERPLEXIDADE (WIKITEXT / NLL)\n");
+        printf("====================================================================\n");
+        printf("  Tokens no split   : %d\n", total_tokens);
+        printf("  Pares avaliados   : %d\n", total_tokens - 1);
+        printf("  Vocabulario ativo : %d\n", sampling_vocab_size);
+        printf("--------------------------------------------------------------------\n");
+
+        double t_ppl0 = timer_now();
+        int evaluated = 0;
+        int correct = 0;
+        double total_nll = 0.0;
+
+        for (int p = 0; p < total_tokens - 1; p++) {
+            int input_tok = token_list[p];
+            int target_tok = token_list[p + 1];
+
+            forward_token_universal(hdr, model_bytes, input_tok, p);
+
+            float max_l = -1e30f;
+            for (int v = 0; v < sampling_vocab_size; v++) {
+                if (g_arena.logits[v] > max_l) max_l = g_arena.logits[v];
+            }
+            float sum_exp = 0.0f;
+            int best_v = 0;
+            for (int v = 0; v < sampling_vocab_size; v++) {
+                float exp_v = expf(g_arena.logits[v] - max_l);
+                sum_exp += exp_v;
+                if (g_arena.logits[v] > g_arena.logits[best_v]) best_v = v;
+            }
+            float target_l = (target_tok >= 0 && target_tok < sampling_vocab_size) ? g_arena.logits[target_tok] : -1e30f;
+            float log_prob = target_l - max_l - logf(sum_exp);
+            total_nll -= (double)log_prob;
+            if (best_v == target_tok) correct++;
+            evaluated++;
+
+            if (p < 512) {
+                printf("[NLL_NATIVA] pos=%3d input=%7d target=%7d nll=%.4f best=%7d\n",
+                       p, input_tok, target_tok, -log_prob, best_v);
+                fflush(stdout);
+            }
+
+            if ((p + 1) % 50 == 0 || p == total_tokens - 2) {
+                double cur_sec = timer_now() - t_ppl0;
+                double cur_speed = (cur_sec > 0.0) ? (evaluated / cur_sec) : 0.0;
+                double cur_nll = total_nll / evaluated;
+                double cur_ppl = exp(cur_nll);
+                double cur_acc = 100.0 * correct / evaluated;
+                printf("  [%4d/%4d] NLL: %.4f | PPL: %.2f | Top-1: %.2f%% | Speed: %.1f tok/s\r",
+                       evaluated, total_tokens - 1, cur_nll, cur_ppl, cur_acc, cur_speed);
+                fflush(stdout);
+            }
+        }
+        printf("\n--------------------------------------------------------------------\n");
+
+        double ppl_sec = timer_now() - t_ppl0;
+        double mean_nll = (evaluated > 0) ? (total_nll / evaluated) : 0.0;
+        double ppl_val = exp(mean_nll);
+        double acc_val = (evaluated > 0) ? (100.0 * correct / evaluated) : 0.0;
+        double ppl_speed = (ppl_sec > 0.0) ? (evaluated / ppl_sec) : 0.0;
+
+        printf("  [RESULTADO OFICIAL DE PERPLEXIDADE]:\n");
+        printf("    Tokens avaliados : %d\n", evaluated);
+        printf("    NLL Medio        : %.4f nats/token\n", mean_nll);
+        printf("    Perplexidade PPL : \x1b[1;32m%.4f\x1b[0m\n", ppl_val);
+        printf("    Acuracia Top-1   : %.2f%%\n", acc_val);
+        printf("    Tempo total      : %.3f s\n", ppl_sec);
+        printf("    Throughput       : %.2f tokens/s\n", ppl_speed);
+        printf("====================================================================\n");
+        printf("[PPL_DONE tokens=%d nll=%.4f ppl=%.4f acc=%.2f time=%.3f speed=%.2f]\n",
+               evaluated, mean_nll, ppl_val, acc_val, ppl_sec, ppl_speed);
+        fflush(stdout);
+
+        free(token_list);
     } else {
         // Benchmark mode
         int default_prompt[] = { 151644, 8948, 198, 2610, 525, 264, 10950, 17847, 13, 151645, 198, 151644, 77091, 198 };

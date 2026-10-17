@@ -319,9 +319,29 @@ python tools/api_server.py --port 8000
 
 ---
 
+## 14. Benchmarks Oficiais de Performance e Perplexidade (`nativa bench`)
+
+Para auditar empiricamente o desempenho de velocidade (tokens/segundo), latência (TTFT), perplexidade (PPL no WikiText-2) e consumo de memória (RSS):
+
+```powershell
+# Executa a suíte completa automatizada
+nativa bench --all
+
+# Ou avalia métricas específicas
+nativa bench --threads 1,2,4,8
+nativa bench --ppl --ppl-tokens 512
+```
+
+Consulte os relatórios completos e auditáveis:
+- [`BENCHMARKS.md`](BENCHMARKS.md) (Relatório Oficial em Português)
+- [`BENCHMARKS_EN.md`](BENCHMARKS_EN.md) (Official Benchmark Report in English)
+
+---
+
 ## Próximos Passos
 
 Após este guia, explore:
+- [`BENCHMARKS.md`](BENCHMARKS.md): Relatório oficial com métricas empíricas de velocidade e perplexidade.
 - [`README.md`](README.md): Documentação aprofundada da arquitetura e dos modelos suportados.
 - [`GUIA_INICIANTE_EN.md`](GUIA_INICIANTE_EN.md): English version of this guide.
 - [`models/`](models/): Implementações completas de modelos de linguagem (Mini LLM, Transformers e Qwen2.5).

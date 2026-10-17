@@ -49,3 +49,8 @@ data/*.parquet
 .DS_Store
 Thumbs.db
 desktop.ini
+
+# Ferramentas Externas e Testes Locais
+tools/llama_cpp/
+chat.html
+

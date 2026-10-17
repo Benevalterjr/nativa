@@ -118,12 +118,13 @@ static inline void cpu_apply_auto_tune(const CPUInfo* cpu) {
 #ifdef _WIN32
     DWORD wait_len = GetEnvironmentVariableA("OMP_WAIT_POLICY", NULL, 0);
     if (!wait_len) SetEnvironmentVariableA("OMP_WAIT_POLICY", "PASSIVE");
-    DWORD env_len = GetEnvironmentVariableA("OMP_NUM_THREADS", NULL, 0);
-    int threads = env_len ? omp_get_max_threads() : cpu->recommended_omp_threads;
+    char env_buf[32] = {0};
+    DWORD env_len = GetEnvironmentVariableA("OMP_NUM_THREADS", env_buf, (DWORD)sizeof(env_buf));
+    int threads = (env_len > 0) ? atoi(env_buf) : cpu->recommended_omp_threads;
 #else
     if (!getenv("OMP_WAIT_POLICY")) setenv("OMP_WAIT_POLICY", "PASSIVE", 1);
     char* env_threads = getenv("OMP_NUM_THREADS");
-    int threads = env_threads ? omp_get_max_threads() : cpu->recommended_omp_threads;
+    int threads = env_threads ? atoi(env_threads) : cpu->recommended_omp_threads;
 #endif
     if (threads < 1) threads = cpu->recommended_omp_threads;
     omp_set_num_threads(threads);
