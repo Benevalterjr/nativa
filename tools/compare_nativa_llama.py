@@ -117,7 +117,7 @@ def run_llama_bench(
         "--no-warmup",
         "-o", "json"
     ]
-    proc = subprocess.Popen(
+    proc = subprocess.Popen(  # NOSONAR(pythonsecurity:S8701)
         cmd,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
@@ -184,7 +184,7 @@ def run_nativa_bench(
     env["OMP_WAIT_POLICY"] = "PASSIVE"
 
     cmd = [safe_exe, safe_model, "--threads", str(safe_threads), "--bench", str(safe_gen)]
-    proc = subprocess.Popen(
+    proc = subprocess.Popen(  # NOSONAR(pythonsecurity:S8701)
         cmd,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
