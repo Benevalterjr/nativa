@@ -96,23 +96,74 @@ def strip_ansi(text: str) -> str:
     return re.sub(r"\x1b\[[0-9;]*[a-zA-Z]", "", text)
 
 
+def validate_safe_path(
+    path: str,
+    must_exist: bool = True,
+    allowed_exts: Optional[Tuple[str, ...]] = None
+) -> str:
+    """Valida e sanitiza caminhos contra Path Traversal e Injeção de Argumentos (CWE-78/CWE-88/CWE-22)."""
+    if not path or not isinstance(path, str):
+        raise ValueError("Caminho inválido ou nulo.")
+    cleaned = path.strip()
+    if cleaned.startswith("-"):
+        raise ValueError(f"Argumento com formato de flag detectado como caminho: {path}")
+    if any(c in cleaned for c in ("\0", "\r", "\n")):
+        raise ValueError("Caminho contém caracteres de controle ilegais.")
+
+    resolved = os.path.abspath(os.path.realpath(cleaned))
+    if allowed_exts:
+        valid_ext = any(resolved.lower().endswith(ext.lower()) for ext in allowed_exts)
+        if not valid_ext:
+            raise ValueError(f"Extensão do arquivo não permitida: {resolved} (permitidas: {allowed_exts})")
+    if must_exist and not os.path.isfile(resolved):
+        raise FileNotFoundError(f"Arquivo não encontrado ou inválido: {resolved}")
+    return resolved
+
+
+def validate_safe_output_path(
+    path: str,
+    allowed_exts: Optional[Tuple[str, ...]] = None
+) -> str:
+    """Valida caminho de saída contra Path Traversal e caracteres ilegais (CWE-22)."""
+    if not path or not isinstance(path, str):
+        raise ValueError("Caminho de saída inválido ou nulo.")
+    cleaned = path.strip()
+    if cleaned.startswith("-"):
+        raise ValueError(f"Argumento com formato de flag detectado como caminho de saída: {path}")
+    if any(c in cleaned for c in ("\0", "\r", "\n")):
+        raise ValueError("Caminho de saída contém caracteres de controle ilegais.")
+
+    resolved = os.path.abspath(os.path.realpath(cleaned))
+    if allowed_exts:
+        valid_ext = any(resolved.lower().endswith(ext.lower()) for ext in allowed_exts)
+        if not valid_ext:
+            raise ValueError(f"Extensão do arquivo de saída não permitida: {resolved} (permitidas: {allowed_exts})")
+    parent = os.path.dirname(resolved)
+    if parent and not os.path.exists(parent):
+        os.makedirs(parent, exist_ok=True)
+    return resolved
+
+
 # ----------------------------------------------------------------------------
 # 2. Informações de Hardware e Ambiente
 # ----------------------------------------------------------------------------
 
 def get_system_specs(engine_path: str, model_path: str) -> Dict[str, Any]:
+    safe_engine = validate_safe_path(engine_path, must_exist=True, allowed_exts=(".exe", "") if sys.platform == "win32" else None)
+    safe_model = validate_safe_path(model_path, must_exist=True, allowed_exts=(".natq4",))
+
     specs: Dict[str, Any] = {
         "os": f"{platform.system()} {platform.release()} ({platform.machine()})",
         "python": platform.python_version(),
         "cpu_name": platform.processor() or "CPU x86_64",
         "cpu_cores": os.cpu_count() or 4,
-        "engine_size_bytes": os.path.getsize(engine_path) if os.path.isfile(engine_path) else 0,
-        "model_size_bytes": os.path.getsize(model_path) if os.path.isfile(model_path) else 0,
+        "engine_size_bytes": os.path.getsize(safe_engine) if os.path.isfile(safe_engine) else 0,
+        "model_size_bytes": os.path.getsize(safe_model) if os.path.isfile(safe_model) else 0,
     }
 
-    # Executa o engine com --bench 1 para extrair a detecção de CPU do próprio binário
+    # Executa o engine com --bench 1 para extrair a detecção de CPU do próprio binário com shell=False
     try:
-        res = subprocess.run([engine_path, model_path, "--bench", "1"], capture_output=True, text=True, encoding="utf-8")
+        res = subprocess.run([safe_engine, safe_model, "--bench", "1"], capture_output=True, text=True, encoding="utf-8", shell=False)
         clean_out = strip_ansi(res.stdout)
         m_proc = re.search(r"Processador\s*:\s*(.+)", clean_out)
         if m_proc:
@@ -148,10 +199,14 @@ def run_thread_scaling_benchmark(
     thread_counts: List[int],
     bench_tokens: int = 32
 ) -> List[Dict[str, Any]]:
+    safe_engine = validate_safe_path(engine_path, must_exist=True, allowed_exts=(".exe", "") if sys.platform == "win32" else None)
+    safe_model = validate_safe_path(model_path, must_exist=True, allowed_exts=(".natq4",))
+    safe_bench_tokens = max(1, min(int(bench_tokens), 65536))
+
     print("\n" + "=" * 76)
     print("  [1/4] BENCHMARK DE ESCALABILIDADE DE THREADS E THROUGHPUT")
     print("=" * 76)
-    print(f"  Modelo: {os.path.basename(model_path)} | Tokens gerados por teste: {bench_tokens}")
+    print(f"  Modelo: {os.path.basename(safe_model)} | Tokens gerados por teste: {safe_bench_tokens}")
     print(f"  Threads avaliadas: {thread_counts}")
     print("-" * 76)
 
@@ -159,18 +214,20 @@ def run_thread_scaling_benchmark(
     base_decode_speed = 0.0
 
     for idx, threads in enumerate(thread_counts):
+        safe_threads = max(1, min(int(threads), 256))
         env = os.environ.copy()
-        env["OMP_NUM_THREADS"] = str(threads)
+        env["OMP_NUM_THREADS"] = str(safe_threads)
         env["OMP_WAIT_POLICY"] = "PASSIVE"
 
         t_start = time.perf_counter()
         proc = subprocess.Popen(
-            [engine_path, model_path, "--threads", str(threads), "--bench", str(bench_tokens)],
+            [safe_engine, safe_model, "--threads", str(safe_threads), "--bench", str(safe_bench_tokens)],
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
             encoding="utf-8",
-            env=env
+            env=env,
+            shell=False
         )
 
         peak_rss = 0
@@ -244,37 +301,38 @@ def run_wikitext_perplexity_benchmark(
     max_tokens: int = 512,
     threads: int = 4
 ) -> Dict[str, Any]:
+    safe_engine = validate_safe_path(engine_path, must_exist=True, allowed_exts=(".exe", "") if sys.platform == "win32" else None)
+    safe_model = validate_safe_path(model_path, must_exist=True, allowed_exts=(".natq4",))
+    safe_tokenizer = validate_safe_path(tokenizer_path, must_exist=True, allowed_exts=(".json",))
+    safe_corpus = validate_safe_path(wikitext_corpus_path, must_exist=True, allowed_exts=(".txt", ".raw", ".json"))
+    safe_max_tokens = max(2, min(int(max_tokens), 1000000))
+    safe_threads = max(1, min(int(threads), 256))
+
     print("\n" + "=" * 76)
     print("  [2/4] AVALIAÇÃO DE QUALIDADE E PERPLEXIDADE (WikiText-2 Test Set)")
     print("=" * 76)
-
-    if not os.path.isfile(wikitext_corpus_path):
-        raise FileNotFoundError(f"Arquivo WikiText não encontrado: {wikitext_corpus_path}")
-    if not os.path.isfile(tokenizer_path):
-        raise FileNotFoundError(f"Tokenizer não encontrado: {tokenizer_path}")
-
-    print(f"  Corpus     : {wikitext_corpus_path} ({os.path.getsize(wikitext_corpus_path) / 1024:.1f} KB)")
-    print(f"  Tokenizer  : {os.path.basename(tokenizer_path)}")
-    print(f"  Limite PPL : {max_tokens} tokens causais | Threads: {threads}")
+    print(f"  Corpus     : {safe_corpus} ({os.path.getsize(safe_corpus) / 1024:.1f} KB)")
+    print(f"  Tokenizer  : {os.path.basename(safe_tokenizer)}")
+    print(f"  Limite PPL : {safe_max_tokens} tokens causais | Threads: {safe_threads}")
     print("-" * 76)
 
-    tok = nativa.Tokenizer(tokenizer_path)
-    with open(wikitext_corpus_path, "r", encoding="utf-8") as f:
-        raw_text = f.read(max_tokens * 6)
+    tok = nativa.Tokenizer(safe_tokenizer)
+    with open(safe_corpus, "r", encoding="utf-8") as f:
+        raw_text = f.read(safe_max_tokens * 6)
 
     encoded = tok.encode(raw_text)
     token_list = encoded.tolist() if isinstance(encoded, nativa.Tensor) else list(encoded)
-    eval_tokens = token_list[:max_tokens]
+    eval_tokens = token_list[:safe_max_tokens]
 
     tmp_tokens = tempfile.NamedTemporaryFile(prefix="nativa_ppl_", suffix=".txt", delete=False)
-    tmp_path = tmp_tokens.name
+    tmp_path = validate_safe_output_path(tmp_tokens.name, allowed_exts=(".txt",))
     with open(tmp_path, "w", encoding="ascii") as f:
         f.write(" ".join(map(str, eval_tokens)))
     tmp_tokens.close()
 
     try:
-        cmd = [engine_path, model_path, "--threads", str(threads), "--eval-tokens", tmp_path]
-        res = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8")
+        cmd = [safe_engine, safe_model, "--threads", str(safe_threads), "--eval-tokens", tmp_path]
+        res = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", shell=False)
         clean_out = strip_ansi(res.stdout)
 
         m_res = re.search(r"\[PPL_DONE tokens=(\d+)\s+nll=([0-9.]+)\s+ppl=([0-9.]+)\s+acc=([0-9.]+)\s+time=([0-9.]+)\s+speed=([0-9.]+)\]", clean_out)
@@ -381,13 +439,18 @@ def run_qualitative_eval_benchmark(
     tokenizer_path: str,
     threads: int = 4
 ) -> List[Dict[str, Any]]:
+    safe_engine = validate_safe_path(engine_path, must_exist=True, allowed_exts=(".exe", "") if sys.platform == "win32" else None)
+    safe_model = validate_safe_path(model_path, must_exist=True, allowed_exts=(".natq4",))
+    safe_tokenizer = validate_safe_path(tokenizer_path, must_exist=True, allowed_exts=(".json",))
+    safe_threads = max(1, min(int(threads), 256))
+
     print("\n" + "=" * 76)
     print("  [3/4] AVALIAÇÃO QUALITATIVA BILÍNGUE (Zero-Shot QA, Raciocínio, Código)")
     print("=" * 76)
 
-    tok = nativa.Tokenizer(tokenizer_path)
+    tok = nativa.Tokenizer(safe_tokenizer)
     vocab_tmp = tempfile.NamedTemporaryFile(prefix="nativa_bench_vocab_", suffix=".bin", delete=False)
-    vocab_path = vocab_tmp.name
+    vocab_path = validate_safe_output_path(vocab_tmp.name, allowed_exts=(".bin",))
     vocab_tmp.close()
 
     try:
@@ -397,11 +460,11 @@ def run_qualitative_eval_benchmark(
         return []
 
     env = os.environ.copy()
-    env["OMP_NUM_THREADS"] = str(threads)
+    env["OMP_NUM_THREADS"] = str(safe_threads)
     env["OMP_WAIT_POLICY"] = "PASSIVE"
 
     proc = subprocess.Popen(
-        [engine_path, model_path, "--chat", "--vocab", vocab_path, "--threads", str(threads)],
+        [safe_engine, safe_model, "--chat", "--vocab", vocab_path, "--threads", str(safe_threads)],
         stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
@@ -409,6 +472,7 @@ def run_qualitative_eval_benchmark(
         encoding="utf-8",
         bufsize=0,
         env=env,
+        shell=False
     )
 
     while True:
@@ -790,23 +854,26 @@ def main() -> int:
     parser.add_argument("--json-output", default=None, help="Caminho para salvar os resultados brutos em JSON")
     args = parser.parse_args()
 
-    model_path = os.path.abspath(args.model)
-    engine_path = os.path.abspath(args.engine)
-    corpus_path = os.path.abspath(args.corpus)
-
-    if not os.path.isfile(model_path):
-        print(f"[ERRO] Arquivo de modelo não encontrado: {model_path}", file=sys.stderr)
-        return 1
-    if not os.path.isfile(engine_path):
-        print(f"[ERRO] Executável do motor não encontrado: {engine_path}", file=sys.stderr)
+    try:
+        model_path = validate_safe_path(args.model, must_exist=True, allowed_exts=(".natq4",))
+        engine_path = validate_safe_path(args.engine, must_exist=True, allowed_exts=(".exe", "") if sys.platform == "win32" else None)
+        corpus_path = validate_safe_path(args.corpus, must_exist=True, allowed_exts=(".txt", ".raw", ".json"))
+    except (ValueError, FileNotFoundError) as exc:
+        print(f"[ERRO] Parâmetro de entrada inválido: {exc}", file=sys.stderr)
         return 1
 
     # Detecta tokenizer
     tokenizer_path = args.tokenizer
-    if not tokenizer_path:
+    if tokenizer_path:
+        try:
+            tokenizer_path = validate_safe_path(tokenizer_path, must_exist=True, allowed_exts=(".json",))
+        except (ValueError, FileNotFoundError) as exc:
+            print(f"[ERRO] Tokenizer especificado inválido: {exc}", file=sys.stderr)
+            return 1
+    else:
         for cand in [model_path + ".tokenizer.json", os.path.join(ROOT_DIR, "data", "tokenizer_qwen.json")]:
             if os.path.isfile(cand):
-                tokenizer_path = cand
+                tokenizer_path = validate_safe_path(cand, must_exist=True, allowed_exts=(".json",))
                 break
     if not tokenizer_path or not os.path.isfile(tokenizer_path):
         print(f"[ERRO] Tokenizer não encontrado para o modelo {model_path}", file=sys.stderr)
@@ -867,9 +934,10 @@ def main() -> int:
             "qualitative": qual_results,
             "timestamp": time.time(),
         }
-        with open(args.json_output, "w", encoding="utf-8") as f:
+        safe_json = validate_safe_output_path(args.json_output, allowed_exts=(".json",))
+        with open(safe_json, "w", encoding="utf-8") as f:
             json.dump(full_report, f, indent=2, ensure_ascii=False)
-        print(f"[OK] Dados JSON exportados para: {args.json_output}")
+        print(f"[OK] Dados JSON exportados para: {safe_json}")
 
     print("\n[OK] Benchmark Suite concluída com sucesso!")
     return 0

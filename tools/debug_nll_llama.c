@@ -1,3 +1,4 @@
+#define _CRT_SECURE_NO_WARNINGS
 #include <windows.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -54,11 +55,19 @@ int main(int argc, char** argv) {
     pfn_llama_get_logits_ith llama_get_logits_ith = (pfn_llama_get_logits_ith)GetProcAddress(hDll, "llama_get_logits_ith");
     pfn_llama_n_vocab llama_n_vocab = (pfn_llama_n_vocab)GetProcAddress(hDll, "llama_n_vocab");
 
-    HMODULE hGgml = LoadLibraryA("tools/llama_cpp/ggml.dll");
+    char abs_ggml[MAX_PATH];
+    GetFullPathNameA("tools/llama_cpp/ggml.dll", MAX_PATH, abs_ggml, NULL);
+    HMODULE hGgml = LoadLibraryA(abs_ggml);
     if (hGgml) {
+        typedef void (*pfn_ggml_backend_load_all)(void);
         typedef void (*pfn_ggml_backend_load_all_from_path)(const char*);
-        pfn_ggml_backend_load_all_from_path ggml_load = (pfn_ggml_backend_load_all_from_path)GetProcAddress(hGgml, "ggml_backend_load_all_from_path");
-        if (ggml_load) ggml_load(abs_dir);
+        pfn_ggml_backend_load_all ggml_load_all = (pfn_ggml_backend_load_all)GetProcAddress(hGgml, "ggml_backend_load_all");
+        pfn_ggml_backend_load_all_from_path ggml_load_path = (pfn_ggml_backend_load_all_from_path)GetProcAddress(hGgml, "ggml_backend_load_all_from_path");
+        if (ggml_load_path) {
+            ggml_load_path(abs_dir);
+        } else if (ggml_load_all) {
+            ggml_load_all();
+        }
     }
 
     llama_backend_init();
@@ -102,22 +111,28 @@ int main(int argc, char** argv) {
         fprintf(stderr, "Erro ao abrir tokens: %s\n", tokens_path);
         return 1;
     }
-    int tokens[4096];
+    int tokens[4096] = {0};
     int count = 0;
     while (count < 4096 && fscanf(f, "%d", &tokens[count]) == 1) {
         count++;
     }
     fclose(f);
 
+    if (count < 2) {
+        fprintf(stderr, "Erro: Arquivo contem tokens insuficientes para avaliacao (count=%d)\n", count);
+        return 1;
+    }
+
     if (max_tokens > count) max_tokens = count;
     printf("Tokens carregados: %d | Avaliando primeiros: %d\n", count, max_tokens);
 
     // Batch de 1 token
     typedef void (*fn_batch_init)(llama_batch*, int32_t, int32_t, int32_t);
-    llama_batch batch = {0};
+    llama_batch batch;
+    memset(&batch, 0, sizeof(batch));
     ((fn_batch_init)llama_batch_init)(&batch, 1, 0, 1);
 
-    for (int t = 0; t < max_tokens - 1; t++) {
+    for (int t = 0; t < max_tokens - 1 && t + 1 < count; t++) {
         batch.n_tokens = 1;
         batch.token[0] = tokens[t];
         batch.pos[0] = t;
@@ -153,6 +168,10 @@ int main(int argc, char** argv) {
         printf("[NLL_LLAMA] pos=%3d input=%7d target=%7d nll=%.4f best=%7d\n",
                t, tokens[t], target, nll, best_v);
         fflush(stdout);
+    }
+
+    if (llama_batch_free) {
+        llama_batch_free(batch);
     }
 
     return 0;

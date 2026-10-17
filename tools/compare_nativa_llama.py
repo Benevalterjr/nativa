@@ -69,6 +69,30 @@ def strip_ansi(text: str) -> str:
     return re.sub(r"\x1b\[[0-9;]*[a-zA-Z]", "", text)
 
 
+def validate_safe_path(
+    path: str,
+    must_exist: bool = True,
+    allowed_exts: Optional[Tuple[str, ...]] = None
+) -> str:
+    """Valida e sanitiza caminhos contra Path Traversal e Injeção de Argumentos (CWE-78/CWE-88/CWE-22)."""
+    if not path or not isinstance(path, str):
+        raise ValueError("Caminho inválido ou nulo.")
+    cleaned = path.strip()
+    if cleaned.startswith("-"):
+        raise ValueError(f"Argumento com formato de flag detectado como caminho: {path}")
+    if any(c in cleaned for c in ("\0", "\r", "\n")):
+        raise ValueError("Caminho contém caracteres de controle ilegais.")
+    
+    resolved = os.path.abspath(os.path.realpath(cleaned))
+    if allowed_exts:
+        valid_ext = any(resolved.lower().endswith(ext.lower()) for ext in allowed_exts)
+        if not valid_ext:
+            raise ValueError(f"Extensão do arquivo não permitida: {resolved} (permitidas: {allowed_exts})")
+    if must_exist and not os.path.isfile(resolved):
+        raise FileNotFoundError(f"Arquivo não encontrado ou inválido: {resolved}")
+    return resolved
+
+
 def run_llama_bench(
     llama_bench_exe: str,
     gguf_path: str,
@@ -76,25 +100,37 @@ def run_llama_bench(
     prompt_tokens: int = 512,
     gen_tokens: int = 128
 ) -> Dict[str, float]:
-    """Executa o llama-bench oficial e extrai métricas de prefill e decode."""
+    """Executa o llama-bench oficial e extrai métricas de prefill e decode com sanitização completa."""
+    safe_exe = validate_safe_path(llama_bench_exe, must_exist=True, allowed_exts=(".exe", "") if sys.platform == "win32" else None)
+    safe_model = validate_safe_path(gguf_path, must_exist=True, allowed_exts=(".gguf",))
+    safe_threads = max(1, min(int(threads), 256))
+    safe_prompt = max(1, min(int(prompt_tokens), 65536))
+    safe_gen = max(1, min(int(gen_tokens), 65536))
+
     cmd = [
-        llama_bench_exe,
-        "-m", gguf_path,
-        "-p", str(prompt_tokens),
-        "-n", str(gen_tokens),
-        "-t", str(threads),
+        safe_exe,
+        "-m", safe_model,
+        "-p", str(safe_prompt),
+        "-n", str(safe_gen),
+        "-t", str(safe_threads),
         "-r", "2",
         "--no-warmup",
         "-o", "json"
     ]
-    t0 = time.perf_counter()
-    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding="utf-8")
+    proc = subprocess.Popen(
+        cmd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        encoding="utf-8",
+        shell=False
+    )
     peak_rss = 0.0
     while proc.poll() is None:
         rss = get_peak_rss_mb(proc.pid)
         if rss > peak_rss: peak_rss = rss
         time.sleep(0.02)
-    stdout, stderr = proc.communicate()
+    stdout, _ = proc.communicate()
     final_rss = get_peak_rss_mb(proc.pid)
     if final_rss > peak_rss: peak_rss = final_rss
 
@@ -112,11 +148,17 @@ def run_llama_bench(
             elif n_gen > 0:
                 decode_tok_s = avg_ts
     except Exception:
-        # Fallback de parsing regex se json contiver logs extras
-        m_pp = re.search(r"pp\s+(\d+)\s+.*?\s+([0-9.]+)\s*±", stdout)
-        m_tg = re.search(r"tg\s+(\d+)\s+.*?\s+([0-9.]+)\s*±", stdout)
-        if m_pp: prefill_tok_s = float(m_pp.group(2))
-        if m_tg: decode_tok_s = float(m_tg.group(2))
+        # Fallback linear por linha sem backtracking superlinear
+        for line in stdout.splitlines():
+            line_str = line.strip()
+            if not prefill_tok_s and "pp" in line_str and "±" in line_str:
+                m_pp = re.search(r"\bpp\s+(\d+)[^±\n]+?([0-9.]+)\s*±", line_str)
+                if m_pp:
+                    prefill_tok_s = float(m_pp.group(2))
+            if not decode_tok_s and "tg" in line_str and "±" in line_str:
+                m_tg = re.search(r"\btg\s+(\d+)[^±\n]+?([0-9.]+)\s*±", line_str)
+                if m_tg:
+                    decode_tok_s = float(m_tg.group(2))
 
     return {
         "prefill_tok_s": round(prefill_tok_s, 2),
@@ -131,19 +173,32 @@ def run_nativa_bench(
     threads: int,
     gen_tokens: int = 128
 ) -> Dict[str, float]:
-    """Executa o nativa_engine e extrai throughput de prefill e decode."""
+    """Executa o nativa_engine e extrai throughput de prefill e decode com sanitização completa."""
+    safe_exe = validate_safe_path(nativa_engine_exe, must_exist=True, allowed_exts=(".exe", "") if sys.platform == "win32" else None)
+    safe_model = validate_safe_path(natq4_path, must_exist=True, allowed_exts=(".natq4",))
+    safe_threads = max(1, min(int(threads), 256))
+    safe_gen = max(1, min(int(gen_tokens), 65536))
+
     env = os.environ.copy()
-    env["OMP_NUM_THREADS"] = str(threads)
+    env["OMP_NUM_THREADS"] = str(safe_threads)
     env["OMP_WAIT_POLICY"] = "PASSIVE"
 
-    cmd = [nativa_engine_exe, natq4_path, "--threads", str(threads), "--bench", str(gen_tokens)]
-    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding="utf-8", env=env)
+    cmd = [safe_exe, safe_model, "--threads", str(safe_threads), "--bench", str(safe_gen)]
+    proc = subprocess.Popen(
+        cmd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        encoding="utf-8",
+        env=env,
+        shell=False
+    )
     peak_rss = 0.0
     while proc.poll() is None:
         rss = get_peak_rss_mb(proc.pid)
         if rss > peak_rss: peak_rss = rss
         time.sleep(0.02)
-    stdout, stderr = proc.communicate()
+    stdout, _ = proc.communicate()
     final_rss = get_peak_rss_mb(proc.pid)
     if final_rss > peak_rss: peak_rss = final_rss
 
@@ -179,15 +234,20 @@ def main():
     parser.add_argument("--tokens", type=int, default=128)
     args = parser.parse_args()
 
+    safe_natq4 = validate_safe_path(args.natq4, must_exist=True, allowed_exts=(".natq4",))
+    safe_gguf = validate_safe_path(args.gguf, must_exist=True, allowed_exts=(".gguf",))
+    safe_engine = validate_safe_path(args.nativa_engine, must_exist=True, allowed_exts=(".exe", "") if sys.platform == "win32" else None)
+    safe_llama_bench = validate_safe_path(args.llama_bench, must_exist=True, allowed_exts=(".exe", "") if sys.platform == "win32" else None)
+
     threads = [int(t.strip()) for t in args.threads.split(",")]
 
     print("=" * 80)
     print("  BENCHMARK COMPARATIVO PAREADO: NATIVA (.natq4) vs. LLAMA.CPP (GGUF)")
     print("=" * 80)
-    print(f"  Nativa Engine : {args.nativa_engine} ({os.path.getsize(args.nativa_engine)/1024:.1f} KB)")
-    print(f"  Nativa Model  : {args.natq4} ({os.path.getsize(args.natq4)/(1024*1024):.1f} MB)")
-    print(f"  llama-bench   : {args.llama_bench}")
-    print(f"  llama GGUF    : {args.gguf} ({os.path.getsize(args.gguf)/(1024*1024):.1f} MB)")
+    print(f"  Nativa Engine : {safe_engine} ({os.path.getsize(safe_engine)/1024:.1f} KB)")
+    print(f"  Nativa Model  : {safe_natq4} ({os.path.getsize(safe_natq4)/(1024*1024):.1f} MB)")
+    print(f"  llama-bench   : {safe_llama_bench}")
+    print(f"  llama GGUF    : {safe_gguf} ({os.path.getsize(safe_gguf)/(1024*1024):.1f} MB)")
     print(f"  Threads sweep : {threads}")
     print("=" * 80)
 
@@ -197,11 +257,11 @@ def main():
         print(f"\n[*] Executando testes pareados com {th} threads...")
 
         # 1. llama.cpp
-        llama_res = run_llama_bench(args.llama_bench, args.gguf, threads=th, gen_tokens=args.tokens)
+        llama_res = run_llama_bench(safe_llama_bench, safe_gguf, threads=th, gen_tokens=args.tokens)
         print(f"  [llama.cpp Q4_K_M] Decode: {llama_res['decode_tok_s']:5.2f} tok/s | Prefill: {llama_res['prefill_tok_s']:5.2f} tok/s | RSS: {llama_res['peak_rss_mb']:5.1f} MB")
 
         # 2. Nativa
-        nativa_res = run_nativa_bench(args.nativa_engine, args.natq4, threads=th, gen_tokens=args.tokens)
+        nativa_res = run_nativa_bench(safe_engine, safe_natq4, threads=th, gen_tokens=args.tokens)
         print(f"  [Nativa Q4x4]     Decode: {nativa_res['decode_tok_s']:5.2f} tok/s | Prefill: {nativa_res['prefill_tok_s']:5.2f} tok/s | RSS: {nativa_res['peak_rss_mb']:5.1f} MB")
 
         ratio = (nativa_res['decode_tok_s'] / llama_res['decode_tok_s']) if llama_res['decode_tok_s'] > 0 else 0.0
