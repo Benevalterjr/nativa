@@ -97,7 +97,7 @@ class Token:
 
 
 KEYWORDS = {
-    "fn", "struct", "const", "if", "elif", "else", "for", "in", "while", "return",
+    "fn", "lambda", "struct", "const", "if", "elif", "else", "for", "in", "while", "return",
     "break", "continue", "pass", "import", "and", "or", "not", "true", "false",
 }
 
@@ -363,6 +363,19 @@ class ListLit(Node):
     items: list
 
 @dataclass
+class ListComp(Node):
+    elt: "Expr"
+    var: str
+    iter: "Expr"
+    cond: Optional["Expr"] = None
+
+@dataclass
+class Lambda(Node):
+    params: list     # list[Param]
+    ret: Optional[TypeExpr]
+    body: "Expr"
+
+@dataclass
 class TupleLit(Node):
     items: list
 
@@ -406,7 +419,7 @@ class Attr(Node):
 class TryUnwrap(Node):
     expr: "Expr"
 
-Expr = Union[Int, Float, Str, FString, Bool, Name, ListLit, TupleLit, DictLit, Unary, Binary,
+Expr = Union[Int, Float, Str, FString, Bool, Name, ListLit, ListComp, Lambda, TupleLit, DictLit, Unary, Binary,
              Range, Call, Index, Attr, TryUnwrap]
 
 # --- comandos ---
@@ -956,6 +969,40 @@ class Parser:
         if t.kind == "KW" and t.value in ("true", "false"):
             self.advance()
             return Bool(t.value == "true", line=t.line, col=t.col)
+        if self.is_kw("lambda") or self.is_kw("fn"):
+            kw = self.advance()
+            params = []
+            if self.is_op("("):
+                self.advance()
+                while not self.is_op(")"):
+                    pt = self.expect_name("nome de parâmetro da lambda")
+                    pty = None
+                    if self.is_op(":"):
+                        self.advance()
+                        pty = self.parse_type()
+                    params.append(Param(pt.value, pty, line=pt.line, col=pt.col))
+                    if self.is_op(","):
+                        self.advance()
+                    elif not self.is_op(")"):
+                        self.error(f"esperado ',' ou ')' nos parâmetros da lambda, encontrado {describe(self.peek())}")
+                self.expect_op(")")
+            elif kw.value == "lambda":
+                while not self.is_op(":") and not self.is_op("->"):
+                    pt = self.expect_name("nome de parâmetro da lambda")
+                    params.append(Param(pt.value, None, line=pt.line, col=pt.col))
+                    if self.is_op(","):
+                        self.advance()
+                    elif not self.is_op(":") and not self.is_op("->"):
+                        self.error(f"esperado ',' ou ':' nos parâmetros da lambda, encontrado {describe(self.peek())}")
+            else:
+                self.error(f"esperado '(' após 'fn' na expressão lambda, encontrado {describe(self.peek())}")
+            ret = None
+            if self.is_op("->"):
+                self.advance()
+                ret = self.parse_type()
+            self.expect_op(":", " no corpo da lambda")
+            body = self.parse_expr()
+            return Lambda(params, ret, body, line=kw.line, col=kw.col)
         if t.kind == "NAME":
             self.advance()
             return Name(t.value, line=t.line, col=t.col)
@@ -978,7 +1025,27 @@ class Parser:
             return e
         if self.is_op("["):
             self.advance()
-            items = []
+            if self.is_op("]"):
+                self.advance()
+                return ListLit([], line=t.line, col=t.col)
+            first = self.parse_expr()
+            if self.is_kw("for"):
+                self.advance()
+                var = self.expect_name("nome da variável da compreensão de lista").value
+                self.expect_kw("in")
+                it = self.parse_expr()
+                cond = None
+                if self.is_kw("if"):
+                    self.advance()
+                    cond = self.parse_expr()
+                self.expect_op("]")
+                return ListComp(first, var, it, cond, line=t.line, col=t.col)
+            items = [first]
+            if self.is_op(","):
+                self.advance()
+            elif not self.is_op("]"):
+                self.error("esperado ',' ou ']' na lista, "
+                           f"encontrado {describe(self.peek())}")
             while not self.is_op("]"):
                 items.append(self.parse_expr())
                 if self.is_op(","):
@@ -1200,6 +1267,7 @@ PRIM_TYPES = {
     "str": STR, "bool": BOOL, "void": VOID, "any": ANY,
     "Result": RESULT, "NatResult": RESULT,
     "dict": DictT(ANY, ANY), "Dict": DictT(ANY, ANY),
+    "KVCache": ANY, "Tokenizer": ANY,
 }
 
 @dataclass
@@ -1354,6 +1422,9 @@ BUILTINS: dict[str, FuncSig] = {
     "rfft":                  FuncSig([ANY], ANY, builtin=True, min_args=1, max_args=2),
     "irfft":                 FuncSig([ANY], ANY, builtin=True, min_args=1, max_args=2),
     "power_spectrum":        FuncSig([ANY], ANY, builtin=True, min_args=1, max_args=1),
+    # Funções de Alta Ordem (Lambda / Programação Funcional)
+    "map":                   FuncSig([ANY, ANY], ListT(ANY), builtin=True, min_args=2, max_args=2, ret_builder=lambda ats: ListT(ats[0].ret if (isinstance(ats[0], FuncSig) and ats[0].ret != ANY) else (ats[1].elem if (len(ats) > 1 and isinstance(ats[1], (ListT, TensorT))) else ANY))),
+    "filter":                FuncSig([ANY, ANY], ListT(ANY), builtin=True, min_args=2, max_args=2, ret_builder=lambda ats: ListT(ats[1].elem if (len(ats) > 1 and isinstance(ats[1], (ListT, TensorT))) else ANY)),
 }
 
 KNOWN_MODULES = {"math", "time"}
@@ -1407,6 +1478,8 @@ def same(a, b) -> bool:
         return a.name == b.name
     if isinstance(a, DictT) and isinstance(b, DictT):
         return same(a.key, b.key) and same(a.val, b.val)
+    if isinstance(a, FuncSig) and isinstance(b, FuncSig):
+        return len(a.params) == len(b.params) and all(same(x, y) for x, y in zip(a.params, b.params)) and same(a.ret, b.ret)
     return a == b
 
 def assignable(src, dst) -> bool:
@@ -1518,11 +1591,12 @@ class SemanticAnalyzer:
         if name in self.functions:
             self.report(f"'{name}' já é o nome de uma função; escolha outro nome", node)
             return False
-        for scope in self.scopes:
-            if name in scope:
-                self.report(f"'{name}' já foi declarado na linha {scope[name].line} "
-                            "(shadowing é proibido)", node)
-                return False
+        if name != "_":
+            for scope in self.scopes:
+                if name in scope:
+                    self.report(f"'{name}' já foi declarado na linha {scope[name].line} "
+                                "(shadowing é proibido)", node)
+                    return False
         self.scopes[-1][name] = Symbol(name, type_, const, implicit, getattr(node, "line", 0))
         return True
 
@@ -1913,6 +1987,36 @@ class SemanticAnalyzer:
                 t = n
         return ListT(t)
 
+    def visit_ListComp(self, node: ListComp):
+        it = self.expr(node.iter)
+        et = it.elem if isinstance(it, (ListT, TensorT)) else ANY
+        if it != ANY and not isinstance(it, (ListT, TensorT)):
+            self.report(f"não é possível iterar sobre {it}", node.iter)
+        self.enter_scope()
+        self.define(node.var, node, et)
+        if node.cond is not None:
+            self.cond(node.cond)
+        elt_t = self.expr(node.elt)
+        self.exit_scope()
+        return ListT(elt_t)
+
+    def visit_Lambda(self, node: Lambda):
+        self.enter_scope()
+        pts = []
+        for p in node.params:
+            pt = self.resolve_type(p.type) if p.type is not None else ANY
+            pts.append(pt)
+            self.define(p.name, p, pt)
+        body_t = self.expr(node.body)
+        self.exit_scope()
+        if node.ret is not None:
+            rt = self.resolve_type(node.ret)
+            if not assignable(body_t, rt):
+                self.report(f"retorno esperado {rt}, recebeu {body_t}", node.body)
+        else:
+            rt = body_t
+        return FuncSig(pts, rt, min_args=len(pts), max_args=len(pts))
+
     def visit_Range(self, node: Range):
         for b in (node.start, node.end):
             if b is not None:
@@ -1948,8 +2052,10 @@ class SemanticAnalyzer:
                     return ot.elems[idx_v]
                 self.report(f"índice {idx_v} fora dos limites da tupla {ot}", node)
             return ANY
-        if isinstance(ot, (ListT, TensorT)):
+        if isinstance(ot, ListT):
             return ot.elem
+        if isinstance(ot, TensorT):
+            return ANY
         if ot == STR:
             return STR
         if ot != ANY:
@@ -2075,12 +2181,21 @@ class SemanticAnalyzer:
     def visit_Call(self, node: Call):
         f, sig, label = node.func, None, ""
         if isinstance(f, Name):
-            if self.lookup(f.id):
-                self.report(f"'{f.id}' é uma variável, não uma função", f)
+            sym = self.lookup(f.id)
+            if sym:
+                sym.used = True
+                if isinstance(sym.type, FuncSig):
+                    sig, label = sym.type, f.id
+                elif sym.type == ANY:
+                    sig, label = None, f.id
+                else:
+                    self.report(f"'{f.id}' é uma variável, não uma função", f)
             elif f.id in self.functions:
                 sig, label = self.functions[f.id], f.id
             else:
                 self.report(self.undefined_msg(f.id), f)
+        elif isinstance(f, Lambda):
+            sig, label = self.visit_Lambda(f), "lambda"
         elif isinstance(f, Attr) and isinstance(f.obj, Name) and not self.lookup(f.obj.id):
             mod = f.obj.id
             if mod not in KNOWN_MODULES and mod not in self.user_modules:
@@ -5487,6 +5602,8 @@ BUILTIN_IMPLS: dict[str, Callable] = {
     "rfft": rfft_fn,
     "irfft": irfft_fn,
     "power_spectrum": power_spectrum_fn,
+    "map": lambda fn, it: [fn(x.item() if hasattr(x, "item") else x) for x in it],
+    "filter": lambda fn, it: [x.item() if hasattr(x, "item") else x for x in it if fn(x.item() if hasattr(x, "item") else x)],
 }
 
 
@@ -5504,6 +5621,40 @@ def _bind_builtin_implementations():
 
 
 _bind_builtin_implementations()
+
+
+class NatLambda:
+    """Função anônima (closure léxica) em tempo de execução."""
+    def __init__(self, node: Lambda, captured_scopes: list[dict[str, Any]], interp: "Interpreter"):
+        self.node = node
+        self.captured_scopes = captured_scopes
+        self.interp = interp
+
+    def __call__(self, *args: Any) -> Any:
+        if len(args) != len(self.node.params):
+            raise self.interp._runtime_error(
+                f"lambda espera {len(self.node.params)} argumento(s), mas recebeu {len(args)}",
+                self.node,
+            )
+        base = len(self.interp.scopes)
+        for sc in self.captured_scopes:
+            self.interp.scopes.append(sc)
+            self.interp.const_scopes.append(set())
+        local_scope = {p.name: arg for p, arg in zip(self.node.params, args)}
+        self.interp.scopes.append(local_scope)
+        self.interp.const_scopes.append(set())
+        self.interp.frame_bases.append(base)
+        try:
+            return self.interp.eval_expr(self.node.body)
+        finally:
+            self.interp.frame_bases.pop()
+            for _ in range(len(self.captured_scopes) + 1):
+                self.interp.const_scopes.pop()
+                self.interp.scopes.pop()
+
+    def __repr__(self) -> str:
+        params_str = ", ".join(p.name for p in self.node.params)
+        return f"<lambda ({params_str})>"
 
 
 class NatStructInstance:
@@ -5832,6 +5983,22 @@ class Interpreter:
                 return {self.eval_expr(k): self.eval_expr(v) for k, v in e.pairs}
             if isinstance(e, ListLit):
                 return [self.eval_expr(it) for it in e.items]
+            if isinstance(e, ListComp):
+                iterable = self.eval_expr(e.iter)
+                res = []
+                self.scopes.append({})
+                try:
+                    for item in iterable:
+                        self.scopes[-1][e.var] = item
+                        if e.cond is None or self.eval_expr(e.cond):
+                            res.append(self.eval_expr(e.elt))
+                finally:
+                    self.scopes.pop()
+                return res
+            if isinstance(e, Lambda):
+                base = self.frame_bases[-1]
+                captured = [dict(sc) for sc in self.scopes[base:]]
+                return NatLambda(e, captured, self)
             if isinstance(e, Range):
                 start = self.eval_expr(e.start) if e.start is not None else 0
                 end = self.eval_expr(e.end) if e.end is not None else 0
@@ -6609,6 +6776,7 @@ class CTranspiler:
         self.var_shapes: dict[str, tuple[int, ...]] = {}
         self.var_result_elem: dict[str, str] = {}
         self.kvcache_dims: dict[str, tuple[int, int]] = {}
+        self.lambda_vars: dict[str, Lambda] = {}
         self.declared_vars: set[str] = set()
         self.func_signatures: dict[str, tuple[str, list[tuple[str, str]]]] = {}
         self.func_result_elem: dict[str, str] = {}
@@ -6623,6 +6791,87 @@ class CTranspiler:
     def _new_temp(self, prefix: str = "_tmp") -> str:
         self._temp_counter += 1
         return f"{prefix}_{self._temp_counter}"
+
+    def _subst_expr(self, expr: Expr, mapping: dict[str, Expr]) -> Expr:
+        if not mapping:
+            return expr
+        if isinstance(expr, (Int, Float, Str, Bool)):
+            return expr
+        if isinstance(expr, Name):
+            return mapping.get(expr.id, expr)
+        if isinstance(expr, Unary):
+            return Unary(expr.op, self._subst_expr(expr.operand, mapping))
+        if isinstance(expr, Binary):
+            return Binary(expr.op, self._subst_expr(expr.left, mapping), self._subst_expr(expr.right, mapping))
+        if isinstance(expr, Call):
+            fn = self._subst_expr(expr.func, mapping)
+            args = [self._subst_expr(a, mapping) for a in expr.args]
+            new_call = Call(fn, args)
+            if getattr(expr, "keywords", None):
+                new_call.keywords = [(k, self._subst_expr(v, mapping)) for k, v in expr.keywords]
+            return new_call
+        if isinstance(expr, Index):
+            return Index(self._subst_expr(expr.obj, mapping), self._subst_expr(expr.index, mapping))
+        if isinstance(expr, Attr):
+            return Attr(self._subst_expr(expr.obj, mapping), expr.name)
+        if isinstance(expr, Range):
+            return Range(
+                self._subst_expr(expr.start, mapping) if expr.start else None,
+                self._subst_expr(expr.end, mapping) if expr.end else None,
+                expr.inclusive,
+            )
+        if isinstance(expr, ListLit):
+            return ListLit([self._subst_expr(it, mapping) for it in expr.items])
+        if isinstance(expr, TupleLit):
+            return TupleLit([self._subst_expr(it, mapping) for it in expr.items])
+        if isinstance(expr, DictLit):
+            return DictLit([(self._subst_expr(k, mapping), self._subst_expr(v, mapping)) for k, v in expr.pairs])
+        if isinstance(expr, ListComp):
+            sub_map = {k: v for k, v in mapping.items() if k != expr.var}
+            return ListComp(
+                self._subst_expr(expr.elt, sub_map),
+                expr.var,
+                self._subst_expr(expr.iter, mapping),
+                self._subst_expr(expr.cond, sub_map) if expr.cond else None,
+            )
+        if isinstance(expr, Lambda):
+            pnames = {p.name for p in expr.params}
+            sub_map = {k: v for k, v in mapping.items() if k not in pnames}
+            return Lambda(expr.params, expr.ret, self._subst_expr(expr.body, sub_map))
+        if isinstance(expr, TryUnwrap):
+            return TryUnwrap(self._subst_expr(expr.expr, mapping))
+        if isinstance(expr, FString):
+            return FString([FormatPart(self._subst_expr(p.expr, mapping), p.spec) if isinstance(p, FormatPart) else p for p in expr.parts])
+        return expr
+
+    def _resolve_lambda_call(self, c: Call) -> Optional[Expr]:
+        lam = None
+        if isinstance(c.func, Lambda):
+            lam = c.func
+        elif isinstance(c.func, Name) and c.func.id in self.lambda_vars:
+            lam = self.lambda_vars[c.func.id]
+        if lam is not None:
+            mapping = {p.name: arg for p, arg in zip(lam.params, c.args)}
+            return self._subst_expr(lam.body, mapping)
+        return None
+
+    def _desugar_hof(self, e: Expr) -> Expr:
+        if isinstance(e, Call) and isinstance(e.func, Name) and e.func.id in ("map", "filter") and len(e.args) == 2:
+            fn_arg, iter_arg = e.args[0], e.args[1]
+            var_name = "_m_x"
+            if isinstance(fn_arg, Lambda) and fn_arg.params:
+                var_name = fn_arg.params[0].name
+                body_expr = fn_arg.body
+            elif isinstance(fn_arg, Name) and fn_arg.id in self.lambda_vars and self.lambda_vars[fn_arg.id].params:
+                lam = self.lambda_vars[fn_arg.id]
+                var_name = lam.params[0].name
+                body_expr = lam.body
+            else:
+                body_expr = Call(fn_arg, [Name(var_name)])
+            if e.func.id == "map":
+                return ListComp(elt=body_expr, var=var_name, iter=iter_arg, cond=None)
+            return ListComp(elt=Name(var_name), var=var_name, iter=iter_arg, cond=body_expr)
+        return e
 
     def _collect_signatures(self):
         for it in self.program.items:
@@ -6704,10 +6953,23 @@ class CTranspiler:
                 elem_t = arr_t[:-1]
                 if (elem_t, e.name) in self.struct_field_shapes:
                     return self.struct_field_shapes[(elem_t, e.name)]
+                if elem_t == "NatKVCache" and e.obj.obj.id in self.kvcache_dims and e.name in ("k", "v"):
+                    return self.kvcache_dims[e.obj.obj.id]
         if isinstance(e, ListLit):
             if e.items and isinstance(e.items[0], ListLit):
                 return (len(e.items), len(e.items[0].items))
             return (len(e.items),)
+        if isinstance(e, ListComp):
+            if e.cond is None and isinstance(e.iter, Range):
+                r = e.iter
+                s_val = r.start.value if isinstance(r.start, Int) and r.start.value is not None else 0
+                if isinstance(r.end, Int) and r.end.value is not None:
+                    n = (r.end.value - s_val) + (1 if r.inclusive else 0)
+                    return (max(n, 0),)
+            elif e.cond is None:
+                it_len = self._expr_length(e.iter)
+                if it_len is not None:
+                    return (it_len,)
         if isinstance(e, Index):
             if isinstance(e.index, Range):
                 r = e.index
@@ -6737,6 +6999,12 @@ class CTranspiler:
                 r_sh = self._expr_shape(e.right)
                 return l_sh or r_sh
         if isinstance(e, Call):
+            resolved = self._resolve_lambda_call(e)
+            if resolved is not None:
+                return self._expr_shape(resolved)
+            desugared = self._desugar_hof(e)
+            if desugared is not e:
+                return self._expr_shape(desugared)
             fn = ""
             if isinstance(e.func, Name):
                 fn = e.func.id
@@ -6801,6 +7069,11 @@ class CTranspiler:
                     elem_t = arr_t[:-1]
                     if (elem_t, expr.name) in self.struct_field_types:
                         return self.struct_field_types[(elem_t, expr.name)]
+                    if elem_t == "NatKVCache":
+                        if expr.name in ("k", "v"):
+                            return "double*"
+                        if expr.name in ("seq_len", "max_seq_len", "dim", "capacity"):
+                            return "int64_t"
             return "double"
         if isinstance(expr, Index):
             obj_t = self.infer_type(expr.obj)
@@ -6816,6 +7089,23 @@ class CTranspiler:
             if not expr.items:
                 return "double*"
             it = self.infer_type(expr.items[0])
+            if it in self.struct_decls or it in ("NatKVCache", "NatComplex", "const char*"):
+                return f"{it}*"
+            if "int" in it:
+                return "int64_t*"
+            return "double*"
+        if isinstance(expr, ListComp):
+            old_v = self.var_types.get(expr.var)
+            if isinstance(expr.iter, Range):
+                self.var_types[expr.var] = "int64_t"
+            else:
+                it_iter = self.infer_type(expr.iter)
+                self.var_types[expr.var] = it_iter[:-1] if it_iter.endswith("*") else "double"
+            it = self.infer_type(expr.elt)
+            if old_v is not None:
+                self.var_types[expr.var] = old_v
+            else:
+                self.var_types.pop(expr.var, None)
             if it in self.struct_decls or it in ("NatKVCache", "NatComplex", "const char*"):
                 return f"{it}*"
             if "int" in it:
@@ -6853,6 +7143,12 @@ class CTranspiler:
                 return "bool"
             return self.infer_type(expr.operand)
         if isinstance(expr, Call):
+            resolved = self._resolve_lambda_call(expr)
+            if resolved is not None:
+                return self.infer_type(resolved)
+            desugared = self._desugar_hof(expr)
+            if desugared is not expr:
+                return self.infer_type(desugared)
             fname = ""
             if isinstance(expr.func, Name):
                 fname = expr.func.id
@@ -6926,6 +7222,7 @@ class CTranspiler:
         self.var_lengths.clear()
         self.var_shapes.clear()
         self.kvcache_dims.clear()
+        self.lambda_vars.clear()
 
     def _prescan_block(self, stmts: list[Node], cur_fn: str):
         for s in stmts:
@@ -6936,8 +7233,12 @@ class CTranspiler:
             elif isinstance(s, TupleAssign):
                 if isinstance(s.value, Call) and isinstance(s.value.func, Attr) and s.value.func.name == "update":
                     obj = s.value.func.obj
+                    dims = None
                     if isinstance(obj, Name) and obj.id in self.kvcache_dims:
                         dims = self.kvcache_dims[obj.id]
+                    elif isinstance(obj, Index) and isinstance(obj.obj, Name) and obj.obj.id in self.kvcache_dims:
+                        dims = self.kvcache_dims[obj.obj.id]
+                    if dims is not None:
                         for t in s.targets:
                             if isinstance(t, Name):
                                 self.var_types[t.id] = "double*"
@@ -6961,6 +7262,10 @@ class CTranspiler:
                 self._prescan_expr(s.expr)
 
     def _prescan_assign(self, name: str, val: Expr):
+        if isinstance(val, Lambda):
+            self.lambda_vars[name] = val
+            return
+        val = self._desugar_hof(val)
         self._prescan_expr(val)
         t = self.infer_type(val)
         self.var_types[name] = t
@@ -6979,8 +7284,29 @@ class CTranspiler:
                     self.kvcache_dims[name] = (ms, dm)
                     self.var_shapes[f"{name}.k"] = (ms, dm)
                     self.var_shapes[f"{name}.v"] = (ms, dm)
+        elif isinstance(val, ListComp) and isinstance(val.elt, Call) and isinstance(val.elt.func, Name):
+            if val.elt.func.id == "KVCache" and len(val.elt.args) >= 2:
+                if isinstance(val.elt.args[0], Int) and isinstance(val.elt.args[1], Int):
+                    ms, dm = val.elt.args[0].value, val.elt.args[1].value
+                    self.kvcache_dims[name] = (ms, dm)
 
     def _prescan_expr(self, e: Expr):
+        if isinstance(e, ListComp):
+            self._prescan_expr(e.iter)
+            old_v = self.var_types.get(e.var)
+            if isinstance(e.iter, Range):
+                self.var_types[e.var] = "int64_t"
+            else:
+                it_iter = self.infer_type(e.iter)
+                self.var_types[e.var] = it_iter[:-1] if it_iter.endswith("*") else "double"
+            self._prescan_expr(e.elt)
+            if e.cond is not None:
+                self._prescan_expr(e.cond)
+            if old_v is not None:
+                self.var_types[e.var] = old_v
+            else:
+                self.var_types.pop(e.var, None)
+            return
         if isinstance(e, Call) and isinstance(e.func, Name):
             fn = e.func.id
             for a in e.args:
@@ -7003,6 +7329,8 @@ class CTranspiler:
                         self.func_param_shapes[(fn, pname)] = sh
                     if isinstance(arg_expr, Name) and arg_expr.id in self.kvcache_dims:
                         self.kvcache_dims[pname] = self.kvcache_dims[arg_expr.id]
+                    elif isinstance(arg_expr, Index) and isinstance(arg_expr.obj, Name) and arg_expr.obj.id in self.kvcache_dims:
+                        self.kvcache_dims[pname] = self.kvcache_dims[arg_expr.obj.id]
         elif isinstance(e, Binary):
             self._prescan_expr(e.left)
             self._prescan_expr(e.right)
@@ -7049,6 +7377,9 @@ class CTranspiler:
             if isinstance(it, ConstDecl):
                 if it.name in ("PI", "E"):
                     continue
+                if isinstance(it.value, Lambda):
+                    self.lambda_vars[it.name] = it.value
+                    continue
                 ctype = self.c_type(it.type) if it.type else self.infer_type(it.value)
                 val = self.emit_expr(it.value)
                 out.append(f"static const {ctype} {it.name} = {val};")
@@ -7083,6 +7414,7 @@ class CTranspiler:
         old_lens = dict(self.var_lengths)
         old_shapes = dict(self.var_shapes)
         old_res_elem = dict(self.var_result_elem)
+        old_lambdas = dict(self.lambda_vars)
         old_declared = set(self.declared_vars)
         self.declared_vars = set()
 
@@ -7115,6 +7447,7 @@ class CTranspiler:
         self.var_lengths = old_lens
         self.var_shapes = old_shapes
         self.var_result_elem = old_res_elem
+        self.lambda_vars = old_lambdas
         self.declared_vars = old_declared
         return "\n".join(lines)
 
@@ -7143,6 +7476,12 @@ class CTranspiler:
 
     def _emit_buffer_init(self, name: str, val_expr: Expr, ind: str, is_const: bool = False) -> Optional[str]:
         const_p = "const " if is_const else ""
+        if isinstance(val_expr, Call):
+            resolved = self._resolve_lambda_call(val_expr)
+            if resolved is not None:
+                val_expr = resolved
+            else:
+                val_expr = self._desugar_hof(val_expr)
 
         # 0. KVCache(max_seq, dim)
         if isinstance(val_expr, Call) and isinstance(val_expr.func, Name) and val_expr.func.id == "KVCache":
@@ -7288,6 +7627,60 @@ class CTranspiler:
                     name, elem_t, max(n_elems, 1), (n_elems,), const_p, ind,
                     lambda tgt, cp: f"{ind}{cp}{elem_t} {tgt}[{max(n_elems, 1)}] = {{ {items_code} }};"
                 )
+
+        # 4b. ListComp ([elt for var in iter (if cond)])
+        if isinstance(val_expr, ListComp):
+            old_v = self.var_types.get(val_expr.var)
+            if isinstance(val_expr.iter, Range):
+                iter_elem_t = "int64_t"
+            else:
+                it_iter = self.infer_type(val_expr.iter)
+                iter_elem_t = it_iter[:-1] if it_iter.endswith("*") else "double"
+            self.var_types[val_expr.var] = iter_elem_t
+            it_t = self.infer_type(val_expr.elt)
+            if it_t in self.struct_decls or it_t in ("NatKVCache", "NatComplex", "const char*"):
+                elem_t = it_t
+            elif "int" in it_t:
+                elem_t = "int64_t"
+            else:
+                elem_t = "double"
+            if it_t == "NatKVCache" and isinstance(val_expr.elt, Call) and len(val_expr.elt.args) >= 2:
+                if isinstance(val_expr.elt.args[0], Int) and isinstance(val_expr.elt.args[1], Int):
+                    self.kvcache_dims[name] = (val_expr.elt.args[0].value, val_expr.elt.args[1].value)
+            elt_code = self.emit_expr(val_expr.elt)
+            cond_code = self.emit_expr(val_expr.cond) if val_expr.cond is not None else None
+            if old_v is not None:
+                self.var_types[val_expr.var] = old_v
+            else:
+                self.var_types.pop(val_expr.var, None)
+
+            if isinstance(val_expr.iter, Range):
+                r = val_expr.iter
+                start_code = self.emit_expr(r.start) if r.start else "0LL"
+                end_code = self.emit_expr(r.end) if r.end else "0LL"
+                cmp_op = "<=" if r.inclusive else "<"
+                s_val = r.start.value if isinstance(r.start, Int) and r.start.value is not None else 0
+                n_elems = max((r.end.value - s_val) + (1 if r.inclusive else 0), 1) if isinstance(r.end, Int) and r.end.value is not None else 64
+                if cond_code is None:
+                    loop_tpl = f"for (int64_t {val_expr.var} = {start_code}; {val_expr.var} {cmp_op} {end_code}; {val_expr.var}++) {{ {{tgt}}[{val_expr.var} - ({start_code})] = {elt_code}; }}"
+                else:
+                    cnt_v = self._new_temp("_lc_n")
+                    loop_tpl = f"int64_t {cnt_v} = 0; for (int64_t {val_expr.var} = {start_code}; {val_expr.var} {cmp_op} {end_code}; {val_expr.var}++) {{ if ({cond_code}) {{ {{tgt}}[{cnt_v}++] = {elt_code}; }} }}"
+            else:
+                iter_len = self._expr_length(val_expr.iter) or 64
+                n_elems = max(iter_len, 1)
+                pre_it, iter_code = self._ensure_vec_operand(val_expr.iter, ind)
+                idx_v = self._new_temp("_lc_i")
+                if cond_code is None:
+                    loop_tpl = f"{pre_it}for (int64_t {idx_v} = 0; {idx_v} < {iter_len}; {idx_v}++) {{ {iter_elem_t} {val_expr.var} = ({iter_code})[{idx_v}]; {{tgt}}[{idx_v}] = {elt_code}; }}"
+                else:
+                    cnt_v = self._new_temp("_lc_n")
+                    loop_tpl = f"{pre_it}int64_t {cnt_v} = 0; for (int64_t {idx_v} = 0; {idx_v} < {iter_len}; {idx_v}++) {{ {iter_elem_t} {val_expr.var} = ({iter_code})[{idx_v}]; if ({cond_code}) {{ {{tgt}}[{cnt_v}++] = {elt_code}; }} }}"
+
+            return self._wrap_buffer_target(
+                name, elem_t, n_elems, (n_elems,), "", ind,
+                lambda tgt, cp: f"{ind}{elem_t} {tgt}[{n_elems}]; {loop_tpl.replace('{tgt}', tgt)}"
+            )
 
         # 5. Fatiamento de array obj[start..end]
         if isinstance(val_expr, Index) and isinstance(val_expr.index, Range):
@@ -7665,6 +8058,9 @@ class CTranspiler:
         ind = self.indent()
         if isinstance(s, VarDecl):
             self.pending_pre_stmts = []
+            if isinstance(s.value, Lambda):
+                self.lambda_vars[s.name] = s.value
+                return f"{ind}/* lambda {s.name} */"
             buf = self._emit_buffer_init(s.name, s.value, ind, is_const=False)
             if buf is not None:
                 return self._with_pre_stmts(buf)
@@ -7681,6 +8077,9 @@ class CTranspiler:
 
         if isinstance(s, ConstDecl):
             self.pending_pre_stmts = []
+            if isinstance(s.value, Lambda):
+                self.lambda_vars[s.name] = s.value
+                return f"{ind}/* lambda {s.name} */"
             buf = self._emit_buffer_init(s.name, s.value, ind, is_const=True)
             if buf is not None:
                 return self._with_pre_stmts(buf)
@@ -7748,6 +8147,9 @@ class CTranspiler:
             tgt = s.target
             if isinstance(tgt, Name):
                 name = tgt.id
+                if s.op == "=" and isinstance(s.value, Lambda):
+                    self.lambda_vars[name] = s.value
+                    return f"{ind}/* lambda {name} */"
                 if s.op == "=":
                     buf = self._emit_buffer_init(name, s.value, ind, is_const=False)
                     if buf is not None:
@@ -7848,7 +8250,7 @@ class CTranspiler:
 
             iter_len = self._expr_length(s.iter)
             iter_t = self.infer_type(s.iter)
-            if iter_len is not None and (iter_t.endswith("*") or isinstance(s.iter, ListLit)):
+            if iter_len is not None and (iter_t.endswith("*") or isinstance(s.iter, (ListLit, ListComp))):
                 elem_t = iter_t[:-1] if iter_t.endswith("*") else "double"
                 idx_var = self._new_temp(f"_idx_{s.var}")
                 old_decl = set(self.declared_vars)
@@ -7950,6 +8352,13 @@ class CTranspiler:
             items_code = ", ".join(self.emit_expr(it) for it in e.items)
             return f"(({elem_type}[]){{ {items_code} }})"
 
+        if isinstance(e, ListComp):
+            tmp = self._new_temp("_lc")
+            pre = self._emit_buffer_init(tmp, e, self.indent(), is_const=False)
+            if pre is not None:
+                self.pending_pre_stmts.append(pre)
+                return tmp
+
         if isinstance(e, Call):
             return self.emit_call(e)
 
@@ -8001,6 +8410,12 @@ class CTranspiler:
         )
 
     def emit_call(self, c: Call) -> str:
+        resolved = self._resolve_lambda_call(c)
+        if resolved is not None:
+            return self.emit_expr(resolved)
+        desugared = self._desugar_hof(c)
+        if desugared is not c:
+            return self.emit_expr(desugared)
         # Métodos de objetos (ex: cache.update(k, v), cache.clear(), cache.reset())
         if isinstance(c.func, Attr) and not (isinstance(c.func.obj, Name) and c.func.obj.id == "math"):
             obj_t = self.infer_type(c.func.obj)
@@ -8879,6 +9294,167 @@ fn main():
         finally:
             if os.path.exists(mod_path):
                 os.remove(mod_path)
+
+    def test_list_comprehensions_basico_e_aninhado(self):
+        src = """
+struct Ponto:
+    x: f64
+    y: f64
+
+fn main():
+    dobros = [i * 2 for i in 0..5]
+    pares = [i for i in 0..10 if i % 2 == 0]
+    pontos = [Ponto(i * 1.0, i * 2.0) for i in 0..4]
+    caches = [[KVCache(8, 4) for _ in 0..2] for _ in 0..3]
+    k_in = ones([1, 4])
+    v_in = ones([1, 4]) * 2.0
+    caches[2][1].update(k_in, v_in)
+    seq_c = caches[2][1].seq_len
+    soma_p = pontos[3].x + pontos[3].y
+"""
+        interp = self._run_checked(src)
+        self.assertEqual(interp.last_scope["dobros"], [0, 2, 4, 6, 8])
+        self.assertEqual(interp.last_scope["pares"], [0, 2, 4, 6, 8])
+        self.assertEqual(interp.last_scope["seq_c"], 1)
+        self.assertAlmostEqual(interp.last_scope["soma_p"], 9.0)
+
+    def test_list_comprehensions_diferencial_c99(self):
+        TesteDiferencialC.setUpClass()
+        if not TesteDiferencialC.compiler_available:
+            self.skipTest("Nenhum compilador C disponível para teste diferencial")
+
+        source = """
+struct Ponto:
+    x: f64
+    y: f64
+
+fn main():
+    quads = [i * i for i in 0..6]
+    impares = [i for i in 0..8 if i % 2 == 1]
+    pts = [Ponto(to_f64(i) * 1.5, to_f64(i) * 2.5) for i in 0..4]
+    caches = [KVCache(8, 4) for _ in 0..4]
+    k_vec = [1.0, 2.0, 3.0, 4.0]
+    v_vec = [2.0, 4.0, 6.0, 8.0]
+    k_out, v_out = caches[2].update(k_vec, v_vec)
+    print(quads[4])
+    print(impares[2])
+    print(pts[3].x + pts[3].y)
+    print(caches[2].seq_len)
+    print(sum(v_out))
+"""
+        import io, tempfile
+        prog = parse(source)
+        sem = SemanticAnalyzer()
+        sem.analyze(prog)
+        self.assertEqual(sem.errors, [], f"Erros semânticos: {sem.errors}")
+
+        interp = Interpreter()
+        buf = io.StringIO()
+        old_stdout = sys.stdout
+        sys.stdout = buf
+        try:
+            interp.run(prog)
+        finally:
+            sys.stdout = old_stdout
+        interp_out = buf.getvalue().strip()
+
+        c_code = CTranspiler(prog).transpile()
+        kwargs = {"ignore_cleanup_errors": True} if sys.version_info >= (3, 10) else {}
+        with tempfile.TemporaryDirectory(**kwargs) as tmpdir:
+            c_path = os.path.join(tmpdir, "diff_listcomp.c")
+            exe_path = os.path.join(tmpdir, "diff_listcomp.exe")
+            with open(c_path, "w", encoding="utf-8") as f:
+                f.write(c_code)
+            ok = compile_c_to_binary(c_path, exe_path)
+            self.assertTrue(ok, f"Compilação C falhou para diff_listcomp:\n{c_code}")
+            res = subprocess.run([exe_path], capture_output=True, text=True, timeout=10)
+            c_out = res.stdout.strip()
+
+        interp_lines = interp_out.splitlines()
+        c_lines = c_out.splitlines()
+        self.assertEqual(len(interp_lines), len(c_lines))
+        for il, cl in zip(interp_lines, c_lines):
+            try:
+                self.assertAlmostEqual(float(il), float(cl), places=4)
+            except ValueError:
+                self.assertEqual(il, cl)
+
+    def test_lambda_closures_map_filter(self):
+        src = """
+fn main():
+    fator = 3
+    escalar = lambda x: x * fator
+    soma2 = fn(a: i64, b: i64) -> i64: a + b
+    r1 = escalar(7)
+    r2 = soma2(10, 25)
+    r3 = (lambda u, v: u * v + 1)(4, 5)
+    dobrados = map(lambda x: x * 2, [1, 2, 3, 4])
+    maiores = filter(fn(x: i64) -> bool: x >= 3, [1, 2, 3, 4, 5])
+"""
+        interp = self._run_checked(src)
+        self.assertEqual(interp.last_scope["r1"], 21)
+        self.assertEqual(interp.last_scope["r2"], 35)
+        self.assertEqual(interp.last_scope["r3"], 21)
+        self.assertEqual(interp.last_scope["dobrados"], [2, 4, 6, 8])
+        self.assertEqual(interp.last_scope["maiores"], [3, 4, 5])
+
+    def test_lambda_diferencial_c99(self):
+        TesteDiferencialC.setUpClass()
+        if not TesteDiferencialC.compiler_available:
+            self.skipTest("Nenhum compilador C disponível para teste diferencial")
+
+        source = """
+fn main():
+    k = 10
+    soma_k = lambda x: x + k
+    mult = fn(a: i64, b: i64) -> i64: a * b
+    v1 = soma_k(5)
+    v2 = mult(6, 7)
+    v3 = (lambda x, y: x * x + y)(4, 3)
+    mapeados = map(lambda x: x * 3 + k, 0..5)
+    pares = filter(fn(x: i64) -> bool: x % 2 == 0, 0..8)
+    print(v1)
+    print(v2)
+    print(v3)
+    print(mapeados[3])
+    print(pares[2])
+"""
+        import io, tempfile
+        prog = parse(source)
+        sem = SemanticAnalyzer()
+        sem.analyze(prog)
+        self.assertEqual(sem.errors, [], f"Erros semânticos: {sem.errors}")
+
+        interp = Interpreter()
+        buf = io.StringIO()
+        old_stdout = sys.stdout
+        sys.stdout = buf
+        try:
+            interp.run(prog)
+        finally:
+            sys.stdout = old_stdout
+        interp_out = buf.getvalue().strip()
+
+        c_code = CTranspiler(prog).transpile()
+        kwargs = {"ignore_cleanup_errors": True} if sys.version_info >= (3, 10) else {}
+        with tempfile.TemporaryDirectory(**kwargs) as tmpdir:
+            c_path = os.path.join(tmpdir, "diff_lambda.c")
+            exe_path = os.path.join(tmpdir, "diff_lambda.exe")
+            with open(c_path, "w", encoding="utf-8") as f:
+                f.write(c_code)
+            ok = compile_c_to_binary(c_path, exe_path)
+            self.assertTrue(ok, f"Compilação C falhou para diff_lambda:\n{c_code}")
+            res = subprocess.run([exe_path], capture_output=True, text=True, timeout=10)
+            c_out = res.stdout.strip()
+
+        interp_lines = interp_out.splitlines()
+        c_lines = c_out.splitlines()
+        self.assertEqual(len(interp_lines), len(c_lines))
+        for il, cl in zip(interp_lines, c_lines):
+            try:
+                self.assertAlmostEqual(float(il), float(cl), places=4)
+            except ValueError:
+                self.assertEqual(il, cl)
 
 
 class TesteAutodiff(unittest.TestCase):
