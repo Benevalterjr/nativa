@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""chat_qwen.py - Chat interativo com Qwen2.5-0.5B via Motor Nativo C99 do Nativa."""
+"""chat_qwen.py - Interactive chat with Qwen2.5-0.5B via Nativa's C99 Native Engine."""
 
 import os
 import sys
@@ -15,19 +15,19 @@ TOKENIZER_PATH = os.path.join(ROOT_DIR, "data", "tokenizer_qwen.json")
 
 def main():
     if not os.path.exists(EXE_PATH):
-        print(f"[ERRO] Executável nativo não encontrado: {EXE_PATH}")
+        print(f"[ERROR] Native executable not found: {EXE_PATH}")
         return 1
 
     print("=" * 70)
-    print("  NATIVA AI - CHAT INTERATIVO COM QWEN 2.5 (MOTOR NATIVO C99)")
+    print("  NATIVA AI - INTERACTIVE CHAT WITH QWEN 2.5 (C99 NATIVE ENGINE)")
     print("=" * 70)
-    print("• Arquitetura: Transformer Qwen2.5-0.5B (24 Camadas, GQA)")
-    print("• Runtime:     Binário compilado C99 com OpenMP e AVX SIMD")
-    print("• Memória:     Zero-Copy Win32 mmap (instantâneo)")
-    print("• Velocidade:  ~10 tokens/segundo na CPU")
-    print("• Comandos:    Digite 'sair' para encerrar a conversa.")
+    print("• Architecture: Qwen2.5-0.5B Transformer (24 Layers, GQA)")
+    print("• Runtime:      Compiled C99 binary with OpenMP and AVX SIMD")
+    print("• Memory:       Zero-Copy Win32 mmap (instantaneous)")
+    print("• Speed:        ~10 tokens/second on CPU")
+    print("• Commands:     Type 'exit' or 'quit' to end the conversation.")
     print("=" * 70)
-    print("\n[*] Inicializando motor nativo C e tokenizador...")
+    print("\n[*] Initializing C native engine and tokenizer...")
 
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
@@ -47,41 +47,41 @@ def main():
         bufsize=0,
     )
 
-    # Aguarda o motor C ficar pronto
+    # Wait for the C engine to become ready
     while True:
         line = proc.stdout.readline()
         if not line:
-            print("[ERRO] Motor nativo encerrou inesperadamente.")
+            print("[ERROR] Native engine terminated unexpectedly.")
             return 1
         if "[NATIVA_CHAT_READY]" in line:
             break
 
-    print("[*] Motor C pronto! Você já pode conversar com o Qwen.\n")
+    print("[*] C engine ready! You can now chat with Qwen.\n")
 
     is_first_turn = True
 
     try:
         while True:
             try:
-                user_msg = input("Você > ").strip()
+                user_msg = input("You > ").strip()
             except (EOFError, KeyboardInterrupt):
                 break
 
             if not user_msg:
                 continue
             if user_msg.lower() in ("sair", "exit", "quit", ":q"):
-                print("\nEncerrando conversa...")
+                print("\nEnding conversation...")
                 break
 
             if is_first_turn:
                 prompt_text = (
-                    "Conversa com um assistente prestativo:\n"
-                    f"Usuario: {user_msg}\n"
-                    "Assistente:"
+                    "Conversation with a helpful assistant:\n"
+                    f"User: {user_msg}\n"
+                    "Assistant:"
                 )
                 is_first_turn = False
             else:
-                prompt_text = f"\nUsuario: {user_msg}\nAssistente:"
+                prompt_text = f"\nUser: {user_msg}\nAssistant:"
 
             tokens = tokenizer.encode(prompt_text).tolist()
             if not tokens:
@@ -106,7 +106,7 @@ def main():
                 if "[TURN_DONE]" in buf:
                     break
 
-                if "\nUsuario:" in buf or "\nHumano:" in buf:
+                if "\nUsuario:" in buf or "\nHumano:" in buf or "\nUser:" in buf or "\nHuman:" in buf:
                     while "[TURN_DONE]" not in buf:
                         extra = proc.stdout.read(1)
                         if not extra:
@@ -114,16 +114,16 @@ def main():
                         buf += extra
                     break
 
-                # Imprime mantendo margem segura de 10 caracteres para verificar marcadores
+                # Print while keeping a safe 10-character margin to check for markers
                 if len(buf) - printed_idx > 10:
                     chunk = buf[printed_idx:len(buf) - 10]
                     sys.stdout.write(chunk)
                     sys.stdout.flush()
                     printed_idx += len(chunk)
 
-            # Imprime cauda limpa
+            # Print clean tail
             tail = buf[printed_idx:]
-            for marker in ["[TURN_DONE]", "\nUsuario:", "\nHumano:"]:
+            for marker in ["[TURN_DONE]", "\nUsuario:", "\nHumano:", "\nUser:", "\nHuman:"]:
                 if marker in tail:
                     tail = tail.split(marker)[0]
             if tail:
@@ -140,7 +140,7 @@ def main():
         except Exception:
             proc.kill()
 
-    print("\nSessão de chat finalizada. Até logo, Bene!")
+    print("\nChat session finished. Goodbye!")
     return 0
 
 

@@ -1,16 +1,16 @@
 # tools/benchmark_rigoroso.py
 """
-Benchmark Rigoroso de Desempenho, Memória e Fidelidade Numérica:
-FP32 Convencional vs. Ternário int8 (Add-only) vs. Ternário Empacotado Base-3 (Vec-LUT 5-trits)
+Rigorous Benchmark of Performance, Memory, and Numerical Fidelity:
+Conventional FP32 vs. Ternary int8 (Add-only) vs. Base-3 Packed Ternary (Vec-LUT 5-trits)
 
-Parâmetros e Condições:
-- Model: Qwen2.5-0.5B (Pesos reais da Camada 0)
-- Matrizes testadas: gate_proj [4864, 896], down_proj [896, 4864], q_proj [896, 896], k_proj [128, 896]
-- Entradas: 10 Embeddings de tokens reais do Qwen2.5 + vetores sintéticos normalizados
-- Metodologia de tempo: 20 iterações de aquecimento (warm-up), 100 iterações cronometradas com time.perf_counter_ns
-- Estatísticas: Média, Mediana, Desvio Padrão, P25, P75, Mínimo e Máximo
-- Perfil de memória: psutil (Process RSS/VMS) + tracemalloc + nbytes + overhead de metadados e LUTs
-- Fidelidade numérica: MAE, RMSE, Erro Máximo (L-inf), Erro Relativo L2, Cosine Similarity, Pearson Corr
+Parameters and Conditions:
+- Model: Qwen2.5-0.5B (Real Layer 0 weights)
+- Tested matrices: gate_proj [4864, 896], down_proj [896, 4864], q_proj [896, 896], k_proj [128, 896]
+- Inputs: 10 real Qwen2.5 token embeddings + normalized synthetic vectors
+- Timing methodology: 20 warm-up iterations, 100 timed iterations with time.perf_counter_ns
+- Statistics: Mean, Median, Standard Deviation, P25, P75, Minimum, and Maximum
+- Memory profile: psutil (Process RSS/VMS) + tracemalloc + nbytes + metadata and LUT overhead
+- Numerical fidelity: MAE, RMSE, Max Error (L-inf), Relative L2 Error, Cosine Similarity, Pearson Corr
 """
 
 import os
@@ -21,7 +21,7 @@ import psutil
 import tracemalloc
 import numpy as np
 
-# Adicionar pasta raiz ao sys.path para importar nativa
+# Add root directory to sys.path to import nativa
 ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if ROOT_DIR not in sys.path:
     sys.path.insert(0, ROOT_DIR)
@@ -29,7 +29,7 @@ if ROOT_DIR not in sys.path:
 import nativa
 
 def get_process_memory():
-    """Retorna RSS e VMS em bytes do processo atual."""
+    """Returns RSS and VMS in bytes of the current process."""
     process = psutil.Process(os.getpid())
     info = process.memory_info()
     return info.rss, info.vms
@@ -45,7 +45,7 @@ def format_bytes(n):
         return f"{n / (1024 * 1024 * 1024):.2f} GB"
 
 def run_timing_benchmark(fn, warmup=20, runs=100):
-    """Executa benchmark com aquecimento e retorna estatísticas em milissegundos."""
+    """Runs benchmark with warm-up and returns statistics in milliseconds."""
     # Warmup
     for _ in range(warmup):
         _ = fn()
@@ -69,7 +69,7 @@ def run_timing_benchmark(fn, warmup=20, runs=100):
     }
 
 def compute_numerical_metrics(y_true, y_pred):
-    """Calcula métricas rigorosas de fidelidade numérica entre duas saídas."""
+    """Computes rigorous numerical fidelity metrics between two outputs."""
     yt = np.asarray(y_true, dtype=np.float64).ravel()
     yp = np.asarray(y_pred, dtype=np.float64).ravel()
     
@@ -108,23 +108,23 @@ def compute_numerical_metrics(y_true, y_pred):
 
 def main():
     print("=" * 80)
-    print("  BENCHMARK CIENTÍFICO E RIGOROSO: NATIVA v0.3 — KERNELS TERNÁRIOS")
-    print("  Comparação: Float32 vs. Ternário int8 (Add-only) vs. Base-3 5-trits (Vec-LUT)")
+    print("  SCIENTIFIC AND RIGOROUS BENCHMARK: NATIVA v0.3 — TERNARY KERNELS")
+    print("  Comparison: Float32 vs. Ternary int8 (Add-only) vs. Base-3 5-trits (Vec-LUT)")
     print("=" * 80)
 
     safetensors_path = os.path.join(ROOT_DIR, "data", "qwen2.5_0.5b.safetensors")
     if not os.path.exists(safetensors_path):
-        print(f"Erro: Arquivo não encontrado: {safetensors_path}")
+        print(f"Error: File not found: {safetensors_path}")
         return
 
     # =========================================================================
-    # PARTE 1: MEDIÇÃO REAL DE MEMÓRIA (Heap, Raw Bytes, Objetos e Process RSS)
+    # PART 1: REAL MEMORY MEASUREMENT (Heap, Raw Bytes, Objects, and Process RSS)
     # =========================================================================
     print("\n" + "=" * 80)
-    print("  PARTE 1: MEDIÇÃO REAL E TRANSPARENTE DE MEMÓRIA")
+    print("  PART 1: REAL AND TRANSPARENT MEMORY MEASUREMENT")
     print("=" * 80)
 
-    # Coleta de matrizes para o teste de memória
+    # Collect matrices for the memory test
     shapes_info = [
         ("mlp.gate_proj.weight", "gate_proj"),
         ("mlp.down_proj.weight", "down_proj"),
@@ -135,10 +135,10 @@ def main():
     gc.collect()
     rss_base, _ = get_process_memory()
 
-    print(f"[*] RSS Base do Processo Python antes do carregamento: {format_bytes(rss_base)}")
-    print("\nDetalhes de Memória por Matriz (Dados brutos + Objeto Tensor + Buffers):")
+    print(f"[*] Base Python Process RSS before loading: {format_bytes(rss_base)}")
+    print("\nMemory Details per Matrix (Raw data + Tensor Object + Buffers):")
     print("-" * 80)
-    header = f"{'Matriz':<12} | {'Shape':<12} | {'FP32 Raw':<10} | {'T2 int8':<10} | {'5-trits':<10} | {'Obj T2_5t':<10} | {'LUT Buffer':<10} | {'Redução'}"
+    header = f"{'Matrix':<12} | {'Shape':<12} | {'FP32 Raw':<10} | {'T2 int8':<10} | {'5-trits':<10} | {'Obj T2_5t':<10} | {'LUT Buffer':<10} | {'Reduction'}"
     print(header)
     print("-" * 80)
 
@@ -156,19 +156,19 @@ def main():
         # Raw bytes
         raw_fp32 = w_fp32.nbytes()
         
-        # Quantiza para int8 t2
+        # Quantize to int8 t2
         w_t2 = w_fp32.quantize_bitnet()
         raw_t2 = w_t2.nbytes()
         
-        # Empacota em 5-trits
+        # Pack into 5-trits
         w_p5 = w_t2.pack_5trits()
         raw_p5 = w_p5.nbytes()
         
-        # Tamanho do objeto Python Tensor (dados + dict + atributos)
+        # Python Tensor object size (data + dict + attributes)
         obj_size = sys.getsizeof(w_p5) + sys.getsizeof(w_p5.__dict__) + raw_p5
         
-        # Buffer de LUT do kernel Vec-LUT durante a execução:
-        # num_groups = (K + 4) // 5. lut01 (9 f32) + lut23 (9 f32) + lut4 (3 f32) = 21 f32 = 84 bytes por grupo
+        # Vec-LUT kernel LUT buffer during execution:
+        # num_groups = (K + 4) // 5. lut01 (9 f32) + lut23 (9 f32) + lut4 (3 f32) = 21 f32 = 84 bytes per group
         K = w_fp32.shape[1]
         num_groups = (K + 4) // 5
         lut_buffer_bytes = num_groups * 21 * 4
@@ -192,23 +192,23 @@ def main():
         }
 
     print("-" * 80)
-    print(f"{'SOMA TOTAL':<12} | {'4 Matrizes':<12} | {format_bytes(total_fp32_bytes):<10} | {format_bytes(total_t2_bytes):<10} | {format_bytes(total_p5_bytes):<10} | {format_bytes(total_obj_bytes):<10} | {'Transiente':<10} | {total_fp32_bytes / total_p5_bytes:.1f}x")
+    print(f"{'TOTAL SUM':<12} | {'4 Matrices':<12} | {format_bytes(total_fp32_bytes):<10} | {format_bytes(total_t2_bytes):<10} | {format_bytes(total_p5_bytes):<10} | {format_bytes(total_obj_bytes):<10} | {'Transient':<10} | {total_fp32_bytes / total_p5_bytes:.1f}x")
     print("-" * 80)
 
-    # Medição real de RSS de uma camada completa
+    # Real RSS measurement of a full layer
     gc.collect()
     rss_pos_load, _ = get_process_memory()
-    print(f"\n[*] RSS do Processo com as matrizes na RAM: {format_bytes(rss_pos_load)} (Delta: +{format_bytes(rss_pos_load - rss_base)})")
+    print(f"\n[*] Process RSS with matrices in RAM: {format_bytes(rss_pos_load)} (Delta: +{format_bytes(rss_pos_load - rss_base)})")
 
     # =========================================================================
-    # PARTE 2: BENCHMARK ESTATÍSTICO DE LATÊNCIA EM CONDIÇÕES IDÊNTICAS
+    # PART 2: STATISTICAL LATENCY BENCHMARK UNDER IDENTICAL CONDITIONS
     # =========================================================================
     print("\n" + "=" * 80)
-    print("  PARTE 2: COMPARAÇÃO ESTATÍSTICA DE LATÊNCIA (CONDIÇÕES IDÊNTICAS)")
-    print("  Metodologia: 20 iterações de warm-up + 100 iterações cronometradas")
+    print("  PART 2: STATISTICAL LATENCY COMPARISON (IDENTICAL CONDITIONS)")
+    print("  Methodology: 20 warm-up iterations + 100 timed iterations")
     print("=" * 80)
 
-    # Fixar seed e gerar vetor de ativação de teste para cada dimensão K
+    # Fix seed and generate test activation vector for each dimension K
     np.random.seed(42)
 
     for name in ["gate_proj", "down_proj", "q_proj", "k_proj"]:
@@ -221,7 +221,7 @@ def main():
         w_t2   = mat_info["t2"]
         w_p5   = mat_info["p5"]
 
-        # Callables para benchmark
+        # Callables for benchmark
         fn_fp32 = lambda: w_fp32 @ x_tensor
         fn_t2   = lambda: w_t2 @ x_tensor
         fn_p5   = lambda: w_p5 @ x_tensor
@@ -233,32 +233,32 @@ def main():
         speedup_p5_vs_fp32 = stats_fp32["median"] / stats_p5["median"]
         speedup_p5_vs_t2   = stats_t2["median"] / stats_p5["median"]
 
-        print(f"\n--- Matriz: {name} [{M} x {K}] ---")
-        print(f"{'Formato':<26} | {'Média (ms)':<10} | {'Mediana':<10} | {'Desv Padrão':<12} | {'IQR [P25..P75]':<15} | {'Min..Max (ms)'}")
+        print(f"\n--- Matrix: {name} [{M} x {K}] ---")
+        print(f"{'Format':<26} | {'Mean (ms)':<10} | {'Median':<10} | {'Std Dev':<12} | {'IQR [P25..P75]':<15} | {'Min..Max (ms)'}")
         print("-" * 92)
         print(f"{'1. FP32 (OpenBLAS/NumPy)':<26} | {stats_fp32['mean']:<10.3f} | {stats_fp32['median']:<10.3f} | {stats_fp32['std']:<12.3f} | [{stats_fp32['p25']:.3f}..{stats_fp32['p75']:.3f}] ms  | {stats_fp32['min']:.3f}..{stats_fp32['max']:.3f}")
-        print(f"{'2. Ternário int8 (Add-only)':<26} | {stats_t2['mean']:<10.3f} | {stats_t2['median']:<10.3f} | {stats_t2['std']:<12.3f} | [{stats_t2['p25']:.3f}..{stats_t2['p75']:.3f}] ms  | {stats_t2['min']:.3f}..{stats_t2['max']:.3f}")
+        print(f"{'2. Ternary int8 (Add-only)':<26} | {stats_t2['mean']:<10.3f} | {stats_t2['median']:<10.3f} | {stats_t2['std']:<12.3f} | [{stats_t2['p25']:.3f}..{stats_t2['p75']:.3f}] ms  | {stats_t2['min']:.3f}..{stats_t2['max']:.3f}")
         print(f"{'3. Base-3 5-trits (Vec-LUT)':<26} | {stats_p5['mean']:<10.3f} | {stats_p5['median']:<10.3f} | {stats_p5['std']:<12.3f} | [{stats_p5['p25']:.3f}..{stats_p5['p75']:.3f}] ms  | {stats_p5['min']:.3f}..{stats_p5['max']:.3f}")
         print("-" * 92)
-        print(f"    => Speedup do 5-trits (Vec-LUT) vs. FP32:          {speedup_p5_vs_fp32:.2f}x (mediana)")
-        print(f"    => Speedup do 5-trits (Vec-LUT) vs. int8 Add-only: {speedup_p5_vs_t2:.2f}x (mediana)")
+        print(f"    => Speedup of 5-trits (Vec-LUT) vs. FP32:          {speedup_p5_vs_fp32:.2f}x (median)")
+        print(f"    => Speedup of 5-trits (Vec-LUT) vs. int8 Add-only: {speedup_p5_vs_t2:.2f}x (median)")
 
     # =========================================================================
-    # PARTE 3: VALIDAÇÃO RIGOROSA DA FIDELIDADE NUMÉRICA COM MÚLTIPLAS ENTRADAS
+    # PART 3: RIGOROUS VALIDATION OF NUMERICAL FIDELITY WITH MULTIPLE INPUTS
     # =========================================================================
     print("\n" + "=" * 80)
-    print("  PARTE 3: VALIDAÇÃO NUMÉRICA COM ENTRADAS REAIS DO QWEN2.5")
-    print("  Testando com 10 Embeddings Reais extraídos do arquivo safetensors")
+    print("  PART 3: NUMERICAL VALIDATION WITH REAL QWEN2.5 INPUTS")
+    print("  Testing with 10 Real Embeddings extracted from the safetensors file")
     print("=" * 80)
 
-    # Carregar tabela de embeddings reais do Qwen2.5
+    # Load real Qwen2.5 embedding table
     emb_table = nativa.load_safetensors_fn(safetensors_path, "model.embed_tokens.weight")
     test_token_ids = [100, 500, 1500, 9924, 25000, 50000, 75000, 100000, 125000, 150000]
 
     norm1 = nativa.load_safetensors_fn(safetensors_path, "model.layers.0.input_layernorm.weight")
     w_gate = cached_matrices["gate_proj"]
 
-    print(f"\nAvaliando projeção mlp.gate_proj ([4864, 896]) para 10 tokens reais pós-RMSNorm:")
+    print(f"\nEvaluating mlp.gate_proj ([4864, 896]) projection for 10 real post-RMSNorm tokens:")
     print("-" * 88)
     print(f"{'Token ID':<10} | {'Cosine Sim':<12} | {'Pearson Corr':<12} | {'MAE':<10} | {'RMSE':<10} | {'Max Err':<10} | {'Rel Err L2'}")
     print("-" * 88)
@@ -271,12 +271,12 @@ def main():
     rel_l2s = []
 
     for tid in test_token_ids:
-        # Embedding real do token
+        # Real token embedding
         x_raw = emb_table[tid]
-        # Aplica RMSNorm real da camada
+        # Apply real layer RMSNorm
         xn = nativa.rmsnorm_fn(x_raw, norm1)
         
-        # Executa FP32 vs BitNet 5-trits
+        # Run FP32 vs BitNet 5-trits
         y_fp32 = w_gate["fp32"] @ xn
         y_p5   = w_gate["p5"] @ xn
         
@@ -291,18 +291,18 @@ def main():
         print(f"{tid:<10} | {m['cosine']:<12.5f} | {m['pearson']:<12.5f} | {m['mae']:<10.4f} | {m['rmse']:<10.4f} | {m['max_err']:<10.4f} | {m['rel_l2']*100:.2f}%")
 
     print("-" * 88)
-    print(f"{'MÉDIA':<10} | {np.mean(cosines):<12.5f} | {np.mean(pearsons):<12.5f} | {np.mean(maes):<10.4f} | {np.mean(rmses):<10.4f} | {np.mean(max_errs):<10.4f} | {np.mean(rel_l2s)*100:.2f}%")
-    print(f"{'DESVIO':<10} | {np.std(cosines):<12.5f} | {np.std(pearsons):<12.5f} | {np.std(maes):<10.4f} | {np.std(rmses):<10.4f} | {np.std(max_errs):<10.4f} | {np.std(rel_l2s)*100:.2f}%")
-    print(f"{'MÍN / MÁX':<10} | {np.min(cosines):.5f}..{np.max(cosines):.5f} | {np.min(pearsons):.5f}..{np.max(pearsons):.5f} | {np.min(maes):.4f}..{np.max(maes):.4f}")
+    print(f"{'MEAN':<10} | {np.mean(cosines):<12.5f} | {np.mean(pearsons):<12.5f} | {np.mean(maes):<10.4f} | {np.mean(rmses):<10.4f} | {np.mean(max_errs):<10.4f} | {np.mean(rel_l2s)*100:.2f}%")
+    print(f"{'STD DEV':<10} | {np.std(cosines):<12.5f} | {np.std(pearsons):<12.5f} | {np.std(maes):<10.4f} | {np.std(rmses):<10.4f} | {np.std(max_errs):<10.4f} | {np.std(rel_l2s)*100:.2f}%")
+    print(f"{'MIN / MAX':<10} | {np.min(cosines):.5f}..{np.max(cosines):.5f} | {np.min(pearsons):.5f}..{np.max(pearsons):.5f} | {np.min(maes):.4f}..{np.max(maes):.4f}")
 
     # =========================================================================
-    # PARTE 4: IMPACTO CUMULATIVO NA CAMADA INTEIRA (Atenção + RMSNorm + MLP)
+    # PART 4: CUMULATIVE IMPACT ON THE FULL LAYER (Attention + RMSNorm + MLP)
     # =========================================================================
     print("\n" + "=" * 80)
-    print("  PARTE 4: IMPACTO CUMULATIVO NO BLOCO TRANSFORMER COMPLETO")
+    print("  PART 4: CUMULATIVE IMPACT ON THE FULL TRANSFORMER BLOCK")
     print("=" * 80)
 
-    # Carregar camada 0 completa
+    # Load full layer 0
     w_q_f32 = cached_matrices["q_proj"]["fp32"]
     w_k_f32 = cached_matrices["k_proj"]["fp32"]
     w_v_f32 = nativa.load_safetensors_fn(safetensors_path, "model.layers.0.self_attn.v_proj.weight")
@@ -315,7 +315,7 @@ def main():
     b_k = nativa.load_safetensors_fn(safetensors_path, "model.layers.0.self_attn.k_proj.bias")
     b_v = nativa.load_safetensors_fn(safetensors_path, "model.layers.0.self_attn.v_proj.bias")
 
-    # Versões empacotadas 5-trits
+    # 5-trits packed versions
     w_q_p5 = cached_matrices["q_proj"]["p5"]
     w_k_p5 = cached_matrices["k_proj"]["p5"]
     w_v_p5 = w_v_f32.quantize_bitnet().pack_5trits()
@@ -331,7 +331,7 @@ def main():
     for tid in test_token_ids:
         x_in = emb_table[tid]
         
-        # 1. Forward Pass FP32
+        # 1. FP32 Forward Pass
         xn1 = nativa.rmsnorm_fn(x_in, norm1)
         q_f = (w_q_f32 @ xn1) + b_q
         k_f = (w_k_f32 @ xn1) + b_k
@@ -349,7 +349,7 @@ def main():
         mlp_out_f = w_down_f32 @ h_f
         y_f32_layer = x_mid_f + mlp_out_f
         
-        # 2. Forward Pass BitNet 5-trits
+        # 2. BitNet 5-trits Forward Pass
         xn1_b = nativa.rmsnorm_fn(x_in, norm1)
         q_b = (w_q_p5 @ xn1_b) + b_q
         k_b = (w_k_p5 @ xn1_b) + b_k
@@ -372,13 +372,13 @@ def main():
         layer_pearsons.append(m_layer["pearson"])
         layer_rel_errs.append(m_layer["rel_l2"])
 
-    print(f"Fidelidade na saída final do Bloco Transformer (Camada 0) para os 10 tokens:")
-    print(f"  - Similaridade de Cosseno Média: {np.mean(layer_cosines):.4f} (Mín: {np.min(layer_cosines):.4f}, Máx: {np.max(layer_cosines):.4f})")
-    print(f"  - Correlação de Pearson Média:   {np.mean(layer_pearsons):.4f} (Mín: {np.min(layer_pearsons):.4f}, Máx: {np.max(layer_pearsons):.4f})")
-    print(f"  - Erro Relativo L2 Médio:        {np.mean(layer_rel_errs)*100:.2f}%")
+    print(f"Fidelity at the final output of the Transformer Block (Layer 0) for the 10 tokens:")
+    print(f"  - Mean Cosine Similarity:   {np.mean(layer_cosines):.4f} (Min: {np.min(layer_cosines):.4f}, Max: {np.max(layer_cosines):.4f})")
+    print(f"  - Mean Pearson Correlation: {np.mean(layer_pearsons):.4f} (Min: {np.min(layer_pearsons):.4f}, Max: {np.max(layer_pearsons):.4f})")
+    print(f"  - Mean Relative L2 Error:   {np.mean(layer_rel_errs)*100:.2f}%")
 
     print("\n" + "=" * 80)
-    print("  RELATÓRIO DE CONCLUSÃO DO BENCHMARK RIGOROSO CONCLUÍDO COM SUCESSO!")
+    print("  RIGOROUS BENCHMARK COMPLETION REPORT FINISHED SUCCESSFULLY!")
     print("=" * 80)
 
 if __name__ == "__main__":

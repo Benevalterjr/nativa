@@ -1,13 +1,13 @@
 # mini_llm_mha_real.nat
-# Multi-Head Attention Real (4 Heads) + KV Cache Completo + BitNet AbsMean Explicito + Sampling Estocastico
+# Real Multi-Head Attention (4 Heads) + Complete KV Cache + Explicit BitNet AbsMean + Stochastic Sampling
 
 fn main():
     print("==========================================================================")
-    print("  MINI LLM V0.4 — MULTI-HEAD ATTENTION REAL & KV CACHE COMPLETO")
-    print("  4 Cabecas Independentes | Historico Integral no SDPA | Sampling Top-P")
+    print("  MINI LLM V0.4 — REAL MULTI-HEAD ATTENTION & COMPLETE KV CACHE")
+    print("  4 Independent Heads | Full History in SDPA | Top-P Sampling")
     print("==========================================================================")
 
-    # Hiperparametros
+    # Hyperparameters
     d_model   = 64
     n_heads   = 4
     dim_head  = 16       # d_model = n_heads * dim_head
@@ -15,7 +15,7 @@ fn main():
     max_seq   = 128
     n_new_tokens = 10
 
-    # 1. Tokenizador & Vocabulario Dinamico (Sem clamping!)
+    # 1. Tokenizer & Dynamic Vocabulary (No clamping!)
     tok = Tokenizer()
     vocab_size = len(tok)
     prompt = "Nativa e uma linguagem para IA"
@@ -23,16 +23,16 @@ fn main():
     prompt_len = len(tokens)
 
     print(f"\n[1] Tokenizer:")
-    print(f"    Vocab size exato:   {vocab_size} (sem clamps ou modulo!)")
+    print(f"    Exact vocab size:   {vocab_size} (no clamps or modulo!)")
     print(f"    Prompt:             \"{prompt}\"")
-    print(f"    Tokens do prompt:   {tokens}")
+    print(f"    Prompt tokens:      {tokens}")
     print(f"    Seq len:            {prompt_len}")
 
-    # 2. Inicializacao e Quantizacao BitNet com Gama Explicito
-    print("\n[2] Inicializando Pesos com Fatores de Escala AbsMean (gamma) Explicitos:")
+    # 2. Initialization and BitNet Quantization with Explicit Gamma
+    print("\n[2] Initializing Weights with Explicit AbsMean Scale Factors (gamma):")
     emb = randn([vocab_size, d_model]) * 0.02
 
-    # Projecoes de Atencao e MLP (Camada 1)
+    # Attention and MLP Projections (Layer 1)
     Wq1_raw = randn([d_model, d_model])
     Wk1_raw = randn([d_model, d_model])
     Wv1_raw = randn([d_model, d_model])
@@ -40,7 +40,7 @@ fn main():
     W1_1_raw = randn([d_model, d_ff])
     W2_1_raw = randn([d_ff, d_model])
 
-    # Fatores gamma explicitos
+    # Explicit gamma factors
     g_q1 = tensor_absmean(Wq1_raw)
     g_k1 = tensor_absmean(Wk1_raw)
     g_v1 = tensor_absmean(Wv1_raw)
@@ -48,7 +48,7 @@ fn main():
     g_1_1 = tensor_absmean(W1_1_raw)
     g_2_1 = tensor_absmean(W2_1_raw)
 
-    # Pesos ternarios {-1, 0, 1}
+    # Ternary weights {-1, 0, 1}
     Wq1 = quantize_bitnet(Wq1_raw)
     Wk1 = quantize_bitnet(Wk1_raw)
     Wv1 = quantize_bitnet(Wv1_raw)
@@ -62,17 +62,17 @@ fn main():
     lm_head = randn([d_model, vocab_size]) * 0.02
 
     print(f"    gamma_q: {g_q1:.6f} | gamma_k: {g_k1:.6f} | gamma_v: {g_v1:.6f}")
-    print("    Todos os pesos lineares convertidos para BitNet b1.58!")
+    print("    All linear weights converted to BitNet b1.58!")
 
-    # 3. KV Caches Independentes para as 4 Cabecas
-    print(f"\n[3] Criando KV Cache independente para cada uma das {n_heads} cabecas...")
+    # 3. Independent KV Caches for the 4 Heads
+    print(f"\n[3] Creating independent KV Cache for each of the {n_heads} heads...")
     c_k0 = KVCache(max_seq, dim_head)
     c_k1 = KVCache(max_seq, dim_head)
     c_k2 = KVCache(max_seq, dim_head)
     c_k3 = KVCache(max_seq, dim_head)
 
-    # 4. Prefill do Contexto
-    print("\n[4] Prefill com Multi-Head Attention Real...")
+    # 4. Context Prefill
+    print("\n[4] Prefill with Real Multi-Head Attention...")
     t_start = clock()
     x = zeros([d_model])
 
@@ -80,13 +80,13 @@ fn main():
         tid = tokens[i]
         x = emb[tid]
 
-        # RMSNorm + QKV com gamma explicito
+        # RMSNorm + QKV with explicit gamma
         xn = rmsnorm(x, g_attn1)
         q_all = (xn @ Wq1) * g_q1
         k_all = (xn @ Wk1) * g_k1
         v_all = (xn @ Wv1) * g_v1
 
-        # Fatiamento em 4 Cabecas (MHA)
+        # Slicing into 4 Heads (MHA)
         q0 = apply_rope(q_all[0..16], i)
         k0 = apply_rope(k_all[0..16], i)
         v0 = v_all[0..16]
@@ -111,21 +111,21 @@ fn main():
         c_k3.update([k3], [v3])
         att3 = sdpa([q3], c_k3.k, c_k3.v)
 
-        # Concatenacao das 4 Cabecas
+        # Concatenation of the 4 Heads
         att_concat = concat([att0[0], att1[0], att2[0], att3[0]])
         x = x + ((att_concat @ Wo1) * g_o1)
 
-        # MLP com gamma explicito
+        # MLP with explicit gamma
         xn = rmsnorm(x, g_mlp1)
         h = silu((xn @ W1_1) * g_1_1)
         x = x + ((h @ W2_1) * g_2_1)
 
     t_prefill = clock() - t_start
-    print(f"    Prefill concluido em {t_prefill * 1000.0:.2f} ms")
-    print(f"    KV Cache seq_len por cabeca: {c_k0.seq_len} tokens retidos no historico integral!")
+    print(f"    Prefill completed in {t_prefill * 1000.0:.2f} ms")
+    print(f"    KV Cache seq_len per head: {c_k0.seq_len} tokens retained in full history!")
 
-    # 5. Geracao com Sampling (Temperatura + Top-P) e KV Cache Integral
-    print(f"\n[5] Geracao de {n_new_tokens} tokens via Sampling Estocastico (T=0.8, Top-P=0.9):")
+    # 5. Generation with Sampling (Temperature + Top-P) and Full KV Cache
+    print(f"\n[5] Generating {n_new_tokens} tokens via Stochastic Sampling (T=0.8, Top-P=0.9):")
     t_gen_start = clock()
     x = rmsnorm(x, g_final)
     novos_tokens = []
@@ -134,15 +134,15 @@ fn main():
         pos = prompt_len + step
         logits = x @ lm_head
 
-        # Amostragem Estocastica sem loops repetitivos
+        # Stochastic sampling without repetitive loops
         next_id = sample(logits, 0.8, 0.9)
         novos_tokens.append(next_id)
 
-        print(f"      Passo {step + 1:2d}: Token id = {next_id:4d} | Cache len = {c_k0.seq_len}")
+        print(f"      Step {step + 1:2d}: Token id = {next_id:4d} | Cache len = {c_k0.seq_len}")
 
         x = emb[next_id]
 
-        # Multi-Head Attention com historico completo de todas as posicoes anteriores
+        # Multi-Head Attention with complete history of all previous positions
         xn = rmsnorm(x, g_attn1)
         q_all = (xn @ Wq1) * g_q1
         k_all = (xn @ Wk1) * g_k1
@@ -182,16 +182,16 @@ fn main():
         x = rmsnorm(x, g_final)
 
     t_gen = clock() - t_gen_start
-    print(f"\n    Tempo total de geracao: {t_gen * 1000.0:.2f} ms ({to_f64(n_new_tokens) / t_gen:.1f} tok/s)")
+    print(f"\n    Total generation time: {t_gen * 1000.0:.2f} ms ({to_f64(n_new_tokens) / t_gen:.1f} tok/s)")
     texto_gerado = decode(tok, novos_tokens)
-    print(f"    Tokens gerados:         {novos_tokens}")
-    print(f"    Texto gerado:           \"{texto_gerado}\"")
+    print(f"    Generated tokens:       {novos_tokens}")
+    print(f"    Generated text:         \"{texto_gerado}\"")
 
     print("\n==========================================================================")
-    print("  TODAS AS LIMITACOES ARQUITETURAIS FORAM RESOLVIDAS:")
-    print("  [x] Multi-Head Attention Real (4 cabecas completas)")
-    print("  [x] KV Cache com historico integral de atencao no SDPA")
-    print("  [x] Fator de escala AbsMean (gamma) explicito no BitNet")
-    print("  [x] Vocabulario dinamico sem clamping ou modulo")
-    print("  [x] Amostragem estocastica com Temperatura e Top-P")
+    print("  ALL ARCHITECTURAL LIMITATIONS HAVE BEEN RESOLVED:")
+    print("  [x] Real Multi-Head Attention (4 complete heads)")
+    print("  [x] KV Cache with full attention history in SDPA")
+    print("  [x] Explicit AbsMean scale factor (gamma) in BitNet")
+    print("  [x] Dynamic vocabulary without clamping or modulo")
+    print("  [x] Stochastic sampling with Temperature and Top-P")
     print("==========================================================================")

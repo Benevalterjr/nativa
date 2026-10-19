@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
 tools/teste_qwen_int4.py
-Quantizacao INT4 em Grupo (Group-wise 4-bit, padrao llama.cpp / AWQ) aplicada ao Qwen2.5-0.5B.
-Demonstra geracao de texto completa, rapida e fluente em Portugues na CPU.
+Group-wise INT4 quantization (4-bit, llama.cpp / AWQ standard) applied to Qwen2.5-0.5B.
+Demonstrates complete, fast, and fluent text generation on CPU.
 """
 
 import os
@@ -19,8 +19,8 @@ from transformers import AutoTokenizer, AutoModelForCausalLM
 
 def quantize_linear_to_int4(w: torch.Tensor, group_size: int = 128):
     """
-    Quantizacao simetrica INT4 (4 bits por peso = 16 niveis: -8 a +7)
-    com escala por bloco de 128 pesos.
+    Symmetric INT4 quantization (4 bits per weight = 16 levels: -8 to +7)
+    with block-wise scaling of 128 weights.
     """
     M, K = w.shape
     pad_k = (group_size - (K % group_size)) % group_size
@@ -32,12 +32,12 @@ def quantize_linear_to_int4(w: torch.Tensor, group_size: int = 128):
     num_groups = w_padded.shape[1] // group_size
     w_grouped = w_padded.view(M, num_groups, group_size)
     
-    # Escala por bloco para caber em [-8, 7]
+    # Block-wise scale to fit in [-8, 7]
     max_val = torch.max(torch.abs(w_grouped), dim=-1, keepdim=True).values
     eps = 1e-7
     scale = max_val / 7.0 + eps
     
-    # Quantizacao em 4 bits (16 niveis)
+    # 4-bit quantization (16 levels)
     w_q = torch.clamp(torch.round(w_grouped / scale), -8.0, 7.0)
     w_dequant = w_q * scale
     
@@ -48,27 +48,27 @@ def quantize_linear_to_int4(w: torch.Tensor, group_size: int = 128):
 
 def main():
     print("==========================================================================")
-    print("  QWEN2.5-0.5B EM INT4 (4-BITS EM BLOCOS DE 128) — NATIVA ENGINE")
-    print("  Compressao de ~75% de RAM | Qualidade Textual Fluente na CPU")
+    print("  QWEN2.5-0.5B IN INT4 (4-BIT IN BLOCKS OF 128) — NATIVA ENGINE")
+    print("  ~75% RAM Compression | Fluent Text Quality on CPU")
     print("==========================================================================")
 
     model_id = "Qwen/Qwen2.5-0.5B"
-    print(f"[*] Carregando tokenizador e modelo oficial ({model_id})...")
+    print(f"[*] Loading tokenizer and official model ({model_id})...")
     
     t0 = time.time()
     tokenizer = AutoTokenizer.from_pretrained(model_id)
     model = AutoModelForCausalLM.from_pretrained(model_id, torch_dtype=torch.float32)
-    print(f"[*] Modelo base carregado em {time.time() - t0:.2f}s!")
+    print(f"[*] Base model loaded in {time.time() - t0:.2f}s!")
 
-    # Aplicar INT4 em todas as projecoes lineares
-    print("\n[*] Aplicando Quantizacao INT4 em bloco (128 pesos por escala)...")
+    # Apply INT4 to all linear projections
+    print("\n[*] Applying block-wise INT4 Quantization (128 weights per scale)...")
     t_q_s = time.time()
     total_params = 0
     quant_params = 0
 
     for name, module in model.named_modules():
         if isinstance(module, nn.Linear):
-            if "lm_head" not in name:  # Preservar o classificador final de saida
+            if "lm_head" not in name:  # Preserve the final output classifier
                 with torch.no_grad():
                     w_int4 = quantize_linear_to_int4(module.weight.data, group_size=128)
                     module.weight.data.copy_(w_int4)
@@ -76,17 +76,17 @@ def main():
             total_params += module.weight.numel()
 
     t_quant = time.time() - t_q_s
-    print(f"[OK] {quant_params:,} parametros convertidos para INT4 em {t_quant:.2f}s!")
+    print(f"[OK] {quant_params:,} parameters converted to INT4 in {t_quant:.2f}s!")
     
-    # Calculo da pegada de memoria estimada
+    # Calculate estimated memory footprint
     ram_original_mb = (total_params * 2) / (1024 * 1024)
     ram_int4_mb = (quant_params * 0.5 + (total_params - quant_params) * 2 + (quant_params / 128) * 2) / (1024 * 1024)
-    print(f"[*] Pegada de memória dos pesos: {ram_original_mb:.1f} MB (FP16) -> {ram_int4_mb:.1f} MB (INT4)!")
+    print(f"[*] Weight memory footprint: {ram_original_mb:.1f} MB (FP16) -> {ram_int4_mb:.1f} MB (INT4)!")
 
-    # Testes de Geracao com Prompts em Portugues
+    # Generation Tests with Prompts
     prompts = [
-        "A inteligência artificial é uma área da ciência da computação que",
-        "O Brasil é um país fascinante porque"
+        "Artificial intelligence is a field of computer science that",
+        "Brazil is a fascinating country because"
     ]
 
     for p in prompts:
@@ -109,11 +109,11 @@ def main():
         num_generated = len(out[0]) - len(inputs["input_ids"][0])
         text = tokenizer.decode(out[0].tolist(), skip_special_tokens=True)
         
-        print(f"RESPOSTA GERADA (INT4):\n\"{text}\"")
-        print(f"\n[Estatísticas]: {num_generated} novos tokens em {t_gen:.2f}s ({num_generated / t_gen:.1f} tokens/s na CPU)")
+        print(f"GENERATED RESPONSE (INT4):\n\"{text}\"")
+        print(f"\n[Statistics]: {num_generated} new tokens in {t_gen:.2f}s ({num_generated / t_gen:.1f} tokens/s on CPU)")
 
     print("\n==========================================================================")
-    print("  CONCLUSAO: QWEN EM INT4 EXECUTA COM FLUIDEZ E COERENCIA TOTAL!")
+    print("  CONCLUSION: QWEN IN INT4 RUNS WITH FULL FLUENCY AND COHERENCE!")
     print("==========================================================================")
 
 if __name__ == "__main__":

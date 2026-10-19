@@ -1,10 +1,10 @@
 # riemann.nat
-# Cálculo dos Zeros não-triviais da Função Zeta de Riemann na linha crítica (s = 1/2 + it)
-# Utiliza a aproximação da fórmula de Riemann-Siegel (Função Hardy Z) e o Método da Bissecção.
+# Computation of non-trivial zeros of the Riemann Zeta Function on the critical line (s = 1/2 + it)
+# Uses the Riemann-Siegel formula approximation (Hardy Z Function) and the Bisection Method.
 
 const PI = 3.14159265358979323846
 
-# Função theta(t) de Riemann-Siegel (fase da função Zeta)
+# Riemann-Siegel theta(t) function (phase of the Zeta function)
 fn theta(t: f64) -> f64:
     return (
         0.5 * t * ln(t / (2.0 * PI))
@@ -14,7 +14,7 @@ fn theta(t: f64) -> f64:
         + 7.0 / (5760.0 * t * t * t)
     )
 
-# Aproximação da função Z(t) de Hardy (onde Z(t) = 0 corresponde a zeta(1/2 + it) = 0)
+# Approximation of Hardy's Z(t) function (where Z(t) = 0 corresponds to zeta(1/2 + it) = 0)
 fn hardy_z_aprox(t: f64) -> f64:
     N: i64 = to_i64(floor(sqrt(t / (2.0 * PI))))
     fase = theta(t)
@@ -24,7 +24,7 @@ fn hardy_z_aprox(t: f64) -> f64:
         soma += cos(fase - t * ln(nf)) / sqrt(nf)
     return 2.0 * soma
 
-# Refinamento da raiz pelo Método da Bissecção
+# Root refinement via the Bisection Method
 fn bissecao(a_in: f64, b_in: f64) -> f64:
     a = a_in
     b = b_in
@@ -46,7 +46,7 @@ fn main():
     fim = 100.0
     passo = 0.25
 
-    print(f"=== Buscando Zeros da Função Zeta na Linha Critica [t = {inicio} ate {fim}] ===")
+    print(f"=== Searching for Zeta Function Zeros on the Critical Line [t = {inicio} to {fim}] ===")
     
     anterior_t = inicio
     anterior_z = hardy_z_aprox(anterior_t)
@@ -55,13 +55,13 @@ fn main():
 
     while t <= fim:
         z = hardy_z_aprox(t)
-        # Houve mudança de sinal entre anterior_t e t? (Teorema do Valor Intermediário)
+        # Was there a sign change between anterior_t and t? (Intermediate Value Theorem)
         if anterior_z * z < 0.0:
             encontrados += 1
             raiz = bissecao(anterior_t, t)
-            print(f"[{encontrados:2d}] Zero detectado: t = {raiz:.6f}")
+            print(f"[{encontrados:2d}] Zero detected: t = {raiz:.6f}")
         anterior_t = t
         anterior_z = z
         t += passo
 
-    print(f"=== Busca concluida: {encontrados} zeros nao-triviais encontrados ===")
+    print(f"=== Search completed: {encontrados} non-trivial zeros found ===")

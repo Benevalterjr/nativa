@@ -2,11 +2,11 @@
 // NATIVA NATIVE C RUNNER - QWEN2.5-0.5B IN PURE C99 (ESTILO LLAMA.CPP / LLAMA2.C)
 // ============================================================================
 // Motor de inferência 100% nativo C99 para arquitetura Transformer Qwen2.5:
-//   - Zero-Copy mmap do modelo safetensors via Windows Win32 API
-//   - Pesos residentes em BF16 com desempacotamento SIMD AVX/SSE sob demanda
-//   - Memory Arena contígua de KV-Cache (24 camadas x 1024 posições)
+//   - Zero-Copy safetensors model mmap via Windows Win32 API
+//   - Weights resident in BF16 with on-demand SIMD AVX/SSE unpacking
+//   - Contiguous KV-Cache Memory Arena (24 layers x 1024 posições)
 //   - Paralelismo de CPU multi-core com OpenMP
-//   - Tokenizer e Vocabulário nativo binário
+//   - Tokenizer and native binary vocabulary
 // ============================================================================
 
 #define _CRT_SECURE_NO_WARNINGS 1
@@ -26,7 +26,7 @@
 #define MAX_SEQ_LEN 1024
 
 // ----------------------------------------------------------------------------
-// ESTRUTURAS DO VOCABULÁRIO
+// VOCABULARY STRUCTURES
 // ----------------------------------------------------------------------------
 typedef struct {
     uint16_t len;
@@ -242,7 +242,7 @@ static void forward_token(const uint8_t* model_bytes, int token_id, int pos) {
         g_x[i] = bf16_to_fp32(embed_row[i]);
     }
 
-    // 2. Loop através das 24 camadas
+    // 2. Loop through 24 layers
     for (int l = 0; l < QWEN_NUM_LAYERS; l++) {
         const QwenLayerOffsets* lo = &g_qwen_offsets.layers[l];
         const uint16_t* norm1_w = (const uint16_t*)(model_bytes + lo->norm1);
@@ -387,35 +387,35 @@ int main(int argc, char** argv) {
         if (num_tokens_generate <= 0) num_tokens_generate = 25;
     }
 
-    // 1. Carrega Vocabulário Binário
-    printf("[*] Carregando vocabulario nativo (%s)...\n", vocab_path);
+    // 1. Load Binary Vocabulary
+    printf("[*] Loading native vocabulary (%s)...\n", vocab_path);
     if (!load_vocab(vocab_path)) {
-        fprintf(stderr, "[ERRO] Nao foi possivel carregar o vocabulario: %s\n", vocab_path);
+        fprintf(stderr, "[ERROR] Could not load vocabulary: %s\n", vocab_path);
         return 1;
     }
-    printf("    -> %u tokens carregados no vocabulario.\n", g_vocab_size);
+    printf("    -> %u tokens loaded into vocabulary.\n", g_vocab_size);
 
-    // 2. Win32 Zero-Copy mmap do modelo safetensors
-    printf("[*] Mapeando pesos do modelo via Win32 mmap (%s)...\n", model_path);
+    // 2. Win32 Zero-Copy mmap of safetensors model
+    printf("[*] Mapping model weights via Win32 mmap (%s)...\n", model_path);
     HANDLE hFile = CreateFileA(model_path, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
     if (hFile == INVALID_HANDLE_VALUE) {
-        fprintf(stderr, "[ERRO] Falha ao abrir o arquivo do modelo: %s\n", model_path);
+        fprintf(stderr, "[ERROR] Failed to open model file: %s\n", model_path);
         return 1;
     }
     HANDLE hMapping = CreateFileMappingA(hFile, NULL, PAGE_READONLY, 0, 0, NULL);
     if (!hMapping) {
-        fprintf(stderr, "[ERRO] CreateFileMapping falhou.\n");
+        fprintf(stderr, "[ERROR] CreateFileMapping failed.\n");
         CloseHandle(hFile);
         return 1;
     }
     const uint8_t* model_bytes = (const uint8_t*)MapViewOfFile(hMapping, FILE_MAP_READ, 0, 0, 0);
     if (!model_bytes) {
-        fprintf(stderr, "[ERRO] MapViewOfFile falhou.\n");
+        fprintf(stderr, "[ERROR] MapViewOfFile failed.\n");
         CloseHandle(hMapping);
         CloseHandle(hFile);
         return 1;
     }
-    printf("    -> Modelo mapeado em memoria virtual com sucesso (Zero-Copy).\n");
+    printf("    -> Model mapped into virtual memory successfully (Zero-Copy).\n");
 
     // -------------------------------------------------------------
     // MODO INTERATIVO (CHAT STREAMING MULTI-TURN EM C)
@@ -483,7 +483,7 @@ int main(int argc, char** argv) {
     int prompt_len = 5;
     bool custom_prompt = false;
 
-    // Tokens padrao do benchmark: "Artificial Intelligence is transforming"
+    // Benchmark default tokens: "Artificial Intelligence is transforming"
     prompt_tokens_buf[0] = 9286;
     prompt_tokens_buf[1] = 16488;
     prompt_tokens_buf[2] = 21392;
@@ -535,8 +535,8 @@ int main(int argc, char** argv) {
     int next_token = sample_argmax(g_logits, QWEN_VOCAB_SIZE);
     double t_prefill = timer_now() - t_prefill_start;
 
-    printf("    -> Prefill concluido em %.2f ms (%.1f tokens/s).\n", t_prefill * 1000.0, (double)prompt_len / t_prefill);
-    printf("    -> Primeiro token gerado: [ID %d] ", next_token);
+    printf("    -> Prefill completed in %.2f ms (%.1f tokens/s).\n", t_prefill * 1000.0, (double)prompt_len / t_prefill);
+    printf("    -> First generated token: [ID %d] ", next_token);
     print_token(next_token);
     printf("\n");
 
@@ -545,9 +545,9 @@ int main(int argc, char** argv) {
     // -------------------------------------------------------------
     printf("\n[*] Gerando %d tokens em modo Decode Auto-regressivo nativo C99...\n", num_tokens_generate);
     if (custom_prompt) {
-        printf("--- Resposta Gerada ---\n");
+        printf("--- Generated Response ---\n");
     } else {
-        printf("--- Texto Gerado ---\nArtificial Intelligence is transforming");
+        printf("--- Generated Text ---\nArtificial Intelligence is transforming");
     }
     print_token(next_token);
 
@@ -576,11 +576,11 @@ int main(int argc, char** argv) {
 
     printf("\n--------------------\n\n");
     printf("======================================================================\n");
-    printf("  RESULTADO DO MOTOR NATIVO C99 (ESTILO LLAMACPP NO NATIVA)\n");
+    printf("  NATIVE C99 ENGINE RESULT (LLAMACPP STYLE IN NATIVA)\n");
     printf("======================================================================\n");
     printf("• Tokens gerados no decode: %d\n", generated_count);
-    printf("• Tempo total de Decode:    %.3f s\n", t_decode_total);
-    printf("• Tempo medio por token:    %.2f ms\n", avg_step_time * 1000.0);
+    printf("• Total Decode time:    %.3f s\n", t_decode_total);
+    printf("• Average time per token:    %.2f ms\n", avg_step_time * 1000.0);
     printf("• Velocidade NATIVA em C:   %.2f TOKENS/SEGUNDO!\n", tokens_per_sec);
     printf("======================================================================\n");
 
@@ -589,7 +589,7 @@ int main(int argc, char** argv) {
     CloseHandle(hMapping);
     CloseHandle(hFile);
 
-    // Se aberto por clique duplo no Windows Explorer, pausa para o usuário ver o resultado
+    // If launched by double-clicking in Windows Explorer, pause so the user can see the result
     DWORD proc_list[2];
     if (GetConsoleProcessList(proc_list, 2) <= 1) {
         printf("\nPressione ENTER para fechar esta janela...\n");

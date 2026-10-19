@@ -13,12 +13,12 @@ def compile_c(src, exe, extra_flags=""):
     try:
         res = subprocess.run([bat_path], capture_output=True, text=True)
         if res.returncode != 0:
-            print("[ERRO COMPILACAO]")
+            print("[COMPILATION ERROR]")
             print(res.stdout)
             print(res.stderr)
             return False
         else:
-            print(f"[OK] Compilado com sucesso: {exe}")
+            print(f"[OK] Successfully compiled: {exe}")
             return True
     finally:
         if os.path.exists(bat_path):
@@ -32,7 +32,7 @@ def compile_c(src, exe, extra_flags=""):
 
 if __name__ == "__main__":
     if len(sys.argv) < 3:
-        print("Uso: python compilar.py <src.c> <out.exe>")
+        print("Usage: python compilar.py <src.c> <out.exe>")
         sys.exit(1)
     src = sys.argv[1]
     exe = sys.argv[2]

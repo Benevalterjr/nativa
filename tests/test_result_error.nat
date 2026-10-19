@@ -1,33 +1,33 @@
 # test_result_error.nat
-# Validação do Sistema de Tratamento de Erros: Result, ok, err, is_ok, is_err, unwrap_or e operador ?
+# Validation of the Error Handling System: Result, ok, err, is_ok, is_err, unwrap_or, and ? operator
 
 fn main():
-    print("=== Teste de Tratamento de Erros e Result em Nativa ===")
+    print("=== Error Handling and Result Test in Nativa ===")
     
-    # 1. Verificação de existência de arquivo
+    # 1. File existence check
     arq_existente = "tests/test_result_error.nat"
     arq_fantasma = "arquivo_que_nao_existe_12345.txt"
     
     existe_1 = exists_file(arq_existente)
     existe_2 = exists_file(arq_fantasma)
-    print(f"Existe real: {existe_1}, Existe fantasma: {existe_2}")
+    print(f"Exists real: {existe_1}, Exists ghost: {existe_2}")
     
-    # 2. Leitura Segura de Arquivo (Retorna Result)
+    # 2. Safe File Read (Returns Result)
     res_erro = read_file_safe(arq_fantasma)
     falhou = is_err(res_erro)
     passou = is_ok(res_erro)
-    print(f"Leitura de fantasma falhou: {falhou}, passou: {passou}")
+    print(f"Ghost read failed: {falhou}, passed: {passou}")
     
-    # 3. Fallback Seguro com unwrap_or
+    # 3. Safe Fallback with unwrap_or
     conteudo_fallback = unwrap_or(res_erro, "conteudo_padrao_seguro")
-    print(f"Fallback obtido: {conteudo_fallback}")
+    print(f"Fallback obtained: {conteudo_fallback}")
     
-    # 4. Leitura com Sucesso e unwrap direto
+    # 4. Successful Read and direct unwrap
     res_ok = read_file_safe(arq_existente)
     if is_ok(res_ok):
         tam_lido = len(unwrap(res_ok))
-        print(f"Arquivo lido com sucesso! Bytes lidos: {tam_lido}")
+        print(f"File read successfully! Bytes read: {tam_lido}")
     
-    # 5. Operador Postfix ? para Desempacotamento Automático em Result
+    # 5. Postfix ? Operator for Automatic Unwrapping on Result
     conteudo_interrogacao = read_file_safe(arq_existente)?
-    print(f"Leitura via operador '?' bem sucedida! Tamanho: {len(conteudo_interrogacao)}")
+    print(f"Read via '?' operator succeeded! Length: {len(conteudo_interrogacao)}")

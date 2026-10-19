@@ -1,16 +1,16 @@
 # mini_llm_bitnet.nat
-# Mini Decoder-Only BitNet b1.58 Transformer em Nativa v0.4
-# Componentes:
-#   - Tokenizer BPE + Byte-Fallback
-#   - Token Embedding Contiguo
-#   - 2 × Blocos BitNet b1.58 (RMSNorm → Add-Only GEMM QKV + RoPE → Residual → RMSNorm → Add-Only SiLU MLP → Residual)
+# Mini Decoder-Only BitNet b1.58 Transformer in Nativa v0.4
+# Components:
+#   - BPE Tokenizer + Byte-Fallback
+#   - Contiguous Token Embedding
+#   - 2 × BitNet b1.58 Blocks (RMSNorm → Add-Only GEMM QKV + RoPE → Residual → RMSNorm → Add-Only SiLU MLP → Residual)
 #   - LM Head + Final RMSNorm
-#   - KV Cache Autoregressivo O(1) com Kernel AOT Multi-threaded
+#   - O(1) Autoregressive KV Cache with Multi-threaded AOT Kernel
 
 fn main():
     print("==========================================================================")
     print("  MINI LLM BITNET b1.58 — Decoder-Only Transformer (Nativa v0.4)")
-    print("  Pesos 100% Ternarios {-1, 0, +1} | Matmul Add-Only Livre de Multiplicacoes")
+    print("  100% Ternary Weights {-1, 0, +1} | Multiplication-Free Add-Only Matmul")
     print("==========================================================================")
 
     d_model   = 64
@@ -22,10 +22,10 @@ fn main():
     vocab_size = 533
     n_new_tokens = 15
 
-    print(f"    Arquitetura: d_model={d_model} | heads={n_heads} | layers={n_layers} | d_ff={d_ff}")
+    print(f"    Architecture: d_model={d_model} | heads={n_heads} | layers={n_layers} | d_ff={d_ff}")
 
-    # 1. Tokenizador BPE
-    print("\n[1] Tokenizer BPE nativo:")
+    # 1. BPE Tokenizer
+    print("\n[1] Native BPE Tokenizer:")
     tok = Tokenizer()
     prompt = "Nativa e uma linguagem para IA"
     tokens = encode(tok, prompt)
@@ -34,11 +34,11 @@ fn main():
     print(f"    Tokens      : {tokens}")
     print(f"    Prompt len  : {prompt_len}")
 
-    # 2. Inicializacao e Quantizacao BitNet b1.58
-    print("\n[2] Inicializando e quantizando pesos para BitNet b1.58 (AbsMean)...")
+    # 2. Initialization and BitNet b1.58 Quantization
+    print("\n[2] Initializing and quantizing weights to BitNet b1.58 (AbsMean)...")
     emb = randn([vocab_size, d_model]) * 0.02
 
-    # Camada 1
+    # Layer 1
     Wq1 = quantize_bitnet(randn([d_model, d_model]))
     Wk1 = quantize_bitnet(randn([d_model, d_model]))
     Wv1 = quantize_bitnet(randn([d_model, d_model]))
@@ -48,7 +48,7 @@ fn main():
     g_attn1 = ones([d_model])
     g_mlp1  = ones([d_model])
 
-    # Camada 2
+    # Layer 2
     Wq2 = quantize_bitnet(randn([d_model, d_model]))
     Wk2 = quantize_bitnet(randn([d_model, d_model]))
     Wv2 = quantize_bitnet(randn([d_model, d_model]))
@@ -64,11 +64,11 @@ fn main():
 
     bytes_fp32 = (vocab_size * d_model + (d_model * d_model * 4 + d_model * d_ff * 2) * 2 + d_model * vocab_size) * 4
     bytes_ternarios = (vocab_size * d_model * 4) + ((d_model * d_model * 4 + d_model * d_ff * 2) * 2 * 2 // 8) + (d_model * vocab_size * 4)
-    print("    Pesos quantizados em {-1, 0, 1}!")
-    print(f"    Memoria aproximada dos pesos: {bytes_fp32 // 1024} KB (FP32) -> {bytes_ternarios // 1024} KB (BitNet)")
+    print("    Weights quantized into {-1, 0, 1}!")
+    print(f"    Approximate weights memory: {bytes_fp32 // 1024} KB (FP32) -> {bytes_ternarios // 1024} KB (BitNet)")
 
-    # 3. Prefill do Prompt com Add-Only Matmul
-    print("\n[3] Prefill do prompt (Atenção Causal + Add-Only GEMM)...")
+    # 3. Prompt Prefill with Add-Only Matmul
+    print("\n[3] Prompt prefill (Causal Attention + Add-Only GEMM)...")
     t_inicio = clock()
 
     cache1 = KVCache(max_seq, dim_head)
@@ -82,7 +82,7 @@ fn main():
             tid = tid % vocab_size
         x = emb[tid]
 
-        # Camada 1
+        # Layer 1
         xn = rmsnorm(x, g_attn1)
         q = xn @ Wq1
         k = xn @ Wk1
@@ -98,7 +98,7 @@ fn main():
         h = silu(xn @ W1_1)
         x = x + (h @ W2_1)
 
-        # Camada 2
+        # Layer 2
         xn = rmsnorm(x, g_attn2)
         q = xn @ Wq2
         k = xn @ Wk2
@@ -114,11 +114,11 @@ fn main():
         x = x + (h @ W2_2)
 
     t_prefill = clock() - t_inicio
-    print(f"    Prefill concluido em {t_prefill * 1000.0:.2f} ms ({prompt_len / t_prefill:.1f} tokens/s)")
-    print(f"    KV Cache seq_len final: camada 1 = {cache1.seq_len}, camada 2 = {cache2.seq_len}")
+    print(f"    Prefill completed in {t_prefill * 1000.0:.2f} ms ({prompt_len / t_prefill:.1f} tokens/s)")
+    print(f"    Final KV Cache seq_len: layer 1 = {cache1.seq_len}, layer 2 = {cache2.seq_len}")
 
-    # 4. Geracao Autoregressiva Passo-a-Passo
-    print(f"\n[4] Geracao autorregressiva de {n_new_tokens} tokens...")
+    # 4. Step-by-Step Autoregressive Generation
+    print(f"\n[4] Autoregressive generation of {n_new_tokens} tokens...")
     t_gen_start = clock()
 
     x = rmsnorm(x, g_final)
@@ -136,7 +136,7 @@ fn main():
 
         x = emb[next_id]
 
-        # Camada 1
+        # Layer 1
         xn = rmsnorm(x, g_attn1)
         q = apply_rope(xn @ Wq1, pos)
         k = apply_rope(xn @ Wk1, pos)
@@ -149,7 +149,7 @@ fn main():
         xn = rmsnorm(x, g_mlp1)
         x = x + (silu(xn @ W1_1) @ W2_1)
 
-        # Camada 2
+        # Layer 2
         xn = rmsnorm(x, g_attn2)
         q = apply_rope(xn @ Wq2, pos)
         k = apply_rope(xn @ Wk2, pos)
@@ -167,11 +167,11 @@ fn main():
     ms_por_token = (t_gen / to_f64(n_new_tokens)) * 1000.0
     throughput = to_f64(n_new_tokens) / t_gen
 
-    print(f"\n    Tempo total de geracao: {t_gen * 1000.0:.2f} ms")
-    print(f"    Latencia por token:    {ms_por_token:.2f} ms/token")
+    print(f"\n    Total generation time: {t_gen * 1000.0:.2f} ms")
+    print(f"    Latency per token:     {ms_por_token:.2f} ms/token")
     print(f"    Throughput:            {throughput:.1f} tokens/s")
 
     print("\n==========================================================================")
-    print("  MINI LLM BITNET b1.58 EXECUTADO COM SUCESSO NO RUNTIME NATIVA!")
-    print("  Todas as projecoes lineares executadas via Kernels Ternarios Add-Only")
+    print("  MINI LLM BITNET b1.58 SUCCESSFULLY EXECUTED IN NATIVA RUNTIME!")
+    print("  All linear projections executed via Add-Only Ternary Kernels")
     print("==========================================================================")

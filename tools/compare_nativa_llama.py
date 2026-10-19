@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """
-tools/compare_nativa_llama.py — Benchmark Comparativo Pareado: Nativa (.natq4) vs. llama.cpp (GGUF)
-Executa em condições 100% idênticas no mesmo processador:
-  - Throughput de Decode e Prefill (sweep 1, 2, 4, 8 threads)
-  - Latência TTFT (ms)
-  - Perplexidade no split WikiText-2
-  - Pico de consumo de RAM (Working Set / RSS)
+tools/compare_nativa_llama.py — Paired Comparative Benchmark: Nativa (.natq4) vs. llama.cpp (GGUF)
+Runs under 100% identical conditions on the same processor:
+  - Decode and Prefill Throughput (1, 2, 4, 8 thread sweep)
+  - TTFT Latency (ms)
+  - Perplexity on the WikiText-2 split
+  - Peak RAM consumption (Working Set / RSS)
 """
 
 from __future__ import annotations
@@ -29,7 +29,7 @@ from tools.chat_natq4 import write_vocab_file
 
 
 def get_peak_rss_mb(pid: int) -> float:
-    """Mede o pico de RAM (Peak Working Set) via Windows API psapi sem dependências externas."""
+    """Measures peak RAM (Peak Working Set) via Windows psapi API without external dependencies."""
     if sys.platform != "win32":
         return 0.0
     try:
@@ -74,22 +74,22 @@ def validate_safe_path(
     must_exist: bool = True,
     allowed_exts: Optional[Tuple[str, ...]] = None
 ) -> str:
-    """Valida e sanitiza caminhos contra Path Traversal e Injeção de Argumentos (CWE-78/CWE-88/CWE-22)."""
+    """Validates and sanitizes paths against Path Traversal and Argument Injection (CWE-78/CWE-88/CWE-22)."""
     if not path or not isinstance(path, str):
-        raise ValueError("Caminho inválido ou nulo.")
+        raise ValueError("Invalid or null path.")
     cleaned = path.strip()
     if cleaned.startswith("-"):
-        raise ValueError(f"Argumento com formato de flag detectado como caminho: {path}")
+        raise ValueError(f"Flag-formatted argument detected as path: {path}")
     if any(c in cleaned for c in ("\0", "\r", "\n")):
-        raise ValueError("Caminho contém caracteres de controle ilegais.")
+        raise ValueError("Path contains illegal control characters.")
     
     resolved = os.path.abspath(os.path.realpath(cleaned))
     if allowed_exts:
         valid_ext = any(resolved.lower().endswith(ext.lower()) for ext in allowed_exts)
         if not valid_ext:
-            raise ValueError(f"Extensão do arquivo não permitida: {resolved} (permitidas: {allowed_exts})")
+            raise ValueError(f"File extension not allowed: {resolved} (allowed: {allowed_exts})")
     if must_exist and not os.path.isfile(resolved):
-        raise FileNotFoundError(f"Arquivo não encontrado ou inválido: {resolved}")
+        raise FileNotFoundError(f"File not found or invalid: {resolved}")
     return resolved
 
 
@@ -100,7 +100,7 @@ def run_llama_bench(
     prompt_tokens: int = 512,
     gen_tokens: int = 128
 ) -> Dict[str, float]:
-    """Executa o llama-bench oficial e extrai métricas de prefill e decode com sanitização completa."""
+    """Runs official llama-bench and extracts prefill and decode metrics with full sanitization."""
     safe_exe = validate_safe_path(llama_bench_exe, must_exist=True, allowed_exts=(".exe", "") if sys.platform == "win32" else None)
     safe_model = validate_safe_path(gguf_path, must_exist=True, allowed_exts=(".gguf",))
     safe_threads = max(1, min(int(threads), 256))
@@ -148,7 +148,7 @@ def run_llama_bench(
             elif n_gen > 0:
                 decode_tok_s = avg_ts
     except Exception:
-        # Fallback linear por linha sem backtracking superlinear
+        # Linear line-by-line fallback without superlinear backtracking
         for line in stdout.splitlines():
             line_str = line.strip()
             if not prefill_tok_s and "pp" in line_str and "±" in line_str:
@@ -173,7 +173,7 @@ def run_nativa_bench(
     threads: int,
     gen_tokens: int = 128
 ) -> Dict[str, float]:
-    """Executa o nativa_engine e extrai throughput de prefill e decode com sanitização completa."""
+    """Runs nativa_engine and extracts prefill and decode throughput with full sanitization."""
     safe_exe = validate_safe_path(nativa_engine_exe, must_exist=True, allowed_exts=(".exe", "") if sys.platform == "win32" else None)
     safe_model = validate_safe_path(natq4_path, must_exist=True, allowed_exts=(".natq4",))
     safe_threads = max(1, min(int(threads), 256))
@@ -206,7 +206,7 @@ def run_nativa_bench(
     prefill_tok_s = 0.0
     decode_tok_s = 0.0
 
-    m_prefill = re.search(r"Prefill concluido em ([0-9.]+)\s*s", clean)
+    m_prefill = re.search(r"Prefill (?:concluido em|completed in) ([0-9.]+)\s*s", clean)
     if m_prefill:
         sec = float(m_prefill.group(1))
         if sec > 0: prefill_tok_s = 14.0 / sec
@@ -223,7 +223,7 @@ def run_nativa_bench(
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Benchmark Comparativo Pareado Nativa vs llama.cpp")
+    parser = argparse.ArgumentParser(description="Paired Comparative Benchmark: Nativa vs llama.cpp")
     parser.add_argument("--natq4", default="data/qwen3_0.6b.natq4")
     parser.add_argument("--gguf", default="data/qwen3_0.6b_q4_k_m.gguf")
     parser.add_argument("--nativa-engine", default="tools/nativa_engine.exe")
@@ -242,7 +242,7 @@ def main():
     threads = [int(t.strip()) for t in args.threads.split(",")]
 
     print("=" * 80)
-    print("  BENCHMARK COMPARATIVO PAREADO: NATIVA (.natq4) vs. LLAMA.CPP (GGUF)")
+    print("  PAIRED COMPARATIVE BENCHMARK: NATIVA (.natq4) vs. LLAMA.CPP (GGUF)")
     print("=" * 80)
     print(f"  Nativa Engine : {safe_engine} ({os.path.getsize(safe_engine)/1024:.1f} KB)")
     print(f"  Nativa Model  : {safe_natq4} ({os.path.getsize(safe_natq4)/(1024*1024):.1f} MB)")
@@ -254,7 +254,7 @@ def main():
     results = []
 
     for th in threads:
-        print(f"\n[*] Executando testes pareados com {th} threads...")
+        print(f"\n[*] Running paired tests with {th} threads...")
 
         # 1. llama.cpp
         llama_res = run_llama_bench(safe_llama_bench, safe_gguf, threads=th, gen_tokens=args.tokens)
@@ -265,7 +265,7 @@ def main():
         print(f"  [Nativa Q4x4]     Decode: {nativa_res['decode_tok_s']:5.2f} tok/s | Prefill: {nativa_res['prefill_tok_s']:5.2f} tok/s | RSS: {nativa_res['peak_rss_mb']:5.1f} MB")
 
         ratio = (nativa_res['decode_tok_s'] / llama_res['decode_tok_s']) if llama_res['decode_tok_s'] > 0 else 0.0
-        print(f"  -> Razao Nativa / llama.cpp (Decode): {ratio:.2f}x ({'+' if ratio >= 1.0 else ''}{(ratio - 1.0)*100:.1f}%)")
+        print(f"  -> Nativa / llama.cpp Ratio (Decode): {ratio:.2f}x ({'+' if ratio >= 1.0 else ''}{(ratio - 1.0)*100:.1f}%)")
 
         results.append({
             "threads": th,
@@ -279,9 +279,9 @@ def main():
         })
 
     print("\n" + "=" * 100)
-    print("TABELA RESUMO DE THROUGHPUT (TOKENS/SEGUNDO)")
+    print("THROUGHPUT SUMMARY TABLE (TOKENS/SECOND)")
     print("=" * 100)
-    print("| Threads | llama.cpp Decode | Nativa Decode | Dif. Decode | llama.cpp Prefill | Nativa Prefill | llama.cpp RSS | Nativa RSS |")
+    print("| Threads | llama.cpp Decode | Nativa Decode | Decode Diff | llama.cpp Prefill | Nativa Prefill | llama.cpp RSS | Nativa RSS |")
     print("| :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |")
     for r in results:
         diff_pct = (r['ratio'] - 1.0) * 100.0

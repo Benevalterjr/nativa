@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Chat interativo para modelos Qwen2/Qwen3 compatíveis com NATQ4X4."""
+"""Interactive chat for Qwen2/Qwen3 models compatible with NATQ4X4."""
 
 import os
 import re
@@ -32,7 +32,7 @@ def write_vocab_file(tokenizer, path):
             else:
                 token = piece.encode("utf-8", errors="replace")
             if len(token) > 65535:
-                raise ValueError(f"Token {token_id} excede o limite de 65535 bytes do runtime.")
+                raise ValueError(f"Token {token_id} exceeds the runtime limit of 65535 bytes.")
             f.write(struct.pack("<H", len(token)))
             f.write(token)
 
@@ -43,22 +43,22 @@ def main():
     else:
         raw_path = sys.argv[1].strip()
         if not re.fullmatch(r"^[a-zA-Z0-9_\-./\\:]+$", raw_path) or raw_path.startswith("-"):
-            print(f"[ERRO] Argumento inválido ou caractere não permitido para caminho do modelo: {raw_path}")
+            print(f"[ERROR] Invalid argument or disallowed character in model path: {raw_path}")
             return 1
         model_path = raw_path
 
     clean_model_path = os.path.realpath(os.path.abspath(model_path))
     if not os.path.isfile(clean_model_path):
-        print(f"[ERRO] Arquivo de modelo não encontrado: {clean_model_path}")
+        print(f"[ERROR] Model file not found: {clean_model_path}")
         return 1
     if not clean_model_path.endswith((".natq4", ".bin")):
-        print(f"[ERRO] Arquivo de modelo deve ser .natq4 ou .bin: {clean_model_path}")
+        print(f"[ERROR] Model file must be .natq4 or .bin: {clean_model_path}")
         return 1
     model_path = clean_model_path
 
     engine_abs = os.path.abspath(ENGINE_PATH)
     if not os.path.isfile(engine_abs):
-        print(f"[ERRO] Motor nativo universal não encontrado: {engine_abs}")
+        print(f"[ERROR] Universal native engine not found: {engine_abs}")
         return 1
 
     if hasattr(sys.stdout, "reconfigure"):
@@ -70,7 +70,7 @@ def main():
     model_tokenizer = os.path.join(os.path.dirname(os.path.abspath(model_path)), "tokenizer.json")
     tokenizer_path = next((p for p in (companion_tokenizer, model_tokenizer, TOKENIZER_PATH) if os.path.isfile(p)), None)
     if not tokenizer_path:
-        print("[ERRO] Não encontrei tokenizer.json junto ao modelo nem no diretório data.")
+        print("[ERROR] Could not find tokenizer.json next to the model or in the data directory.")
         return 1
     tokenizer = nativa.Tokenizer(tokenizer_path)
     vocab_tmp = tempfile.NamedTemporaryFile(prefix="nativa-vocab-", suffix=".bin", delete=False)
@@ -79,7 +79,7 @@ def main():
     try:
         write_vocab_file(tokenizer, vocab_path)
     except (OSError, ValueError) as exc:
-        print(f"[ERRO] Não foi possível preparar o vocabulário nativo: {exc}")
+        print(f"[ERROR] Failed to prepare the native vocabulary: {exc}")
         try:
             os.unlink(vocab_path)
         except OSError:
@@ -101,11 +101,11 @@ def main():
         env=env,
     )
 
-    # Aguarda o motor C ficar pronto
+    # Wait for the C engine to be ready
     while True:
         line = proc.stdout.readline()
         if not line:
-            print("[ERRO] Motor nativo encerrou inesperadamente.")
+            print("[ERROR] Native engine terminated unexpectedly.")
             try:
                 os.unlink(vocab_path)
             except OSError:
@@ -115,27 +115,27 @@ def main():
             break
 
     model_name = os.path.basename(model_path).replace(".natq4", "").upper()
-    print(f"[*] Nativa Engine NATQ4 pronto para [{model_name}]!\n")
+    print(f"[*] Nativa Engine NATQ4 ready for [{model_name}]!\n")
 
     is_first_turn = True
 
     try:
         while True:
             try:
-                user_msg = input("Você > ").strip()
+                user_msg = input("You > ").strip()
             except (EOFError, KeyboardInterrupt):
                 break
 
             if not user_msg:
                 continue
             if user_msg.lower() in ("sair", "exit", "quit", ":q"):
-                print("\nEncerrando conversa...")
+                print("\nEnding conversation...")
                 break
 
             if is_first_turn:
                 prompt_text = (
                     "<|im_start|>system\n"
-                    "Você é um assistente inteligente, prestativo e com raciocínio apurado. Responda em português de forma clara e precisa.<|im_end|>\n"
+                    "You are an intelligent, helpful assistant with sharp reasoning. Answer clearly and accurately.<|im_end|>\n"
                     f"<|im_start|>user\n{user_msg}<|im_end|>\n"
                     "<|im_start|>assistant\n"
                 )
@@ -197,7 +197,7 @@ def main():
                     tok_count = int(m.group(1))
                     elap_sec = float(m.group(2))
                     speed_val = float(m.group(3))
-                    stats_str = f"[{speed_val:.2f} tokens/s | {tok_count} tokens em {elap_sec:.2f}s]"
+                    stats_str = f"[{speed_val:.2f} tokens/s | {tok_count} tokens in {elap_sec:.2f}s]"
 
             print()
             if stats_str:
@@ -216,7 +216,7 @@ def main():
         except OSError:
             pass
 
-    print("\nSessão finalizada. Até logo, Bene!")
+    print("\nSession ended. Goodbye!")
     return 0
 
 

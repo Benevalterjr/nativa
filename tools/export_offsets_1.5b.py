@@ -9,10 +9,10 @@ HEADER_FILE = os.path.join("tools", "qwen_offsets_1.5b.h")
 
 def export_offsets():
     if not os.path.exists(MODEL_FILE):
-        print(f"[ERRO] Arquivo do modelo não encontrado: {MODEL_FILE}")
+        print(f"[ERROR] Model file not found: {MODEL_FILE}")
         return False
 
-    print(f"[*] Lendo cabeçalho safetensors de {MODEL_FILE}...")
+    print(f"[*] Reading safetensors header from {MODEL_FILE}...")
     data_start, hdr = nativa.safetensors_read_header(MODEL_FILE)
     print(f"    -> data_start: {data_start}")
 
@@ -35,7 +35,7 @@ def export_offsets():
         wgate = data_start + hdr[prefix + "mlp.gate_proj.weight"]["data_offsets"][0]
         wup = data_start + hdr[prefix + "mlp.up_proj.weight"]["data_offsets"][0]
         wdown = data_start + hdr[prefix + "mlp.down_proj.weight"]["data_offsets"][0]
-        layers_code.append(f"""        // Camada {l}
+        layers_code.append(f"""        // Layer {l}
         {{
             .norm1 = {n1}ULL,
             .norm2 = {n2}ULL,
@@ -103,7 +103,7 @@ static const Qwen15ModelOffsets g_qwen15_offsets = {{
     with open(HEADER_FILE, "w", encoding="utf-8") as f:
         f.write(h_content)
 
-    print(f"[OK] Header de offsets para 1.5B gerado com sucesso em {HEADER_FILE}!")
+    print(f"[OK] Offsets header for 1.5B successfully generated in {HEADER_FILE}!")
     return True
 
 

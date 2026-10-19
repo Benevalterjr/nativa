@@ -56,21 +56,21 @@ def quantize_hybrid_bitnet(w: torch.Tensor, group_size: int = 64, outlier_ratio:
 
 def main():
     print("==========================================================================")
-    print("  TESTE HIBRIDO: ATENCAO EM FP32 + MLPs EM BITNET b1.58 HIBRIDO")
+    print("  HYBRID TEST: ATTENTION IN FP32 + MLPs IN HYBRID BITNET b1.58")
     print("==========================================================================")
     model_id = "Qwen/Qwen2.5-0.5B"
     tokenizer = AutoTokenizer.from_pretrained(model_id)
 
-    prompt = "A inteligência artificial é"
+    prompt = "Artificial intelligence is"
     inputs = tokenizer(prompt, return_tensors="pt")
 
     for outlier_pct in [0.01, 0.03, 0.05]:
-        print(f"\n[*] Testando MLPs com Outliers = {outlier_pct*100:.1f}% e Bloco = 64...")
+        print(f"\n[*] Testing MLPs with Outliers = {outlier_pct*100:.1f}% and Block = 64...")
         model = AutoModelForCausalLM.from_pretrained(model_id, torch_dtype=torch.float32)
 
         for name, module in model.named_modules():
             if isinstance(module, nn.Linear):
-                # Apenas MLPs (70% dos pesos totais do modelo!)
+                # MLPs only (70% of total model weights!)
                 if any(k in name for k in ["gate_proj", "up_proj", "down_proj"]):
                     with torch.no_grad():
                         w_rec = quantize_hybrid_bitnet(module.weight.data, group_size=64, outlier_ratio=outlier_pct)
@@ -79,7 +79,7 @@ def main():
         with torch.no_grad():
             out = model.generate(inputs["input_ids"], max_new_tokens=25, do_sample=False, pad_token_id=tokenizer.eos_token_id)
         text = tokenizer.decode(out[0].tolist())
-        print(f"    Texto Gerado:\n    \"{text}\"")
+        print(f"    Generated Text:\n    \"{text}\"")
 
 if __name__ == "__main__":
     main()

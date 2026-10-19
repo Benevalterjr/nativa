@@ -1,29 +1,29 @@
 # teste_modelo_llm.nat
-# Validacao completa dos 4 novos recursos de modelos de linguagem em Nativa:
-# 1. Tokenizador BPE nativo com Byte-Fallback
-# 2. Scaled Dot-Product Attention (SDPA) com Causal Mask
-# 3. KV Cache autoregressivo
-# 4. RoPE e RMSNorm
+# Complete validation of the 4 new language model features in Nativa:
+# 1. Native BPE Tokenizer with Byte-Fallback
+# 2. Scaled Dot-Product Attention (SDPA) with Causal Mask
+# 3. Autoregressive KV Cache
+# 4. RoPE and RMSNorm
 
 fn main():
     print("==========================================================================")
-    print("  NATIVA v0.3: RECURSOS NATIVOS PARA MODELOS DE LINGUAGEM (LLMs)")
+    print("  NATIVA v0.3: NATIVE FEATURES FOR LANGUAGE MODELS (LLMs)")
     print("==========================================================================")
 
-    # 1. Tokenizador BPE Nativo com Byte-Fallback
-    print("\n[1] Teste do Tokenizador BPE com Byte-Fallback:")
+    # 1. Native BPE Tokenizer with Byte-Fallback
+    print("\n[1] BPE Tokenizer with Byte-Fallback Test:")
     tok = Tokenizer()
     prompt = "Nativa v0.3 executa BitNet b1.58 e LLMs com tensores densos nativos!"
     tokens = encode(tok, prompt)
     texto_recuperado = decode(tok, tokens)
 
-    print(f"    Prompt original:     \"{prompt}\"")
-    print(f"    Tokens gerados:      {tokens}")
-    print(f"    Total de tokens:     {len(tokens)}")
-    print(f"    Texto decodificado:  \"{texto_recuperado}\"")
+    print(f"    Original prompt:     \"{prompt}\"")
+    print(f"    Generated tokens:    {tokens}")
+    print(f"    Total tokens:        {len(tokens)}")
+    print(f"    Decoded text:        \"{texto_recuperado}\"")
 
-    # 2. Attention (SDPA) e Causal Mask
-    print("\n[2] Scaled Dot-Product Attention (SDPA) com Mascara Causal:")
+    # 2. Attention (SDPA) and Causal Mask
+    print("\n[2] Scaled Dot-Product Attention (SDPA) with Causal Mask:")
     seq_len = 4
     dim_head = 64
     Q = randn([seq_len, dim_head])
@@ -32,26 +32,26 @@ fn main():
     mask = causal_mask(seq_len)
 
     saida_attn = sdpa(Q, K, V, mask)
-    print(f"    Dimensao da saida SDPA: {shape(saida_attn)}")
+    print(f"    SDPA output dimension: {shape(saida_attn)}")
 
-    # 3. KV Cache para Inferencia Autoregressiva
-    print("\n[3] KV Cache Autoregressivo Passo-a-Passo:")
+    # 3. KV Cache for Autoregressive Inference
+    print("\n[3] Step-by-Step Autoregressive KV Cache:")
     cache = KVCache(2048, dim_head)
     for passo in 0..3:
         k_step = randn([1, dim_head])
         v_step = randn([1, dim_head])
         cache.update(k_step, v_step)
-        print(f"    Passo {passo + 1}: KV Cache seq_len = {cache.seq_len}")
+        print(f"    Step {passo + 1}: KV Cache seq_len = {cache.seq_len}")
 
-    # 4. Normalizacao RMSNorm e Rotacao RoPE
-    print("\n[4] RMSNorm e RoPE:")
+    # 4. RMSNorm Normalization and RoPE Rotation
+    print("\n[4] RMSNorm and RoPE:")
     x = randn([dim_head])
     gamma = ones([dim_head])
     x_norm = rmsnorm(x, gamma)
     x_rot = apply_rope(x_norm, 1)
-    print(f"    Vetor normalizado RMSNorm: shape = {shape(x_norm)}")
-    print(f"    Vetor rotacionado RoPE:    shape = {shape(x_rot)}")
+    print(f"    RMSNorm normalized vector: shape = {shape(x_norm)}")
+    print(f"    RoPE rotated vector:       shape = {shape(x_rot)}")
 
     print("\n==========================================================================")
-    print("  TODOS OS 4 PILARES DE MODELOS FORAM VALIDADOS COM SUCESSO!")
+    print("  ALL 4 MODEL PILLARS HAVE BEEN VALIDATED SUCCESSFULLY!")
     print("==========================================================================")

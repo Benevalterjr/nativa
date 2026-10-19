@@ -1,10 +1,10 @@
-"""repack_q4x4.py - Reorganiza as matrizes Q4 das camadas em blocos de 4 linhas intercalados.
+"""repack_q4x4.py - Reorganizes layer Q4 matrices into interleaved 4-row blocks.
 
-Formato original (por linha):   [scale(2B) qs(16B)] x num_blocks, linha apos linha.
-Formato Q4x4 (por grupo de 4 linhas, por bloco):
+Original format (per row):   [scale(2B) qs(16B)] x num_blocks, row after row.
+Q4x4 format (per 4-row group, per block):
     scale[4] (8 bytes BF16) + qs[4][16] (64 bytes) = 72 bytes
-O tamanho de cada tensor nao muda, entao os offsets do header continuam validos.
-O embedding (tambem usado pelo LM Head) e intercalado da mesma forma.
+The size of each tensor does not change, so the header offsets remain valid.
+The embedding (also used by the LM Head) is interleaved in the same way.
 """
 import os
 import re
@@ -19,7 +19,7 @@ DST = os.path.join("data", "qwen2.5_1.5b_q4x4.bin")
 HDR = os.path.join("tools", "qwen_offsets_1.5b_q4.h")
 
 DIM, INTER, KV, VOCAB = 1536, 8960, 256, 151936
-# nome -> (linhas, colunas)
+# name -> (rows, cols)
 SHAPES = {
     "wq": (DIM, DIM), "wk": (KV, DIM), "wv": (KV, DIM), "wo": (DIM, DIM),
     "wgate": (INTER, DIM), "wup": (INTER, DIM), "wdown": (DIM, INTER),
@@ -29,7 +29,7 @@ SHAPES = {
 def parse_layer_offsets():
     text = open(HDR, encoding="utf-8").read()
     layers = []
-    for block in re.findall(r"// Camada \d+\s*\{(.*?)\}", text, re.S):
+    for block in re.findall(r"// (?:Camada|Layer) \d+\s*\{(.*?)\}", text, re.S):
         d = dict((k, int(v)) for k, v in re.findall(r"\.(\w+)\s*=\s*(\d+)ULL", block))
         layers.append(d)
     return layers
@@ -46,11 +46,11 @@ def interleave(raw, rows, cols):
 def main():
     layers = parse_layer_offsets()
     if len(layers) != 28:
-        print(f"[ERRO] Esperava 28 camadas no header, achei {len(layers)}")
+        print(f"[ERROR] Expected 28 layers in header, found {len(layers)}")
         return 1
 
     t0 = time.time()
-    print(f"[*] Copiando {SRC} -> {DST} ...")
+    print(f"[*] Copying {SRC} -> {DST} ...")
     shutil.copyfile(SRC, DST)
 
     src = np.memmap(SRC, dtype=np.uint8, mode="r")
@@ -66,11 +66,11 @@ def main():
             size = rows * (cols // 32) * 18
             dst[off:off + size] = interleave(np.asarray(src[off:off + size]), rows, cols)
             total += size
-        sys.stdout.write(f"\r    Camada {li + 1}/28")
+        sys.stdout.write(f"\r    Layer {li + 1}/28")
         sys.stdout.flush()
     dst.flush()
     del dst
-    print(f"\n[OK] {total / 1e6:.1f} MB reorganizados em {time.time() - t0:.1f} s -> {DST}")
+    print(f"\n[OK] {total / 1e6:.1f} MB reorganized in {time.time() - t0:.1f} s -> {DST}")
     return 0
 
 

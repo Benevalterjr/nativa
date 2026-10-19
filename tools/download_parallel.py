@@ -33,11 +33,11 @@ def download_chunk(url, dest_path, start, end, chunk_id, progress_dict):
     return downloaded
 
 def main():
-    print(f"[*] Verificando tamanho remoto de {URL}...")
+    print(f"[*] Checking remote size of {URL}...")
     total_size = get_content_length(URL)
-    print(f"[*] Tamanho total: {total_size / (1024*1024):.2f} MB ({total_size} bytes)")
+    print(f"[*] Total size: {total_size / (1024*1024):.2f} MB ({total_size} bytes)")
 
-    # Prepara o arquivo destino com tamanho total
+    # Prepare destination file with total size
     if not os.path.exists(DEST) or os.path.getsize(DEST) != total_size:
         with open(DEST, "wb") as f:
             f.truncate(total_size)
@@ -50,7 +50,7 @@ def main():
         if start <= end:
             chunks.append((i, start, end))
 
-    print(f"[*] Iniciando download acelerado com {len(chunks)} conexões simultâneas...")
+    print(f"[*] Starting accelerated download with {len(chunks)} concurrent connections...")
     progress_dict = {i: 0 for i, _, _ in chunks}
     t0 = time.time()
 
@@ -65,7 +65,7 @@ def main():
             pct = (total_dl * 100.0 / total_size) if total_size > 0 else 0
             elap = time.time() - t0
             speed = (total_dl / (1024 * 1024)) / max(elap, 0.001)
-            print(f"\r  -> Progresso: [{pct:5.1f}%] {total_dl/(1024*1024):.1f}/{total_size/(1024*1024):.1f} MB ({speed:4.2f} MB/s)", end="", flush=True)
+            print(f"\r  -> Progress: [{pct:5.1f}%] {total_dl/(1024*1024):.1f}/{total_size/(1024*1024):.1f} MB ({speed:4.2f} MB/s)", end="", flush=True)
             time.sleep(0.5)
 
         for f in futures:
@@ -73,7 +73,7 @@ def main():
 
     total_elap = time.time() - t0
     final_speed = (total_size / (1024 * 1024)) / max(total_elap, 0.001)
-    print(f"\n[OK] Download concluído com sucesso em {total_elap:.1f}s ({final_speed:.2f} MB/s): {DEST}")
+    print(f"\n[OK] Download completed successfully in {total_elap:.1f}s ({final_speed:.2f} MB/s): {DEST}")
 
 if __name__ == "__main__":
     main()

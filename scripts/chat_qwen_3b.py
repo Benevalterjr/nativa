@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""chat_qwen_3b.py - Chat interativo com Qwen2.5-3B-Instruct via Motor Nativo C99 do Nativa."""
+"""chat_qwen_3b.py - Interactive chat with Qwen2.5-3B-Instruct via Nativa's C99 Native Engine."""
 
 import os
 import re
@@ -16,21 +16,21 @@ TOKENIZER_PATH = os.path.join(ROOT_DIR, "data", "tokenizer_qwen.json")
 
 def main():
     if not os.path.exists(EXE_PATH):
-        print(f"[ERRO] Executável nativo 3B não encontrado: {EXE_PATH}")
+        print(f"[ERROR] 3B native executable not found: {EXE_PATH}")
         return 1
 
     print("=" * 70)
-    print("  NATIVA AI - CHAT COM QWEN 2.5 (3B INSTRUCT) MOTOR INT4 (Q4x4)")
+    print("  NATIVA AI - CHAT WITH QWEN 2.5 (3B INSTRUCT) INT4 (Q4x4) ENGINE")
     print("=" * 70)
-    print("• Modelo:      Qwen2.5-3B-Instruct (3.09B parâmetros, 36 Camadas, 16/2 heads)")
-    print("• Arquitetura: Transformer C99 INT4 SSSE3 Fused + AVX com OpenMP")
-    print("• Amostragem:  Top-K = 30 + Temp 0.6 (Zero alucinações de cauda)")
-    print("• Memória:     Zero-Copy Win32 mmap (Apenas ~1.62 GB na RAM!)")
-    print("• Velocidade:  Medida em tempo real a cada resposta gerada")
-    print("• Capacidade:  Matemática avançada, física, teoria dos números e lógica formal")
-    print("• Comandos:    Digite 'sair' para encerrar a conversa.")
+    print("• Model:        Qwen2.5-3B-Instruct (3.09B parameters, 36 Layers, 16/2 heads)")
+    print("• Architecture: C99 INT4 SSSE3 Fused + AVX Transformer with OpenMP")
+    print("• Sampling:     Top-K = 30 + Temp 0.6 (Zero tail hallucinations)")
+    print("• Memory:       Zero-Copy Win32 mmap (Only ~1.62 GB in RAM!)")
+    print("• Speed:        Measured in real time for each generated response")
+    print("• Capability:   Advanced mathematics, physics, number theory, and formal logic")
+    print("• Commands:     Type 'exit' or 'quit' to end the conversation.")
     print("=" * 70)
-    print("\n[*] Mapeando 1.62 GB de pesos INT4 Q4x4 em memória virtual...")
+    print("\n[*] Mapping 1.62 GB of INT4 Q4x4 weights into virtual memory...")
 
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
@@ -55,36 +55,36 @@ def main():
         env=env,
     )
 
-    # Aguarda o motor C ficar pronto
+    # Wait for the C engine to become ready
     while True:
         line = proc.stdout.readline()
         if not line:
-            print("[ERRO] Motor nativo encerrou inesperadamente.")
+            print("[ERROR] Native engine terminated unexpectedly.")
             return 1
         if "[NATIVA_CHAT_READY]" in line:
             break
 
-    print("[*] Qwen 3B pronto! Você já pode conversar com ele.\n")
+    print("[*] Qwen 3B ready! You can now chat with it.\n")
 
     is_first_turn = True
 
     try:
         while True:
             try:
-                user_msg = input("Você > ").strip()
+                user_msg = input("You > ").strip()
             except (EOFError, KeyboardInterrupt):
                 break
 
             if not user_msg:
                 continue
             if user_msg.lower() in ("sair", "exit", "quit", ":q"):
-                print("\nEncerrando conversa...")
+                print("\nEnding conversation...")
                 break
 
             if is_first_turn:
                 prompt_text = (
                     "<|im_start|>system\n"
-                    "Você é o modelo Qwen2.5-3B-Instruct, um assistente inteligente, prestativo e com raciocínio apurado. Responda em português de forma clara e precisa.<|im_end|>\n"
+                    "You are the Qwen2.5-3B-Instruct model, an intelligent, helpful assistant with sharp reasoning. Answer clearly and accurately.<|im_end|>\n"
                     f"<|im_start|>user\n{user_msg}<|im_end|>\n"
                     "<|im_start|>assistant\n"
                 )
@@ -146,7 +146,7 @@ def main():
                     tok_count = int(m.group(1))
                     elap_sec = float(m.group(2))
                     speed_val = float(m.group(3))
-                    stats_str = f"[{speed_val:.2f} tokens/s | {tok_count} tokens em {elap_sec:.2f}s]"
+                    stats_str = f"[{speed_val:.2f} tokens/s | {tok_count} tokens in {elap_sec:.2f}s]"
 
             print()
             if stats_str:
@@ -161,7 +161,7 @@ def main():
         except Exception:
             proc.kill()
 
-    print("\nSessão finalizada. Até logo, Bene!")
+    print("\nSession finished. Goodbye!")
     return 0
 
 

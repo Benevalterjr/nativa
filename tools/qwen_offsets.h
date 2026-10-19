@@ -38,7 +38,7 @@ static const QwenModelOffsets g_qwen_offsets = {
     .embed_tokens = 32288ULL,
     .norm = 988096032ULL,
     .layers = {
-        // Camada 0
+        // Layer 0
         {
             .norm1 = 272301600ULL,
             .norm2 = 298452256ULL,
@@ -53,7 +53,7 @@ static const QwenModelOffsets g_qwen_offsets = {
             .wup = 289735968ULL,
             .wdown = 272303392ULL,
         },
-        // Camada 1
+        // Layer 1
         {
             .norm1 = 302126368ULL,
             .norm2 = 328277024ULL,
@@ -68,7 +68,7 @@ static const QwenModelOffsets g_qwen_offsets = {
             .wup = 319560736ULL,
             .wdown = 302128160ULL,
         },
-        // Camada 2
+        // Layer 2
         {
             .norm1 = 630198816ULL,
             .norm2 = 656349472ULL,
@@ -83,7 +83,7 @@ static const QwenModelOffsets g_qwen_offsets = {
             .wup = 647633184ULL,
             .wdown = 630200608ULL,
         },
-        // Camada 3
+        // Layer 3
         {
             .norm1 = 779322656ULL,
             .norm2 = 805473312ULL,
@@ -98,7 +98,7 @@ static const QwenModelOffsets g_qwen_offsets = {
             .wup = 796757024ULL,
             .wdown = 779324448ULL,
         },
-        // Camada 4
+        // Layer 4
         {
             .norm1 = 809147424ULL,
             .norm2 = 835298080ULL,
@@ -113,7 +113,7 @@ static const QwenModelOffsets g_qwen_offsets = {
             .wup = 826581792ULL,
             .wdown = 809149216ULL,
         },
-        // Camada 5
+        // Layer 5
         {
             .norm1 = 838972192ULL,
             .norm2 = 865122848ULL,
@@ -128,7 +128,7 @@ static const QwenModelOffsets g_qwen_offsets = {
             .wup = 856406560ULL,
             .wdown = 838973984ULL,
         },
-        // Camada 6
+        // Layer 6
         {
             .norm1 = 868796960ULL,
             .norm2 = 894947616ULL,
@@ -143,7 +143,7 @@ static const QwenModelOffsets g_qwen_offsets = {
             .wup = 886231328ULL,
             .wdown = 868798752ULL,
         },
-        // Camada 7
+        // Layer 7
         {
             .norm1 = 898621728ULL,
             .norm2 = 924772384ULL,
@@ -158,7 +158,7 @@ static const QwenModelOffsets g_qwen_offsets = {
             .wup = 916056096ULL,
             .wdown = 898623520ULL,
         },
-        // Camada 8
+        // Layer 8
         {
             .norm1 = 928446496ULL,
             .norm2 = 954597152ULL,
@@ -173,7 +173,7 @@ static const QwenModelOffsets g_qwen_offsets = {
             .wup = 945880864ULL,
             .wdown = 928448288ULL,
         },
-        // Camada 9
+        // Layer 9
         {
             .norm1 = 958271264ULL,
             .norm2 = 984421920ULL,
@@ -188,7 +188,7 @@ static const QwenModelOffsets g_qwen_offsets = {
             .wup = 975705632ULL,
             .wdown = 958273056ULL,
         },
-        // Camada 10
+        // Layer 10
         {
             .norm1 = 331951136ULL,
             .norm2 = 358101792ULL,
@@ -203,7 +203,7 @@ static const QwenModelOffsets g_qwen_offsets = {
             .wup = 349385504ULL,
             .wdown = 331952928ULL,
         },
-        // Camada 11
+        // Layer 11
         {
             .norm1 = 361775904ULL,
             .norm2 = 387926560ULL,
@@ -218,7 +218,7 @@ static const QwenModelOffsets g_qwen_offsets = {
             .wup = 379210272ULL,
             .wdown = 361777696ULL,
         },
-        // Camada 12
+        // Layer 12
         {
             .norm1 = 391600672ULL,
             .norm2 = 417751328ULL,
@@ -233,7 +233,7 @@ static const QwenModelOffsets g_qwen_offsets = {
             .wup = 409035040ULL,
             .wdown = 391602464ULL,
         },
-        // Camada 13
+        // Layer 13
         {
             .norm1 = 421425440ULL,
             .norm2 = 447576096ULL,
@@ -248,7 +248,7 @@ static const QwenModelOffsets g_qwen_offsets = {
             .wup = 438859808ULL,
             .wdown = 421427232ULL,
         },
-        // Camada 14
+        // Layer 14
         {
             .norm1 = 451250208ULL,
             .norm2 = 477400864ULL,
@@ -263,7 +263,7 @@ static const QwenModelOffsets g_qwen_offsets = {
             .wup = 468684576ULL,
             .wdown = 451252000ULL,
         },
-        // Camada 15
+        // Layer 15
         {
             .norm1 = 481074976ULL,
             .norm2 = 507225632ULL,
@@ -278,7 +278,7 @@ static const QwenModelOffsets g_qwen_offsets = {
             .wup = 498509344ULL,
             .wdown = 481076768ULL,
         },
-        // Camada 16
+        // Layer 16
         {
             .norm1 = 510899744ULL,
             .norm2 = 537050400ULL,
@@ -293,7 +293,7 @@ static const QwenModelOffsets g_qwen_offsets = {
             .wup = 528334112ULL,
             .wdown = 510901536ULL,
         },
-        // Camada 17
+        // Layer 17
         {
             .norm1 = 540724512ULL,
             .norm2 = 566875168ULL,
@@ -308,7 +308,7 @@ static const QwenModelOffsets g_qwen_offsets = {
             .wup = 558158880ULL,
             .wdown = 540726304ULL,
         },
-        // Camada 18
+        // Layer 18
         {
             .norm1 = 570549280ULL,
             .norm2 = 596699936ULL,
@@ -323,7 +323,7 @@ static const QwenModelOffsets g_qwen_offsets = {
             .wup = 587983648ULL,
             .wdown = 570551072ULL,
         },
-        // Camada 19
+        // Layer 19
         {
             .norm1 = 600374048ULL,
             .norm2 = 626524704ULL,
@@ -338,7 +338,7 @@ static const QwenModelOffsets g_qwen_offsets = {
             .wup = 617808416ULL,
             .wdown = 600375840ULL,
         },
-        // Camada 20
+        // Layer 20
         {
             .norm1 = 660023584ULL,
             .norm2 = 686174240ULL,
@@ -353,7 +353,7 @@ static const QwenModelOffsets g_qwen_offsets = {
             .wup = 677457952ULL,
             .wdown = 660025376ULL,
         },
-        // Camada 21
+        // Layer 21
         {
             .norm1 = 689848352ULL,
             .norm2 = 715999008ULL,
@@ -368,7 +368,7 @@ static const QwenModelOffsets g_qwen_offsets = {
             .wup = 707282720ULL,
             .wdown = 689850144ULL,
         },
-        // Camada 22
+        // Layer 22
         {
             .norm1 = 719673120ULL,
             .norm2 = 745823776ULL,
@@ -383,7 +383,7 @@ static const QwenModelOffsets g_qwen_offsets = {
             .wup = 737107488ULL,
             .wdown = 719674912ULL,
         },
-        // Camada 23
+        // Layer 23
         {
             .norm1 = 749497888ULL,
             .norm2 = 775648544ULL,

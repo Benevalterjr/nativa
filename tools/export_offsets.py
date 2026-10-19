@@ -28,7 +28,7 @@ for l in range(24):
     wgate = data_start + hdr[prefix + "mlp.gate_proj.weight"]["data_offsets"][0]
     wup = data_start + hdr[prefix + "mlp.up_proj.weight"]["data_offsets"][0]
     wdown = data_start + hdr[prefix + "mlp.down_proj.weight"]["data_offsets"][0]
-    layers_code.append(f"""        // Camada {l}
+    layers_code.append(f"""        // Layer {l}
         {{
             .norm1 = {n1}ULL,
             .norm2 = {n2}ULL,
@@ -96,4 +96,4 @@ static const QwenModelOffsets g_qwen_offsets = {{
 with open(HEADER_FILE, "w", encoding="utf-8") as f:
     f.write(h_content)
 
-print(f"[OK] Header regenerado com sucesso em {HEADER_FILE}!")
+print(f"[OK] Header regenerated successfully in {HEADER_FILE}!")

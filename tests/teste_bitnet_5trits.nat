@@ -1,81 +1,81 @@
 # teste_bitnet_5trits.nat
-# Demonstração Técnica: BitNet b1.58 Canônico em Nativa
-# 1. AbsMean Scaling Real (gamma = mean(|W|))
-# 2. Quantizador Canônico: Clip(Round(W / gamma), -1, 1)
-# 3. Empacotamento Denso Base-3: 5 trits por byte (1.60 bits/trit)
-# 4. Desempacotamento de Alta Fidelidade (Bitwise Exact)
-# 5. Add-Only GEMM Reescalado: y = gamma * (W_ternary @ x)
+# Technical Demonstration: Canonical BitNet b1.58 in Nativa
+# 1. Real AbsMean Scaling (gamma = mean(|W|))
+# 2. Canonical Quantizer: Clip(Round(W / gamma), -1, 1)
+# 3. Dense Base-3 Packing: 5 trits per byte (1.60 bits/trit)
+# 4. High-Fidelity Unpacking (Bitwise Exact)
+# 5. Rescaled Add-Only GEMM: y = gamma * (W_ternary @ x)
 
 fn main():
     arquivo = "llama7b_bloco.safetensors"
     camada_attn = "model.layers.0.self_attn.q_proj.weight"
 
     print("==========================================================================")
-    print("  BITNET b1.58 EM NATIVA: ABSMEAN SCALING + EMPACOTAMENTO 5 TRITS/BYTE    ")
+    print("  BITNET b1.58 IN NATIVA: ABSMEAN SCALING + 5 TRITS/BYTE PACKING          ")
     print("==========================================================================")
 
-    # 1. Carregamento da Camada Q-Proj (4096 x 4096 = 16.777.216 pesos Float32)
-    print(f"\n[1] Carregando pesos contínuos Float32 de '{camada_attn}'...")
+    # 1. Loading Q-Proj Layer (4096 x 4096 = 16,777,216 Float32 weights)
+    print(f"\n[1] Loading continuous Float32 weights from '{camada_attn}'...")
     t0 = clock()
     W = load_safetensors(arquivo, camada_attn)
     t1 = clock()
     num_pesos = 4096 * 4096
     tam_fp32_mb = (to_f64(num_pesos) * 4.0) / (1024.0 * 1024.0)
-    print(f"    Carregado em {t1 - t0:.3f}s! Dimensão: {shape(W)}")
-    print(f"    Tamanho original Float32 (32 bits/peso): {tam_fp32_mb:.2f} MB")
+    print(f"    Loaded in {t1 - t0:.3f}s! Dimension: {shape(W)}")
+    print(f"    Original Float32 size (32 bits/weight): {tam_fp32_mb:.2f} MB")
 
-    # 2. Cálculo do Escalar AbsMean Real: gamma = 1/(N*M) * sum(|W_ij|)
-    print("\n[2] Calculando escala canônica AbsMean (gamma)...")
+    # 2. Computing Real AbsMean Scalar: gamma = 1/(N*M) * sum(|W_ij|)
+    print("\n[2] Computing canonical AbsMean scale (gamma)...")
     t2 = clock()
     gamma = tensor_absmean(W)
     t3 = clock()
-    print(f"    AbsMean gamma calculado em {t3 - t2:.4f}s: {gamma:.6f}")
+    print(f"    AbsMean gamma computed in {t3 - t2:.4f}s: {gamma:.6f}")
 
-    # 3. Quantização Canônica do BitNet b1.58
+    # 3. Canonical BitNet b1.58 Quantization
     # W_t = Clip(Round(W / gamma), -1, 1)
-    print("\n[3] Aplicando Quantizador Canônico BitNet b1.58...")
+    print("\n[3] Applying Canonical BitNet b1.58 Quantizer...")
     t4 = clock()
     W_t = quantize_bitnet(W)
     t5 = clock()
-    print(f"    16.777.216 parâmetros quantizados em {t5 - t4:.3f}s!")
+    print(f"    16,777,216 parameters quantized in {t5 - t4:.3f}s!")
 
-    # 4. Comparação de Empacotamentos:
-    # A) 2 bits/trit (4 trits por byte): 2.0 bits/trit
-    # B) Base-3 Denso (5 trits por byte): 1.60 bits/trit (3^5 = 243 <= 256)
-    print("\n[4] Comparando Densidades de Empacotamento em Memória:")
+    # 4. Packing Comparison:
+    # A) 2 bits/trit (4 trits per byte): 2.0 bits/trit
+    # B) Dense Base-3 (5 trits per byte): 1.60 bits/trit (3^5 = 243 <= 256)
+    print("\n[4] Comparing Memory Packing Densities:")
     
-    # 4A. Packing 2 bits/trit
+    # 4A. 2 bits/trit Packing
     t6 = clock()
     pack_2bit = pack_ternary(W_t)
     t7 = clock()
     tam_2bit_mb = to_f64(len(pack_2bit)) / (1024.0 * 1024.0)
-    print(f"    - Packing Padrão (2.00 bits/trit, 4 trits/byte): {tam_2bit_mb:.2f} MB em {t7 - t6:.3f}s")
+    print(f"    - Standard Packing (2.00 bits/trit, 4 trits/byte): {tam_2bit_mb:.2f} MB in {t7 - t6:.3f}s")
 
-    # 4B. Packing Base-3 (5 trits/byte)
+    # 4B. Base-3 Packing (5 trits/byte)
     t8 = clock()
     pack_5t = pack_ternary_5trits(W_t)
     t9 = clock()
     tam_5t_mb = to_f64(len(pack_5t)) / (1024.0 * 1024.0)
-    print(f"    - Packing Denso (1.60 bits/trit, 5 trits/byte): {tam_5t_mb:.2f} MB em {t9 - t8:.3f}s")
+    print(f"    - Dense Packing (1.60 bits/trit, 5 trits/byte): {tam_5t_mb:.2f} MB in {t9 - t8:.3f}s")
 
     economia = (1.0 - (tam_5t_mb / tam_2bit_mb)) * 100.0
     compressao_fp32 = tam_fp32_mb / tam_5t_mb
-    print(f"    -> Redução adicional sobre o formato de 2 bits: {economia:.1f}%")
-    print(f"    -> Taxa total de compressão sobre Float32:     {compressao_fp32:.2f}x menor!")
+    print(f"    -> Additional reduction over 2-bit format: {economia:.1f}%")
+    print(f"    -> Total compression ratio over Float32:   {compressao_fp32:.2f}x smaller!")
 
-    # 5. Verificação de Integridade / Desempacotamento
-    print("\n[5] Validando integridade e fidelidade de roundtrip (5 trits/byte)...")
-    # Testando com uma fatia de 10 trits
+    # 5. Integrity / Unpacking Verification
+    print("\n[5] Validating roundtrip integrity and fidelity (5 trits/byte)...")
+    # Testing with a slice of 10 trits
     amostra_10 = W_t[0][0..10]
     amostra_pack = pack_ternary_5trits(amostra_10)
     amostra_unpack = unpack_ternary_5trits(amostra_pack, 10)
-    print(f"    Trits originais:      {amostra_10}")
-    print(f"    Bytes base-3 (3^5):   {amostra_pack}")
-    print(f"    Trits restaurados:    {amostra_unpack}")
+    print(f"    Original trits:       {amostra_10}")
+    print(f"    Base-3 bytes (3^5):   {amostra_pack}")
+    print(f"    Restored trits:       {amostra_unpack}")
 
-    # 6. Inferência: Add-Only GEMM Reescalado por gamma
+    # 6. Inference: Add-Only GEMM Rescaled by gamma
     # y = gamma * (W_t @ x)
-    print("\n[6] Executando Projeção Add-Only GEMM com Reescalonamento AbsMean...")
+    print("\n[6] Running Add-Only GEMM Projection with AbsMean Rescaling...")
     x = ones([4096])
     t10 = clock()
     y_raw = W_t @ x
@@ -88,21 +88,21 @@ fn main():
     max_scaled = max(y_scaled)
     min_scaled = min(y_scaled)
 
-    print(f"    Multiplicação W_t @ x (Add-Only) concluída em {tempo_gemm:.4f}s!")
-    print(f"    Média sem escala (soma de inteiros): {m_raw:.2f}")
-    print(f"    Média reescalada por gamma:          {m_scaled:.6f}")
-    print(f"    Faixa dinâmica da saída (y):         [{min_scaled:.4f}, {max_scaled:.4f}]")
+    print(f"    W_t @ x (Add-Only) multiplication completed in {tempo_gemm:.4f}s!")
+    print(f"    Unscaled mean (integer sum):         {m_raw:.2f}")
+    print(f"    Gamma-rescaled mean:                 {m_scaled:.6f}")
+    print(f"    Output dynamic range (y):            [{min_scaled:.4f}, {max_scaled:.4f}]")
 
-    # 7. Estimativa para o LLaMA-7B completo (32 camadas) em RAM
+    # 7. Estimate for complete LLaMA-7B (32 layers) in RAM
     total_7b_params = 6738415616.0
     ram_fp32_gb = (total_7b_params * 4.0) / (1024.0 * 1024.0 * 1024.0)
     ram_2bit_gb = (total_7b_params * 0.25) / (1024.0 * 1024.0 * 1024.0)
     ram_5t_gb   = (total_7b_params * 0.20) / (1024.0 * 1024.0 * 1024.0)
 
     print("\n==========================================================================")
-    print("  IMPACTO NO MODELO COMPLETO LLaMA-7B (6.74 BILHÕES DE PARÂMETROS)        ")
+    print("  IMPACT ON COMPLETE LLaMA-7B MODEL (6.74 BILLION PARAMETERS)             ")
     print("==========================================================================")
-    print(f"  Float32:              {ram_fp32_gb:.2f} GB  (Impossível nesta máquina de 8GB)")
-    print(f"  Ternário 2-bits:      {ram_2bit_gb:.2f} GB  (Cabe em RAM)")
-    print(f"  Ternário 5-trits (Nativa): {ram_5t_gb:.2f} GB  (Cabe com folga e sobra para o SO!)")
+    print(f"  Float32:                   {ram_fp32_gb:.2f} GB  (Impossible on an 8GB machine)")
+    print(f"  2-bit Ternary:             {ram_2bit_gb:.2f} GB  (Fits in RAM)")
+    print(f"  5-trits Ternary (Nativa):  {ram_5t_gb:.2f} GB  (Fits comfortably with room for the OS!)")
     print("==========================================================================")

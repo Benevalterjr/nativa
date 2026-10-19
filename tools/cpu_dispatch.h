@@ -79,7 +79,7 @@ static inline void cpu_detect(CPUInfo* cpu) {
         nat_cpuid((int*)&cpu->brand[32], (int)0x80000004);
         cpu->brand[48] = '\0';
     } else {
-        strcpy(cpu->brand, "CPU x86_64 Generica");
+        strcpy(cpu->brand, "Generic x86_64 CPU");
     }
 
 #ifdef _WIN32
@@ -90,27 +90,27 @@ static inline void cpu_detect(CPUInfo* cpu) {
     cpu->logical_threads = (int)sysconf(_SC_NPROCESSORS_ONLN);
     if (cpu->logical_threads < 1) cpu->logical_threads = 1;
 #endif
-    // Em CPUs dual-core com HyperThreading, 4 threads costumam dar o melhor pico de barramento
+    // On dual-core CPUs with HyperThreading, 4 threads usually achieve peak memory bandwidth
     cpu->physical_cores = (cpu->logical_threads > 1) ? (cpu->logical_threads / 2) : 1;
     cpu->recommended_omp_threads = cpu->logical_threads;
-    if (cpu->recommended_omp_threads > 8) cpu->recommended_omp_threads = 8; // saturacao de barramento DDR
+    if (cpu->recommended_omp_threads > 8) cpu->recommended_omp_threads = 8; // DDR bus bandwidth saturation
 }
 
 static inline void cpu_print_info(const CPUInfo* cpu) {
     printf("====================================================================\n");
-    printf("  NATIVA CPU - DETECCAO E CONFIGURACAO OPENMP\n");
+    printf("  NATIVA CPU - DETECTION AND OPENMP CONFIGURATION\n");
     printf("====================================================================\n");
-    printf("  Processador : %s\n", cpu->brand);
-    printf("  Fabricante  : %s | Threads: %d (Cores Fisicos est.: %d)\n",
+    printf("  Processor   : %s\n", cpu->brand);
+    printf("  Vendor      : %s | Threads: %d (Est. Physical Cores: %d)\n",
            cpu->vendor, cpu->logical_threads, cpu->physical_cores);
-    printf("  Recursos    : SSSE3=%s | SSE4.1=%s | AVX=%s | AVX2=%s | FMA3=%s | AVX512=%s\n",
-           cpu->ssse3 ? "SIM" : "NAO",
-           cpu->sse41 ? "SIM" : "NAO",
-           cpu->avx   ? "SIM" : "NAO",
-           cpu->avx2  ? "SIM" : "NAO",
-           cpu->fma3  ? "SIM" : "NAO",
-           cpu->avx512f ? "SIM" : "NAO");
-    printf("  OpenMP      : recomendação de até %d threads; OMP_NUM_THREADS tem precedência\n", cpu->recommended_omp_threads);
+    printf("  Features    : SSSE3=%s | SSE4.1=%s | AVX=%s | AVX2=%s | FMA3=%s | AVX512=%s\n",
+           cpu->ssse3 ? "YES" : "NO",
+           cpu->sse41 ? "YES" : "NO",
+           cpu->avx   ? "YES" : "NO",
+           cpu->avx2  ? "YES" : "NO",
+           cpu->fma3  ? "YES" : "NO",
+           cpu->avx512f ? "YES" : "NO");
+    printf("  OpenMP      : recommendation up to %d threads; OMP_NUM_THREADS takes precedence\n", cpu->recommended_omp_threads);
     printf("====================================================================\n");
 }
 

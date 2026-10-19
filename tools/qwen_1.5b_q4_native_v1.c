@@ -2,9 +2,9 @@
 // NATIVA NATIVE C RUNNER - QWEN2.5-1.5B-INSTRUCT IN INT4 (ULTRAFAST Q4_0 x Q8_0)
 // ============================================================================
 // Motor de inferência nativo de altíssima performance para Qwen2.5-1.5B INT4:
-//   - Zero-Copy Win32 mmap do modelo quantizado (828 MB)
+//   - Zero-Copy Win32 mmap of quantized model (828 MB)
 //   - Kernel SSSE3 4-Row Fused Vector Reduction (_mm_maddubs + _mm_hadd_epi32)
-//   - Redução total de overhead de descompactação e memória
+//   - Complete reduction of unpacking and memory overhead
 //   - OpenMP multi-core com active wait policy
 //   - Protocolo interativo nativo compatível com Chat_Com_Qwen_1.5B.bat
 // ============================================================================
@@ -40,7 +40,7 @@ typedef struct {
 } BlockQ8;
 
 // ----------------------------------------------------------------------------
-// VOCABULÁRIO NATIVO
+// NATIVE VOCABULARY
 // ----------------------------------------------------------------------------
 typedef struct {
     uint16_t len;
@@ -574,7 +574,7 @@ static inline void compute_mlp_fused(float* restrict h_mlp,
             acc_up = _mm_add_ps(acc_up, _mm_mul_ps(ufdots, uscales));
         }
 
-        // 3. Fused SiLU & Up multiply direto para a saida
+        // 3. Fused SiLU & Up multiply direct to output
         float g_vals[4], u_vals[4];
         _mm_storeu_ps(g_vals, acc_gate);
         _mm_storeu_ps(u_vals, acc_up);
@@ -631,7 +631,7 @@ static void forward_token(const uint8_t* model_bytes, int token_id, int pos) {
         _mm_storeu_ps(&g_x[b * 32 + 28], _mm_mul_ps(f7, svec));
     }
 
-    // 2. Loop através das 28 camadas
+    // 2. Loop through 28 layers
     int l;
     for (l = 0; l < QWEN15_NUM_LAYERS; l++) {
         const Qwen15LayerOffsets* lo = &g_qwen15_offsets.layers[l];
@@ -757,26 +757,26 @@ int main(int argc, char** argv) {
     bool interactive_mode = (argc > 1 && strcmp(argv[1], "--interactive") == 0);
 
     if (!load_vocab(vocab_path)) {
-        fprintf(stderr, "[ERRO] Nao foi possivel carregar o vocabulario em %s\n", vocab_path);
+        fprintf(stderr, "[ERROR] Could not load vocabulary at %s\n", vocab_path);
         return 1;
     }
 
     HANDLE hFile = CreateFileA(model_path, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
     if (hFile == INVALID_HANDLE_VALUE) {
-        fprintf(stderr, "[ERRO] Nao foi possivel abrir %s (Codigo: %lu)\n", model_path, GetLastError());
+        fprintf(stderr, "[ERROR] Could not open %s (Code: %lu)\n", model_path, GetLastError());
         return 1;
     }
 
     HANDLE hMapping = CreateFileMappingA(hFile, NULL, PAGE_READONLY, 0, 0, NULL);
     if (!hMapping) {
-        fprintf(stderr, "[ERRO] Falha ao criar mapeamento de arquivo\n");
+        fprintf(stderr, "[ERROR] Failed to create file mapping\n");
         CloseHandle(hFile);
         return 1;
     }
 
     const uint8_t* model_bytes = (const uint8_t*)MapViewOfFile(hMapping, FILE_MAP_READ, 0, 0, 0);
     if (!model_bytes) {
-        fprintf(stderr, "[ERRO] Falha ao mapear arquivo na memoria\n");
+        fprintf(stderr, "[ERROR] Failed to map file to memory\n");
         CloseHandle(hMapping);
         CloseHandle(hFile);
         return 1;
@@ -874,7 +874,7 @@ int main(int argc, char** argv) {
 
         printf("====================================================================\n");
         printf("  NATIVA C99 ENGINE BENCHMARK - QWEN2.5-1.5B (INT4 Q4_0 x Q8_0)\n");
-        printf("  Parametros: 1.54 Bilhoes | Camadas: 28 | Memoria: 828 MB\n");
+        printf("  Parameters: 1.54 Billion | Layers: 28 | Memory: 828 MB\n");
         printf("====================================================================\n\n");
 
         if (custom_prompt) {
@@ -893,9 +893,9 @@ int main(int argc, char** argv) {
             forward_token(model_bytes, prompt_tokens_buf[p], p);
         }
         double t_prefill_end = timer_now();
-        printf("    -> Prefill concluido em %.3f s!\n\n", t_prefill_end - t_prefill_start);
+        printf("    -> Prefill completed in %.3f s!\n\n", t_prefill_end - t_prefill_start);
 
-        printf("[*] Gerando tokens em tempo real:\n----------------------------------------------------\n");
+        printf("[*] Generating tokens in real time:\n----------------------------------------------------\n");
         int cur_token = prompt_tokens_buf[prompt_len - 1];
         int pos = prompt_len - 1;
         int generated = 0;
@@ -903,7 +903,7 @@ int main(int argc, char** argv) {
         // Zera o perfil para medir apenas a geracao (sem o prefill)
         g_prof_attn = g_prof_mlp = g_prof_lm = 0.0;
         g_prof_tokens = 0;
-        uint32_t seq_hash = 2166136261u; // FNV-1a da sequencia gerada
+        uint32_t seq_hash = 2166136261u; // FNV-1a of generated sequence
 
         double t_gen_start = timer_now();
         while (generated < num_tokens_generate && pos < MAX_SEQ_LEN - 1) {
@@ -926,15 +926,15 @@ int main(int argc, char** argv) {
         double tok_s = (gen_sec > 0.0) ? (generated / gen_sec) : 0.0;
 
         printf("\n----------------------------------------------------\n");
-        printf("[RESULTADO FINAL]:\n");
+        printf("[FINAL RESULT]:\n");
         printf("  Tokens gerados   : %d\n", generated);
-        printf("  Tempo total      : %.3f s\n", gen_sec);
+        printf("  Total time       : %.3f s\n", gen_sec);
         printf("  Velocidade       : \x1b[1;32m%.2f tokens/segundo\x1b[0m\n", tok_s);
         if (g_prof_tokens > 0) {
             printf("  [Perfil por Token]:\n");
             printf("    Atenção (28 cam) : %.1f ms\n", (g_prof_attn / g_prof_tokens) * 1000.0);
             printf("    MLP (28 cam)     : %.1f ms\n", (g_prof_mlp / g_prof_tokens) * 1000.0);
-            printf("    LM Head (Saída)  : %.1f ms\n", (g_prof_lm / g_prof_tokens) * 1000.0);
+            printf("    LM Head (Output) : %.1f ms\n", (g_prof_lm / g_prof_tokens) * 1000.0);
         }
         if (bench_mode) printf("  BENCH_HASH=%08x\n", seq_hash);
         printf("====================================================================\n");

@@ -1,15 +1,15 @@
 #!/usr/bin/env python3
 """
-tools/experimento_real_cortex_hipocampo.py — Benchmark Científico Rigoroso
-Avaliação Comparativa de Perplexidade (PPL), Retenção de KV Cache e Acurácia
-no WikiText-2 utilizando o modelo real Qwen2.5-0.5B e os núcleos do runtime Nativa.
+tools/experimento_real_cortex_hipocampo.py — Rigorous Scientific Benchmark
+Comparative Evaluation of Perplexity (PPL), KV Cache Retention, and Accuracy
+on WikiText-2 using real Qwen2.5-0.5B model and Nativa runtime kernels.
 
-Comparações metodológicas estritas (Sem dados hardcoded):
-1. Full KV Cache (Baseline Oficial Transformer FP32/FP16)
-2. Local Sliding Window (Córtex/AMPA puro: 4 sinks + janela W=32)
-3. Random Eviction (Janela W=32 + tokens passados aleatórios)
-4. Heavy Hitter Oracle (H2O: Janela W=32 + acumulador de atenção)
-5. Bio-Gated Córtex + Hipocampo (Janela W=32 + Surprisal Dopaminérgico + TurboQuant 2 bits)
+Strict methodological comparisons (No hardcoded data):
+1. Full KV Cache (Official Transformer FP32/FP16 Baseline)
+2. Local Sliding Window (Pure Cortex/AMPA: 4 sinks + window W=32)
+3. Random Eviction (Window W=32 + random past tokens)
+4. Heavy Hitter Oracle (H2O: Window W=32 + attention accumulator)
+5. Bio-Gated Cortex + Hippocampus (Window W=32 + Dopaminergic Surprisal + TurboQuant 2 bits)
 """
 
 import os
@@ -47,7 +47,7 @@ def rotate_half(x: np.ndarray) -> np.ndarray:
 
 
 def apply_rope_heads(x: np.ndarray, pos: int) -> np.ndarray:
-    """Aplica RoPE vetorialmente nas cabeças de atenção."""
+    """Applies RoPE vectorially to attention heads."""
     dim = x.shape[-1]
     half = dim // 2
     freqs = 1.0 / (ROPE_BASE ** (np.arange(0, half, dtype=np.float32) / float(half)))
@@ -60,13 +60,13 @@ def apply_rope_heads(x: np.ndarray, pos: int) -> np.ndarray:
 
 
 class QwenLayerWeights:
-    """Mantém os tensores pré-carregados de uma camada para inferência veloz em RAM."""
+    """Keeps pre-loaded tensors of a layer for fast in-RAM inference."""
     def __init__(self, model_file: str, layer_idx: int):
         pfx = f"model.layers.{layer_idx}."
         self.norm1 = nativa.load_safetensors_fn(model_file, pfx + "input_layernorm.weight")
         self.norm2 = nativa.load_safetensors_fn(model_file, pfx + "post_attention_layernorm.weight")
         
-        # Projeções de atenção
+        # Attention projections
         self.wq = nativa.load_safetensors_fn(model_file, pfx + "self_attn.q_proj.weight")
         self.bq = nativa.load_safetensors_fn(model_file, pfx + "self_attn.q_proj.bias")
         self.wk = nativa.load_safetensors_fn(model_file, pfx + "self_attn.k_proj.weight")
@@ -83,7 +83,7 @@ class QwenLayerWeights:
 
 class QwenModelLoaded:
     def __init__(self, model_file: str, num_layers: int = 24):
-        print(f"[*] Carregando pesos do Qwen ({num_layers} camadas) via SafeTensors mmap...")
+        print(f"[*] Loading Qwen weights ({num_layers} layers) via SafeTensors mmap...")
         t0 = time.perf_counter()
         self.model_file = model_file
         self.num_layers = num_layers
@@ -94,7 +94,7 @@ class QwenModelLoaded:
         for i in range(num_layers):
             self.layers.append(QwenLayerWeights(model_file, i))
         t1 = time.perf_counter()
-        print(f"[OK] {num_layers} camadas carregadas na memória em {t1 - t0:.2f}s.")
+        print(f"[OK] {num_layers} layers loaded into memory in {t1 - t0:.2f}s.")
 
 
 def rmsnorm(x: np.ndarray, weight: Any, eps: float = 1e-6) -> np.ndarray:
@@ -116,7 +116,7 @@ class KVEntry:
 
 
 class LayerKVCache:
-    """Implementa o gerenciamento comparativo de KV-Cache por camada."""
+    """Implements comparative per-layer KV-Cache management."""
     def __init__(self, mode: str, window_size: int = 16, num_sinks: int = 4, tq_bits: int = 2):
         self.mode = mode
         self.window_size = window_size
@@ -141,7 +141,7 @@ class LayerKVCache:
             idx_falling = curr_len - self.window_size - 1
 
             if self.mode == "window":
-                # Córtex Puro / AMPA: descarta qualquer memória além da janela de trabalho
+                # Pure Cortex / AMPA: discard any memory beyond the sliding window
                 self.entries.pop(idx_falling)
 
             elif self.mode == "random":
@@ -243,7 +243,7 @@ def forward_step(
         q_rot = apply_rope_heads(q, pos)
         k_rot = apply_rope_heads(k, pos)
 
-        # Atualiza KV Cache desta camada
+        # Update KV Cache of this layer
         cache = caches[l_idx]
         cache.append(pos, k_rot, v, surprisal=surprisal_prev, threshold_surprisal=threshold_surprisal)
 
@@ -303,7 +303,7 @@ def evaluate_regime(
     tq_bits: int = 2,
     threshold_percentile: float = 80.0
 ) -> Dict[str, Any]:
-    """Avalia um regime específico no split de texto medindo Perplexidade e Memória exata."""
+    """Evaluates a specific regime on text split measuring Perplexity and exact Memory."""
     print(f"\n---> Executando Regime: {mode.upper()} (Janela: {window_size}, Sinks: {num_sinks}, Bits: {tq_bits})...")
     
     caches = [LayerKVCache(mode=mode, window_size=window_size, num_sinks=num_sinks, tq_bits=tq_bits) for _ in range(model.num_layers)]
@@ -318,7 +318,7 @@ def evaluate_regime(
     surprisal_curr = 0.0
     
     # Estimativa dinâmica do limiar de surprisal para gating neuroquímico
-    # (Tokens com erro acima do percentil são considerados marcos dopaminérgicos)
+    # (Tokens with error above percentile are considered dopaminergic landmarks)
     threshold_surprisal = 3.5  # Valor empírico inicial; atualizado dinamicamente
 
     for i in range(n_tokens - 1):
@@ -353,7 +353,7 @@ def evaluate_regime(
         if top1_pred == target_token:
             correct_count += 1
             
-        # Medição de memória ativa
+        # Active memory measurement
         mem_now = sum(c.memory_bytes() for c in caches)
         if mem_now > peak_memory_bytes:
             peak_memory_bytes = mem_now
@@ -382,49 +382,49 @@ def evaluate_regime(
 
 def main():
     parser = argparse.ArgumentParser(description="Benchmark Científico Rigoroso Córtex + Hipocampo no WikiText-2")
-    parser.add_argument("--model", default=MODEL_DEFAULT_PATH, help="Caminho do arquivo model.safetensors")
-    parser.add_argument("--tokenizer", default=TOKENIZER_DEFAULT_PATH, help="Caminho do tokenizer.json")
-    parser.add_argument("--corpus", default=CORPUS_DEFAULT_PATH, help="Caminho do corpus wikitext-2-test.txt")
-    parser.add_argument("--tokens", type=int, default=80, help="Quantidade de tokens para avaliação comparativa")
-    parser.add_argument("--layers", type=int, default=24, help="Número de camadas para avaliar (ex: 8 ou 24)")
-    parser.add_argument("--window", type=int, default=16, help="Tamanho da janela densa cortical (AMPA)")
-    parser.add_argument("--sinks", type=int, default=4, help="Quantidade de sinks de atenção iniciais")
-    parser.add_argument("--percentile", type=float, default=70.0, help="Percentil de Surprisal para gating dopaminérgico")
+    parser.add_argument("--model", default=MODEL_DEFAULT_PATH, help="Path to model.safetensors file")
+    parser.add_argument("--tokenizer", default=TOKENIZER_DEFAULT_PATH, help="Path to tokenizer.json")
+    parser.add_argument("--corpus", default=CORPUS_DEFAULT_PATH, help="Path to wikitext-2-test.txt corpus")
+    parser.add_argument("--tokens", type=int, default=80, help="Number of tokens for comparative evaluation")
+    parser.add_argument("--layers", type=int, default=24, help="Number of layers to evaluate (e.g. 8 or 24)")
+    parser.add_argument("--window", type=int, default=16, help="Size of dense cortical window (AMPA)")
+    parser.add_argument("--sinks", type=int, default=4, help="Number of initial attention sinks")
+    parser.add_argument("--percentile", type=float, default=70.0, help="Surprisal percentile for dopaminergic gating")
     args = parser.parse_args()
 
     if not os.path.exists(args.model):
-        print(f"[ERRO] Modelo não encontrado em: {args.model}")
+        print(f"[ERROR] Model not found at: {args.model}")
         sys.exit(1)
 
     print("=" * 80)
-    print("BENCHMARK CIENTÍFICO: AVALIAÇÃO DE KV-CACHE E COMPRESSÃO NO WIKITEXT-2")
-    print(f"Modelo: Qwen2.5-0.5B ({args.layers} camadas) | Dataset: WikiText-2 Test")
-    print(f"Config: {args.tokens} tokens | Janela={args.window} | Sinks={args.sinks} | Percentil={args.percentile}%")
-    print("Metodologia: Métricas Reais de Perplexidade (PPL), Cross-Entropy e Memória")
+    print("SCIENTIFIC BENCHMARK: KV-CACHE EVALUATION AND COMPRESSION ON WIKITEXT-2")
+    print(f"Model: Qwen2.5-0.5B ({args.layers} layers) | Dataset: WikiText-2 Test")
+    print(f"Config: {args.tokens} tokens | Window={args.window} | Sinks={args.sinks} | Percentile={args.percentile}%")
+    print("Methodology: Real Perplexity (PPL), Cross-Entropy, and Memory Metrics")
     print("=" * 80)
 
-    # 1. Carregamento do Tokenizer e Corpus
+    # 1. Tokenizer and Corpus Loading
     tok = nativa.Tokenizer(args.tokenizer)
     corpus_file = Path(args.corpus).resolve()
     if not corpus_file.is_file():
-        print(f"[ERRO] Corpus não encontrado: {corpus_file}")
+        print(f"[ERROR] Corpus not found: {corpus_file}")
         sys.exit(1)
     text = corpus_file.read_text(encoding="utf-8")
     
-    # Pega linhas contínuas do WikiText-2
+    # Extract continuous lines from WikiText-2
     paragraphs = [p.strip() for p in text.split("\n") if len(p.strip()) > 200 and not p.strip().startswith("=")]
     if not paragraphs:
         paragraphs = [p.strip() for p in text.split("\n") if len(p.strip()) > 50]
     target_text = "\n\n".join(paragraphs[:3])
     all_tokens = tok.encode(target_text).tolist()
     eval_tokens = all_tokens[:args.tokens]
-    print(f"[*] Trecho extraído ({len(eval_tokens)} tokens):")
+    print(f"[*] Extracted excerpt ({len(eval_tokens)} tokens):")
     print(f"    \"{target_text[:120]}...\"\n")
 
-    # 2. Carregamento do Modelo
+    # 2. Model Loading
     model = QwenModelLoaded(args.model, num_layers=args.layers)
 
-    # 3. Execução dos Regimes
+    # 3. Execution of Regimes
     regimes = [
         ("full", args.window, args.sinks, 2),
         ("window", args.window, args.sinks, 2),
@@ -449,9 +449,9 @@ def main():
         res["tag"] = tag
         results.append(res)
 
-    # 4. Tabela Científica de Resultados
+    # 4. Scientific Results Table
     print("\n" + "=" * 95)
-    print(f"{'REGIME DE MEMÓRIA':<25} | {'PERPLEXIDADE (PPL)':<18} | {'NLL (nats)':<10} | {'TOP-1 ACC':<10} | {'MEMÓRIA KV':<12} | {'ECONOMIA'}")
+    print(f"{'MEMORY REGIME':<25} | {'PERPLEXITY (PPL)':<18} | {'NLL (nats)':<10} | {'TOP-1 ACC':<10} | {'KV MEMORY':<12} | {'SAVINGS'}")
     print("=" * 95)
 
     base_mem = results[0]["peak_mem_kb"]
@@ -467,9 +467,9 @@ def main():
 
     print("=" * 95)
     print("\nConclusão Científica Baseada em Evidências:")
-    print("1. O regime 'full' retém 100% dos tokens mas consome crescimento O(T) linear de memória.")
+    print("1. O regime 'full' retains 100% of tokens but consumes O(T) linear memory growth.")
     print("2. O regime 'window' (AMPA) perde contexto distante, provocando aumento de perplexidade.")
-    print("3. O regime 'biogated_turboquant' preserva tokens de alto erro preditivo comprimidos em 2/4 bits,")
+    print("3. O regime 'biogated_turboquant' preserves high prediction error tokens compressed em 2/4 bits,")
     print("   atingindo trade-off ótimo entre Perplexidade e Compressão real sem hardcoding.")
     print("=" * 95)
 

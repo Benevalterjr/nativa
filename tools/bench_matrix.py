@@ -15,7 +15,7 @@ configs = [
 exe_path = os.path.join("tools", "qwen_1.5b_q4_native.exe")
 
 print("=" * 70)
-print("  MATRIZ DE BENCHMARK: THREADS (1, 2, 4) x OMP_WAIT_POLICY")
+print("  BENCHMARK MATRIX: THREADS (1, 2, 4) x OMP_WAIT_POLICY")
 print("=" * 70)
 
 # Hardware info
@@ -40,7 +40,7 @@ for threads, policy in configs:
     env["OMP_NUM_THREADS"] = str(threads)
     env["OMP_WAIT_POLICY"] = policy
 
-    print(f"\n[*] Executando: Threads={threads} | Policy={policy}...")
+    print(f"\n[*] Running: Threads={threads} | Policy={policy}...")
     try:
         proc = subprocess.run([exe_path], capture_output=True, text=True, env=env, timeout=120)
         out = proc.stdout
@@ -88,7 +88,7 @@ for threads, policy in configs:
         })
         print(f"    -> {speed:.2f} tok/s | Attn: {attn:.1f} ms | MLP: {mlp:.1f} ms | LM: {lm:.1f} ms")
     except Exception as e:
-        print(f"    -> Erro: {e}")
+        print(f"    -> Error: {e}")
 
 print("\n" + "=" * 70)
 print(f"{'Threads':<8} | {'Policy':<8} | {'Tokens/s':<10} | {'Attn (ms)':<10} | {'MLP (ms)':<10} | {'LM Head (ms)':<12}")

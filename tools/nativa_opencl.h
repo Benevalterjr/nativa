@@ -1,9 +1,9 @@
 // ============================================================================
 // NATIVA OPENCL RUNTIME BRIDGE (ZERO-DEPENDENCY DYNAMIC LOADER)
 // ============================================================================
-// Fornece suporte universal a aceleradores OpenCL (GPU e CPU) sem exigir
-// instalação de OpenCL SDK externo. Carrega dinamicamente a OpenCL.dll (Windows)
-// ou libOpenCL.so (Linux) em tempo de execução.
+// Provides universal support for OpenCL accelerators (GPU and CPU) without
+// requiring an external OpenCL SDK installation. Dynamically loads OpenCL.dll
+// (Windows) or libOpenCL.so (Linux) at runtime.
 // ============================================================================
 
 #ifndef NATIVA_OPENCL_H
@@ -32,7 +32,7 @@ typedef void* nat_cl_lib_t;
 #endif
 
 // ----------------------------------------------------------------------------
-// TIPOS E CONSTANTES OPENCL 1.2
+// OPENCL 1.2 TYPES AND CONSTANTS
 // ----------------------------------------------------------------------------
 typedef int32_t  cl_int;
 typedef uint32_t cl_uint;
@@ -70,7 +70,7 @@ typedef void*    cl_event;
 #define CL_PROGRAM_BUILD_LOG           0x1183
 
 // ----------------------------------------------------------------------------
-// ASSINATURAS DE FUNÇÕES OPENCL
+// OPENCL FUNCTION SIGNATURES
 // ----------------------------------------------------------------------------
 typedef cl_int (*fn_clGetPlatformIDs)(cl_uint num_entries, cl_platform_id* platforms, cl_uint* num_platforms);
 typedef cl_int (*fn_clGetPlatformInfo)(cl_platform_id platform, cl_uint param_name, size_t param_value_size, void* param_value, size_t* param_value_size_ret);
@@ -95,7 +95,7 @@ typedef cl_int (*fn_clReleaseCommandQueue)(cl_command_queue command_queue);
 typedef cl_int (*fn_clReleaseContext)(cl_context context);
 
 // ----------------------------------------------------------------------------
-// ESTRUTURA DO DISPOSITIVO E CONTEXTO NATIVA OPENCL
+// NATIVA OPENCL DEVICE AND CONTEXT STRUCTURE
 // ----------------------------------------------------------------------------
 typedef struct {
     cl_platform_id platform;
@@ -114,12 +114,12 @@ typedef struct {
     int  device_count;
     NativaCLDevice devices[16];
 
-    // Contexto Ativo
+    // Active Context
     int              active_device_idx;
     cl_context       context;
     cl_command_queue queue;
 
-    // Tabela de Funções Dinâmicas
+    // Dynamic Function Table
     fn_clGetPlatformIDs clGetPlatformIDs;
     fn_clGetPlatformInfo clGetPlatformInfo;
     fn_clGetDeviceIDs clGetDeviceIDs;
@@ -144,7 +144,7 @@ typedef struct {
 } NativaCLContext;
 
 // ----------------------------------------------------------------------------
-// INICIALIZAÇÃO DINÂMICA
+// DYNAMIC INITIALIZATION
 // ----------------------------------------------------------------------------
 static inline bool nativa_cl_init(NativaCLContext* ctx) {
     if (!ctx) return false;
@@ -185,7 +185,7 @@ static inline bool nativa_cl_init(NativaCLContext* ctx) {
 
     #undef BIND_CL
 
-    // Descobrir Plataformas e Dispositivos
+    // Discover Platforms and Devices
     cl_uint num_plat = 0;
     if (ctx->clGetPlatformIDs(0, NULL, &num_plat) != CL_SUCCESS || num_plat == 0) {
         return false;
@@ -236,10 +236,10 @@ static inline bool nativa_cl_init(NativaCLContext* ctx) {
 
 static inline void nativa_cl_print_devices(const NativaCLContext* ctx) {
     printf("====================================================================\n");
-    printf("  NATIVA OPENCL - DISPOSITIVOS DETECTADOS (%d disponiveis)\n", ctx ? ctx->device_count : 0);
+    printf("  NATIVA OPENCL - DETECTED DEVICES (%d available)\n", ctx ? ctx->device_count : 0);
     printf("====================================================================\n");
     if (!ctx || ctx->device_count == 0) {
-        printf("  Nenhum dispositivo OpenCL compativel encontrado.\n");
+        printf("  No compatible OpenCL device found.\n");
         printf("====================================================================\n");
         return;
     }
@@ -247,7 +247,7 @@ static inline void nativa_cl_print_devices(const NativaCLContext* ctx) {
         const NativaCLDevice* d = &ctx->devices[i];
         double mem_mb = (double)d->global_mem_bytes / (1024.0 * 1024.0);
         printf("  [%d] [%s] %s\n", i, d->is_gpu ? "GPU" : "CPU", d->name);
-        printf("      Plataforma: %s | Compute Units: %u | VRAM/RAM: %.1f MB | Max WorkGroup: %zu\n",
+        printf("      Platform: %s | Compute Units: %u | VRAM/RAM: %.1f MB | Max WorkGroup: %zu\n",
                d->platform_name, d->compute_units, mem_mb, d->max_workgroup_size);
     }
     printf("====================================================================\n");
@@ -258,7 +258,7 @@ static inline bool nativa_cl_activate_device(NativaCLContext* ctx, int device_id
         return false;
     }
 
-    // Libera contexto anterior se houver
+    // Release previous context if present
     if (ctx->queue) { ctx->clReleaseCommandQueue(ctx->queue); ctx->queue = NULL; }
     if (ctx->context) { ctx->clReleaseContext(ctx->context); ctx->context = NULL; }
 

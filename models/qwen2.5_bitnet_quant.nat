@@ -1,7 +1,7 @@
 # models/qwen2.5_bitnet_quant.nat
-# Quantizacao BitNet b1.58 Canonica sob demanda do Modelo Qwen2.5-0.5B
-# Converte pesos float32 para trits {-1, 0, 1} com AbsMean Scaling e empacotamento base-3 (1.58 bits)
-# Compara memoria, tempo de execucao e fidelidade numerica
+# On-Demand Canonical BitNet b1.58 Quantization of the Qwen2.5-0.5B Model
+# Converts float32 weights to trits {-1, 0, 1} with AbsMean Scaling and base-3 packing (1.58 bits)
+# Compares memory, execution time, and numerical fidelity
 
 const PADRAO_ARQUIVO: str = "data/qwen2.5_0.5b.safetensors"
 const FALLBACK_ARQUIVO: str = "qwen2.5_0.5b.safetensors"
@@ -9,25 +9,25 @@ const CAMADA: i64 = 0
 
 fn main():
     print("==========================================================================")
-    print("  NATIVA v0.4: QUANTIZACAO BITNET b1.58 SOB DEMANDA — QWEN2.5-0.5B")
-    print("  Conversao Float32 -> Trits {-1, 0, 1} (1.58 bits / 5 trits por byte)")
+    print("  NATIVA v0.4: ON-DEMAND BITNET b1.58 QUANTIZATION — QWEN2.5-0.5B")
+    print("  Float32 -> Trits {-1, 0, 1} Conversion (1.58 bits / 5 trits per byte)")
     print("==========================================================================")
 
-    # 0. Resolucao segura do caminho dos pesos com fallback
+    # 0. Safe resolution of weights path with fallback
     arquivo = PADRAO_ARQUIVO
     if not exists_file(arquivo):
         if exists_file(FALLBACK_ARQUIVO):
             arquivo = FALLBACK_ARQUIVO
         else:
-            print("[AVISO] Arquivo de pesos nao encontrado:")
+            print("[WARNING] Weights file not found:")
             print(f"        {arquivo}")
-            print("Para baixar o modelo Qwen2.5-0.5B, execute o utilitario:")
+            print("To download the Qwen2.5-0.5B model, run the utility:")
             print("  python tools/baixar_qwen.py")
             return
 
-    # 1. Carregamento das projecoes de uma camada real do Qwen2.5
-    print(f"\n[1] Carregando pesos Float32 da Camada {CAMADA} do Qwen2.5...")
-    print(f"    - Fonte de pesos: {arquivo}")
+    # 1. Loading projections of a real Qwen2.5 layer
+    print(f"\n[1] Loading Float32 weights from Qwen2.5 Layer {CAMADA}...")
+    print(f"    - Weights source: {arquivo}")
     
     t0 = clock()
     W_q_f32    = load_safetensors(arquivo, f"model.layers.{CAMADA}.self_attn.q_proj.weight")
@@ -45,10 +45,10 @@ fn main():
     b_v   = load_safetensors(arquivo, f"model.layers.{CAMADA}.self_attn.v_proj.bias")
 
     t_load = clock() - t0
-    print(f"    - Pesos da Camada {CAMADA} carregados em {t_load*1000.0:.1f} ms")
+    print(f"    - Layer {CAMADA} weights loaded in {t_load*1000.0:.1f} ms")
 
-    # 2. Quantizacao BitNet b1.58 (AbsMean Scaling) + Compactacao 5-trits (1.58-bit)
-    print("\n[2] Aplicando Quantizacao BitNet b1.58 Canônica e Empacotamento denso de base-3...")
+    # 2. BitNet b1.58 Quantization (AbsMean Scaling) + 5-trits Packing (1.58-bit)
+    print("\n[2] Applying Canonical BitNet b1.58 Quantization and dense base-3 packing...")
     t_q_start = clock()
 
     W_q_bit    = quantize_bitnet(W_q_f32)
@@ -59,7 +59,7 @@ fn main():
     W_up_bit   = quantize_bitnet(W_up_f32)
     W_down_bit = quantize_bitnet(W_down_f32)
 
-    # Empacotamento de 5 trits por byte (3^5 = 243 <= 256)
+    # Packing 5 trits per byte (3^5 = 243 <= 256)
     W_q_p5    = pack_ternary_5trits(W_q_bit)
     W_k_p5    = pack_ternary_5trits(W_k_bit)
     W_v_p5    = pack_ternary_5trits(W_v_bit)
@@ -69,15 +69,15 @@ fn main():
     W_down_p5 = pack_ternary_5trits(W_down_bit)
 
     t_quant = clock() - t_q_start
-    print(f"    - Todas as 7 matrizes quantizadas e empacotadas em {t_quant*1000.0:.1f} ms!")
+    print(f"    - All 7 matrices quantized and packed in {t_quant*1000.0:.1f} ms!")
 
-    # 3. Analise de Memoria e Fatores de Escala AbsMean (Gamma)
-    print("\n[3] Metricas de Reducao de Memoria por Matriz:")
+    # 3. Memory Analysis and AbsMean Scale Factors (Gamma)
+    print("\n[3] Memory Reduction Metrics per Matrix:")
     print("    ----------------------------------------------------------------------")
-    print("    Matriz        | Shape       | FP32 (KB)  | BitNet 1.58b | Reducao | AbsMean (gamma)")
+    print("    Matrix        | Shape       | FP32 (KB)  | BitNet 1.58b | Savings | AbsMean (gamma)")
     print("    ----------------------------------------------------------------------")
 
-    # Exibe dados detalhados para cada projecao
+    # Display detailed data for each projection
     gamma_gate = tensor_absmean(W_gate_f32)
     gamma_up   = tensor_absmean(W_up_f32)
     gamma_down = tensor_absmean(W_down_f32)
@@ -94,14 +94,14 @@ fn main():
     print(f"    v_proj        | [128, 896]  | 448 KB     | 23 KB        | 19.5x   | {gamma_v:.6f}")
     print(f"    o_proj        | [896, 896]  | 3136 KB    | 158 KB       | 19.8x   | {gamma_o:.6f}")
     print("    ----------------------------------------------------------------------")
-    print("    TOTAL CAMADA  |             | 58.2 MB    | 2.9 MB       | 19.9x Menor!")
-    print("    TOTAL 24 CAM. | (Estimado)  | 942.3 MB   | 47.3 MB      | Cabe em microcontrolador!")
+    print("    LAYER TOTAL   |             | 58.2 MB    | 2.9 MB       | 19.9x Smaller!")
+    print("    24 LAYERS TOT | (Estimated) | 942.3 MB   | 47.3 MB      | Fits on a microcontroller!")
 
-    # 4. Comparacao de Execucao: Forward Pass da Camada FP32 vs. BitNet b1.58
-    print("\n[4] Executando Forward Pass da Camada (Benchmark de Inferencia)...")
+    # 4. Execution Comparison: Layer Forward Pass FP32 vs. BitNet b1.58
+    print("\n[4] Running Layer Forward Pass (Inference Benchmark)...")
     x_in = randn(896)
 
-    # A) Execucao Float32 Padrão
+    # A) Standard Float32 Execution
     t_f32_start = clock()
     xn_f32 = rmsnorm(x_in, norm1)
     q_f32 = (W_q_f32 @ xn_f32) + b_q
@@ -122,7 +122,7 @@ fn main():
     y_f32 = x_mid_f32 + mlp_out_f32
     t_f32 = clock() - t_f32_start
 
-    # B) Execucao BitNet b1.58 com Vec-LUT (Adicoes + Lookups)
+    # B) BitNet b1.58 Execution with Vec-LUT (Additions + Lookups)
     t_bit_start = clock()
     xn_bit = rmsnorm(x_in, norm1)
     q_bit = (W_q_p5 @ xn_bit) + b_q
@@ -143,22 +143,22 @@ fn main():
     y_bit = x_mid_bit + mlp_out_bit
     t_bit = clock() - t_bit_start
 
-    print(f"    - Tempo Forward Camada Float32: {t_f32*1000.0:.2f} ms")
-    print(f"    - Tempo Forward Camada BitNet:  {t_bit*1000.0:.2f} ms")
+    print(f"    - Float32 Layer Forward Time: {t_f32*1000.0:.2f} ms")
+    print(f"    - BitNet Layer Forward Time:  {t_bit*1000.0:.2f} ms")
 
-    # 5. Avaliacao de Fidelidade e Correlacao Numerica
+    # 5. Numerical Fidelity and Correlation Evaluation
     cos_sim = cosine_sim(y_f32, y_bit)
     p_corr  = pearson_corr(y_f32, y_bit)
     erro_mae = mae(y_f32, y_bit)
     rel_err = relative_error(y_f32, y_bit)
 
-    print("\n[5] Fidelidade Numérica entre Saídas (FP32 vs BitNet 1.58-bit):")
-    print(f"    - Similaridade de Cosseno:   {cos_sim:.4f}")
-    print(f"    - Correlacao de Pearson:     {p_corr:.4f}")
-    print(f"    - Erro Medio Absoluto (MAE): {erro_mae:.4f}")
-    print(f"    - Erro Relativo L2:          {rel_err*100.0:.2f}%")
+    print("\n[5] Numerical Fidelity between Outputs (FP32 vs BitNet 1.58-bit):")
+    print(f"    - Cosine Similarity:         {cos_sim:.4f}")
+    print(f"    - Pearson Correlation:       {p_corr:.4f}")
+    print(f"    - Mean Absolute Error (MAE): {erro_mae:.4f}")
+    print(f"    - L2 Relative Error:         {rel_err*100.0:.2f}%")
 
     print("\n==========================================================================")
-    print("  CONCLUSAO: QUANTIZACAO BITNET b1.58 CONCLUIDA COM SUCESSO NO NATIVA!")
-    print("  Memoria reduzida em ~20x com alta correlacao e kernels sem multiplicacao.")
+    print("  CONCLUSION: BITNET b1.58 QUANTIZATION SUCCESSFULLY COMPLETED IN NATIVA!")
+    print("  Memory reduced by ~20x with high correlation and multiplication-free kernels.")
     print("==========================================================================")

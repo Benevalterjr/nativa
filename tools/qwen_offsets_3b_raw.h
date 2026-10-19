@@ -33,7 +33,7 @@ static const RawModelLocs g_raw_model_locs = {
     .embed_tokens = { .shard = 0, .offset = 30208ULL },
     .norm = { .shard = 1, .offset = 2203263952ULL },
     .layers = {
-        // Camada 0
+        // Layer 0
         {
             .norm1 = { .shard = 0, .offset = 622360064ULL },
             .norm2 = { .shard = 0, .offset = 757630464ULL },
@@ -48,7 +48,7 @@ static const RawModelLocs g_raw_model_locs = {
             .wup = { .shard = 0, .offset = 712541696ULL },
             .wdown = { .shard = 0, .offset = 622364160ULL }
         },
-        // Camada 1
+        // Layer 1
         {
             .norm1 = { .shard = 0, .offset = 776514048ULL },
             .norm2 = { .shard = 0, .offset = 911784448ULL },
@@ -63,7 +63,7 @@ static const RawModelLocs g_raw_model_locs = {
             .wup = { .shard = 0, .offset = 866695680ULL },
             .wdown = { .shard = 0, .offset = 776518144ULL }
         },
-        // Camada 2
+        // Layer 2
         {
             .norm1 = { .shard = 0, .offset = 2472207872ULL },
             .norm2 = { .shard = 0, .offset = 2607478272ULL },
@@ -78,7 +78,7 @@ static const RawModelLocs g_raw_model_locs = {
             .wup = { .shard = 0, .offset = 2562389504ULL },
             .wdown = { .shard = 0, .offset = 2472211968ULL }
         },
-        // Camada 3
+        // Layer 3
         {
             .norm1 = { .shard = 0, .offset = 2889581056ULL },
             .norm2 = { .shard = 0, .offset = 3024851456ULL },
@@ -93,7 +93,7 @@ static const RawModelLocs g_raw_model_locs = {
             .wup = { .shard = 0, .offset = 2979762688ULL },
             .wdown = { .shard = 0, .offset = 2889585152ULL }
         },
-        // Camada 4
+        // Layer 4
         {
             .norm1 = { .shard = 0, .offset = 3043735040ULL },
             .norm2 = { .shard = 0, .offset = 3179005440ULL },
@@ -108,7 +108,7 @@ static const RawModelLocs g_raw_model_locs = {
             .wup = { .shard = 0, .offset = 3133916672ULL },
             .wdown = { .shard = 0, .offset = 3043739136ULL }
         },
-        // Camada 5
+        // Layer 5
         {
             .norm1 = { .shard = 0, .offset = 3197889024ULL },
             .norm2 = { .shard = 0, .offset = 3333159424ULL },
@@ -123,7 +123,7 @@ static const RawModelLocs g_raw_model_locs = {
             .wup = { .shard = 0, .offset = 3288070656ULL },
             .wdown = { .shard = 0, .offset = 3197893120ULL }
         },
-        // Camada 6
+        // Layer 6
         {
             .norm1 = { .shard = 0, .offset = 3352043008ULL },
             .norm2 = { .shard = 0, .offset = 3487313408ULL },
@@ -138,7 +138,7 @@ static const RawModelLocs g_raw_model_locs = {
             .wup = { .shard = 0, .offset = 3442224640ULL },
             .wdown = { .shard = 0, .offset = 3352047104ULL }
         },
-        // Camada 7
+        // Layer 7
         {
             .norm1 = { .shard = 0, .offset = 3506196992ULL },
             .norm2 = { .shard = 0, .offset = 3641467392ULL },
@@ -153,7 +153,7 @@ static const RawModelLocs g_raw_model_locs = {
             .wup = { .shard = 0, .offset = 3596378624ULL },
             .wdown = { .shard = 0, .offset = 3506201088ULL }
         },
-        // Camada 8
+        // Layer 8
         {
             .norm1 = { .shard = 0, .offset = 3660350976ULL },
             .norm2 = { .shard = 0, .offset = 3795621376ULL },
@@ -168,7 +168,7 @@ static const RawModelLocs g_raw_model_locs = {
             .wup = { .shard = 0, .offset = 3750532608ULL },
             .wdown = { .shard = 0, .offset = 3660355072ULL }
         },
-        // Camada 9
+        // Layer 9
         {
             .norm1 = { .shard = 0, .offset = 3814504960ULL },
             .norm2 = { .shard = 0, .offset = 3949775360ULL },
@@ -183,7 +183,7 @@ static const RawModelLocs g_raw_model_locs = {
             .wup = { .shard = 0, .offset = 3904686592ULL },
             .wdown = { .shard = 0, .offset = 3814509056ULL }
         },
-        // Camada 10
+        // Layer 10
         {
             .norm1 = { .shard = 0, .offset = 930668032ULL },
             .norm2 = { .shard = 0, .offset = 1065938432ULL },
@@ -198,7 +198,7 @@ static const RawModelLocs g_raw_model_locs = {
             .wup = { .shard = 0, .offset = 1020849664ULL },
             .wdown = { .shard = 0, .offset = 930672128ULL }
         },
-        // Camada 11
+        // Layer 11
         {
             .norm1 = { .shard = 0, .offset = 1084822016ULL },
             .norm2 = { .shard = 0, .offset = 1220092416ULL },
@@ -213,7 +213,7 @@ static const RawModelLocs g_raw_model_locs = {
             .wup = { .shard = 0, .offset = 1175003648ULL },
             .wdown = { .shard = 0, .offset = 1084826112ULL }
         },
-        // Camada 12
+        // Layer 12
         {
             .norm1 = { .shard = 0, .offset = 1238976000ULL },
             .norm2 = { .shard = 0, .offset = 1374246400ULL },
@@ -228,7 +228,7 @@ static const RawModelLocs g_raw_model_locs = {
             .wup = { .shard = 0, .offset = 1329157632ULL },
             .wdown = { .shard = 0, .offset = 1238980096ULL }
         },
-        // Camada 13
+        // Layer 13
         {
             .norm1 = { .shard = 0, .offset = 1393129984ULL },
             .norm2 = { .shard = 0, .offset = 1528400384ULL },
@@ -243,7 +243,7 @@ static const RawModelLocs g_raw_model_locs = {
             .wup = { .shard = 0, .offset = 1483311616ULL },
             .wdown = { .shard = 0, .offset = 1393134080ULL }
         },
-        // Camada 14
+        // Layer 14
         {
             .norm1 = { .shard = 0, .offset = 1547283968ULL },
             .norm2 = { .shard = 0, .offset = 1682554368ULL },
@@ -258,7 +258,7 @@ static const RawModelLocs g_raw_model_locs = {
             .wup = { .shard = 0, .offset = 1637465600ULL },
             .wdown = { .shard = 0, .offset = 1547288064ULL }
         },
-        // Camada 15
+        // Layer 15
         {
             .norm1 = { .shard = 0, .offset = 1701437952ULL },
             .norm2 = { .shard = 0, .offset = 1836708352ULL },
@@ -273,7 +273,7 @@ static const RawModelLocs g_raw_model_locs = {
             .wup = { .shard = 0, .offset = 1791619584ULL },
             .wdown = { .shard = 0, .offset = 1701442048ULL }
         },
-        // Camada 16
+        // Layer 16
         {
             .norm1 = { .shard = 0, .offset = 1855591936ULL },
             .norm2 = { .shard = 0, .offset = 1990862336ULL },
@@ -288,7 +288,7 @@ static const RawModelLocs g_raw_model_locs = {
             .wup = { .shard = 0, .offset = 1945773568ULL },
             .wdown = { .shard = 0, .offset = 1855596032ULL }
         },
-        // Camada 17
+        // Layer 17
         {
             .norm1 = { .shard = 0, .offset = 2009745920ULL },
             .norm2 = { .shard = 0, .offset = 2145016320ULL },
@@ -303,7 +303,7 @@ static const RawModelLocs g_raw_model_locs = {
             .wup = { .shard = 0, .offset = 2099927552ULL },
             .wdown = { .shard = 0, .offset = 2009750016ULL }
         },
-        // Camada 18
+        // Layer 18
         {
             .norm1 = { .shard = 0, .offset = 2163899904ULL },
             .norm2 = { .shard = 0, .offset = 2299170304ULL },
@@ -318,7 +318,7 @@ static const RawModelLocs g_raw_model_locs = {
             .wup = { .shard = 0, .offset = 2254081536ULL },
             .wdown = { .shard = 0, .offset = 2163904000ULL }
         },
-        // Camada 19
+        // Layer 19
         {
             .norm1 = { .shard = 0, .offset = 2318053888ULL },
             .norm2 = { .shard = 0, .offset = 2453324288ULL },
@@ -333,7 +333,7 @@ static const RawModelLocs g_raw_model_locs = {
             .wup = { .shard = 0, .offset = 2408235520ULL },
             .wdown = { .shard = 0, .offset = 2318057984ULL }
         },
-        // Camada 20
+        // Layer 20
         {
             .norm1 = { .shard = 0, .offset = 2626361856ULL },
             .norm2 = { .shard = 0, .offset = 2761632256ULL },
@@ -348,7 +348,7 @@ static const RawModelLocs g_raw_model_locs = {
             .wup = { .shard = 0, .offset = 2716543488ULL },
             .wdown = { .shard = 0, .offset = 2626365952ULL }
         },
-        // Camada 21
+        // Layer 21
         {
             .norm1 = { .shard = 0, .offset = 2780515840ULL },
             .norm2 = { .shard = 0, .offset = 2870697472ULL },
@@ -363,7 +363,7 @@ static const RawModelLocs g_raw_model_locs = {
             .wup = { .shard = 0, .offset = 2825608704ULL },
             .wdown = { .shard = 1, .offset = 19408ULL }
         },
-        // Camada 22
+        // Layer 22
         {
             .norm1 = { .shard = 1, .offset = 45108176ULL },
             .norm2 = { .shard = 1, .offset = 180378576ULL },
@@ -378,7 +378,7 @@ static const RawModelLocs g_raw_model_locs = {
             .wup = { .shard = 1, .offset = 135289808ULL },
             .wdown = { .shard = 1, .offset = 45112272ULL }
         },
-        // Camada 23
+        // Layer 23
         {
             .norm1 = { .shard = 1, .offset = 199262160ULL },
             .norm2 = { .shard = 1, .offset = 334532560ULL },
@@ -393,7 +393,7 @@ static const RawModelLocs g_raw_model_locs = {
             .wup = { .shard = 1, .offset = 289443792ULL },
             .wdown = { .shard = 1, .offset = 199266256ULL }
         },
-        // Camada 24
+        // Layer 24
         {
             .norm1 = { .shard = 1, .offset = 353416144ULL },
             .norm2 = { .shard = 1, .offset = 488686544ULL },
@@ -408,7 +408,7 @@ static const RawModelLocs g_raw_model_locs = {
             .wup = { .shard = 1, .offset = 443597776ULL },
             .wdown = { .shard = 1, .offset = 353420240ULL }
         },
-        // Camada 25
+        // Layer 25
         {
             .norm1 = { .shard = 1, .offset = 507570128ULL },
             .norm2 = { .shard = 1, .offset = 642840528ULL },
@@ -423,7 +423,7 @@ static const RawModelLocs g_raw_model_locs = {
             .wup = { .shard = 1, .offset = 597751760ULL },
             .wdown = { .shard = 1, .offset = 507574224ULL }
         },
-        // Camada 26
+        // Layer 26
         {
             .norm1 = { .shard = 1, .offset = 661724112ULL },
             .norm2 = { .shard = 1, .offset = 796994512ULL },
@@ -438,7 +438,7 @@ static const RawModelLocs g_raw_model_locs = {
             .wup = { .shard = 1, .offset = 751905744ULL },
             .wdown = { .shard = 1, .offset = 661728208ULL }
         },
-        // Camada 27
+        // Layer 27
         {
             .norm1 = { .shard = 1, .offset = 815878096ULL },
             .norm2 = { .shard = 1, .offset = 951148496ULL },
@@ -453,7 +453,7 @@ static const RawModelLocs g_raw_model_locs = {
             .wup = { .shard = 1, .offset = 906059728ULL },
             .wdown = { .shard = 1, .offset = 815882192ULL }
         },
-        // Camada 28
+        // Layer 28
         {
             .norm1 = { .shard = 1, .offset = 970032080ULL },
             .norm2 = { .shard = 1, .offset = 1105302480ULL },
@@ -468,7 +468,7 @@ static const RawModelLocs g_raw_model_locs = {
             .wup = { .shard = 1, .offset = 1060213712ULL },
             .wdown = { .shard = 1, .offset = 970036176ULL }
         },
-        // Camada 29
+        // Layer 29
         {
             .norm1 = { .shard = 1, .offset = 1124186064ULL },
             .norm2 = { .shard = 1, .offset = 1259456464ULL },
@@ -483,7 +483,7 @@ static const RawModelLocs g_raw_model_locs = {
             .wup = { .shard = 1, .offset = 1214367696ULL },
             .wdown = { .shard = 1, .offset = 1124190160ULL }
         },
-        // Camada 30
+        // Layer 30
         {
             .norm1 = { .shard = 1, .offset = 1278340048ULL },
             .norm2 = { .shard = 1, .offset = 1413610448ULL },
@@ -498,7 +498,7 @@ static const RawModelLocs g_raw_model_locs = {
             .wup = { .shard = 1, .offset = 1368521680ULL },
             .wdown = { .shard = 1, .offset = 1278344144ULL }
         },
-        // Camada 31
+        // Layer 31
         {
             .norm1 = { .shard = 1, .offset = 1432494032ULL },
             .norm2 = { .shard = 1, .offset = 1567764432ULL },
@@ -513,7 +513,7 @@ static const RawModelLocs g_raw_model_locs = {
             .wup = { .shard = 1, .offset = 1522675664ULL },
             .wdown = { .shard = 1, .offset = 1432498128ULL }
         },
-        // Camada 32
+        // Layer 32
         {
             .norm1 = { .shard = 1, .offset = 1586648016ULL },
             .norm2 = { .shard = 1, .offset = 1721918416ULL },
@@ -528,7 +528,7 @@ static const RawModelLocs g_raw_model_locs = {
             .wup = { .shard = 1, .offset = 1676829648ULL },
             .wdown = { .shard = 1, .offset = 1586652112ULL }
         },
-        // Camada 33
+        // Layer 33
         {
             .norm1 = { .shard = 1, .offset = 1740802000ULL },
             .norm2 = { .shard = 1, .offset = 1876072400ULL },
@@ -543,7 +543,7 @@ static const RawModelLocs g_raw_model_locs = {
             .wup = { .shard = 1, .offset = 1830983632ULL },
             .wdown = { .shard = 1, .offset = 1740806096ULL }
         },
-        // Camada 34
+        // Layer 34
         {
             .norm1 = { .shard = 1, .offset = 1894955984ULL },
             .norm2 = { .shard = 1, .offset = 2030226384ULL },
@@ -558,7 +558,7 @@ static const RawModelLocs g_raw_model_locs = {
             .wup = { .shard = 1, .offset = 1985137616ULL },
             .wdown = { .shard = 1, .offset = 1894960080ULL }
         },
-        // Camada 35
+        // Layer 35
         {
             .norm1 = { .shard = 1, .offset = 2049109968ULL },
             .norm2 = { .shard = 1, .offset = 2184380368ULL },

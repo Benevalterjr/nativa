@@ -4,6 +4,6 @@
 #include "qwen_offsets_1.5b_q4.h"
 
 int main() {
-    printf("Testando perfil de tempo...\n");
+    printf("Testing time profile...\n");
     return 0;
 }

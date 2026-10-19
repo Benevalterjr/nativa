@@ -1,16 +1,16 @@
 #!/usr/bin/env python3
 """
 tools/test_qwen_bitnet_generation.py
-Compara a geracao de texto do Qwen2.5-0.5B:
-1. Modelo Original (BF16 / FP32)
-2. Modelo Quantizado com BitNet b1.58 (AbsMean Scaling canônico da Linguagem Nativa)
+Compares text generation of Qwen2.5-0.5B:
+1. Original Model (BF16 / FP32)
+2. Quantized Model with BitNet b1.58 (Canonical AbsMean Scaling of the Nativa Language)
 """
 
 import os
 import sys
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-# Desabilitar jax quebrado no ambiente
+# Disable broken jax in the environment
 sys.modules['jax'] = None
 sys.modules['flax'] = None
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -21,7 +21,7 @@ from transformers import AutoTokenizer, AutoModelForCausalLM
 
 def quantize_tensor_bitnet(w: torch.Tensor):
     """
-    Algoritmo canônico BitNet b1.58 implementado no Nativa:
+    Canonical BitNet b1.58 algorithm implemented in Nativa:
     gamma = mean(|W|)
     W_scaled = clip(round(W / (gamma + eps)), -1, 1)
     W_dequant = W_scaled * gamma
@@ -39,7 +39,7 @@ def apply_bitnet_to_model(model, quantize_attn=True, quantize_mlp=True):
     
     for name, module in model.named_modules():
         if isinstance(module, nn.Linear):
-            # Nao quantizar lm_head para preservar distribuicao de vocabulario se desejado
+            # Do not quantize lm_head to preserve vocabulary distribution if desired
             if "lm_head" in name:
                 continue
             
@@ -54,56 +54,56 @@ def apply_bitnet_to_model(model, quantize_attn=True, quantize_mlp=True):
                     quantized_weights += module.weight.numel()
             total_weights += module.weight.numel()
             
-    print(f"[*] Parametros quantizados para BitNet b1.58: {quantized_weights:,} de {total_weights:,} ({quantized_weights*100.0/total_weights:.1f}%)")
+    print(f"[*] Parameters quantized to BitNet b1.58: {quantized_weights:,} of {total_weights:,} ({quantized_weights*100.0/total_weights:.1f}%)")
 
 def main():
     print("==========================================================================")
-    print("  TESTE DE GERACAO DE TEXTO REAL: QWEN2.5-0.5B COM BITNET b1.58")
+    print("  REAL TEXT GENERATION TEST: QWEN2.5-0.5B WITH BITNET b1.58")
     print("==========================================================================")
 
     model_id = "Qwen/Qwen2.5-0.5B"
-    print(f"[*] Carregando tokenizador e modelo oficial ({model_id})...")
+    print(f"[*] Loading tokenizer and official model ({model_id})...")
     
     t0 = time.time()
     tokenizer = AutoTokenizer.from_pretrained(model_id)
-    # Carregar modelo original em FP32
+    # Load original model in FP32
     model_orig = AutoModelForCausalLM.from_pretrained(
         model_id,
         torch_dtype=torch.float32
     )
-    print(f"[*] Modelo original carregado em {time.time() - t0:.2f}s!")
+    print(f"[*] Original model loaded in {time.time() - t0:.2f}s!")
 
-    prompt = "A inteligência artificial é"
+    prompt = "Artificial intelligence is"
     inputs = tokenizer(prompt, return_tensors="pt")
     input_ids = inputs["input_ids"]
 
-    print(f"\n[*] Prompt de teste: \"{prompt}\"")
-    print(f"[*] Tokens de entrada: {input_ids.tolist()[0]}")
+    print(f"\n[*] Test prompt: \"{prompt}\"")
+    print(f"[*] Input tokens: {input_ids.tolist()[0]}")
 
-    # 1. Geracao com Modelo Original FP32
-    print("\n--- [1] GERANDO COM QWEN ORIGINAL (FP32) ---")
+    # 1. Generation with Original FP32 Model
+    print("\n--- [1] GENERATING WITH ORIGINAL QWEN (FP32) ---")
     t_start_orig = time.time()
     with torch.no_grad():
         out_orig = model_orig.generate(
             input_ids,
             max_new_tokens=15,
-            do_sample=False,  # greedy para comparacao deterministica
+            do_sample=False,  # greedy for deterministic comparison
             pad_token_id=tokenizer.eos_token_id
         )
     t_orig = time.time() - t_start_orig
     tokens_orig = out_orig[0].tolist()
     text_orig = tokenizer.decode(tokens_orig)
-    print(f"Texto gerado (Original): \"{text_orig}\"")
-    print(f"Tempo de geracao: {t_orig:.2f}s ({15.0 / t_orig:.2f} tokens/s)")
+    print(f"Generated text (Original): \"{text_orig}\"")
+    print(f"Generation time: {t_orig:.2f}s ({15.0 / t_orig:.2f} tokens/s)")
 
-    # 2. Aplicar Quantizacao BitNet b1.58
-    print("\n--- [2] APLICANDO QUANTIZACAO BITNET b1.58 (NATIVA) ---")
+    # 2. Apply BitNet b1.58 Quantization
+    print("\n--- [2] APPLYING BITNET b1.58 QUANTIZATION (NATIVA) ---")
     t_q_start = time.time()
-    apply_bitnet_to_model(model_orig, quantize_attn=False, quantize_mlp=True) # Quantizar MLPs primeiro (70% dos pesos)
-    print(f"[*] Quantizacao BitNet concluida em {time.time() - t_q_start:.2f}s!")
+    apply_bitnet_to_model(model_orig, quantize_attn=False, quantize_mlp=True) # Quantize MLPs first (70% of weights)
+    print(f"[*] BitNet quantization completed in {time.time() - t_q_start:.2f}s!")
 
-    # 3. Geracao com BitNet nos MLPs
-    print("\n--- [3] GERANDO COM QWEN BITNET b1.58 (MLPs Ternarios) ---")
+    # 3. Generation with BitNet on MLPs
+    print("\n--- [3] GENERATING WITH QWEN BITNET b1.58 (Ternary MLPs) ---")
     t_start_bit = time.time()
     with torch.no_grad():
         out_bit = model_orig.generate(
@@ -115,11 +115,11 @@ def main():
     t_bit = time.time() - t_start_bit
     tokens_bit = out_bit[0].tolist()
     text_bit = tokenizer.decode(tokens_bit)
-    print(f"Texto gerado (BitNet MLP): \"{text_bit}\"")
-    print(f"Tempo de geracao: {t_bit:.2f}s ({15.0 / t_bit:.2f} tokens/s)")
+    print(f"Generated text (BitNet MLP): \"{text_bit}\"")
+    print(f"Generation time: {t_bit:.2f}s ({15.0 / t_bit:.2f} tokens/s)")
 
-    # 4. Agora quantizar tambem a Atencao (100% BitNet total)
-    print("\n--- [4] APLICANDO QUANTIZACAO BITNET 100% TOTAL (MLP + ATTENTION) ---")
+    # 4. Now also quantize Attention (100% total BitNet)
+    print("\n--- [4] APPLYING 100% TOTAL BITNET QUANTIZATION (MLP + ATTENTION) ---")
     apply_bitnet_to_model(model_orig, quantize_attn=True, quantize_mlp=True)
     with torch.no_grad():
         out_total = model_orig.generate(
@@ -129,13 +129,13 @@ def main():
             pad_token_id=tokenizer.eos_token_id
         )
     text_total = tokenizer.decode(out_total[0].tolist())
-    print(f"Texto gerado (100% BitNet Total): \"{text_total}\"")
+    print(f"Generated text (100% Total BitNet): \"{text_total}\"")
 
     print("\n==========================================================================")
-    print("  COMPARATIVO FINAL DE GERACAO")
+    print("  FINAL GENERATION COMPARISON")
     print("==========================================================================")
-    print(f"Prompt:            \"{prompt}\"")
-    print(f"Original FP32:     \"{text_orig}\"")
+    print(f"Prompt:              \"{prompt}\"")
+    print(f"Original FP32:       \"{text_orig}\"")
     print(f"BitNet (MLPs 1.58b): \"{text_bit}\"")
     print(f"BitNet (100% 1.58b): \"{text_total}\"")
     print("==========================================================================")

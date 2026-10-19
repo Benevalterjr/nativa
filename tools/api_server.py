@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-Nativa API Server - Servidor HTTP REST compatível com OpenAI, RAG e Branch.dev
-Executa o motor C nativo (nativa_engine) em background com latência mínima e zero GPU.
+Nativa API Server - OpenAI-, RAG-, and Branch.dev-compatible HTTP REST server.
+Runs the native C engine (nativa_engine) in the background with minimal latency and zero GPU.
 """
 
 import asyncio
@@ -18,25 +18,25 @@ import time
 from typing import Any, AsyncGenerator, Dict, List, Literal, Optional, Tuple
 import uuid
 
-# Constantes para evitar duplicação de literais (SonarQube compliance)
+# Constants to avoid literal duplication (SonarQube compliance)
 TAG_THINK = "<think>"
 TAG_THINK_END = "</think>"
 MARKER_TURN_DONE = "[TURN_DONE"
-MSG_ENGINE_NOT_READY = "Motor não inicializado."
+MSG_ENGINE_NOT_READY = "Engine not initialized."
 STATUS_503_RESPONSES = {503: {"description": MSG_ENGINE_NOT_READY}}
 PREFIX_ASSISTANT_THINK = "<|im_start|>assistant\n<think>\n"
 PREFIX_ASSISTANT_NO_THINK = "<|im_start|>assistant\n<think>\n</think>\n"
 DEFAULT_MODEL_NAME = "qwen3-0.6b-natq4"
-DEFAULT_CHAT_EXAMPLE_MSG = "Olá! Explique brevemente o que é o motor Nativa."
-DEFAULT_RAG_CONTEXT = "Nativa é uma linguagem e runtime C99 de alta eficiência para inferência de LLMs em CPU."
-DEFAULT_RAG_QUESTION = "O que é o Nativa?"
+DEFAULT_CHAT_EXAMPLE_MSG = "Hello! Briefly explain what the Nativa engine is."
+DEFAULT_RAG_CONTEXT = "Nativa is a high-efficiency C99 language and runtime for CPU LLM inference."
+DEFAULT_RAG_QUESTION = "What is Nativa?"
 EXAMPLE_API_URL = "https://example.com/api"
-CHOICE_RETRY_DESC = "Fazer nova tentativa de requisição"
-CHOICE_ABORT_DESC = "Encerrar e registrar falha definitiva"
-EXAMPLE_TASK_DECISION = "Qual ação deve ser tomada após 3 tentativas com falha 500?"
+CHOICE_RETRY_DESC = "Retry the request"
+CHOICE_ABORT_DESC = "Abort and log permanent failure"
+EXAMPLE_TASK_DECISION = "What action should be taken after 3 failed attempts with status 500?"
 OBJECT_CHAT_CHUNK = "chat.completion.chunk"
 
-# Adiciona a raiz do projeto ao sys.path para importar nativa
+# Add project root to sys.path to import nativa
 ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if ROOT_DIR not in sys.path:
     sys.path.insert(0, ROOT_DIR)
@@ -50,10 +50,10 @@ try:
     from fastapi.responses import StreamingResponse
     from pydantic import BaseModel, ConfigDict, Field
 except ImportError:
-    print("[ERRO] FastAPI e Uvicorn são necessários: pip install fastapi uvicorn pydantic")
+    print("[ERROR] FastAPI and Uvicorn are required: pip install fastapi uvicorn pydantic")
     sys.exit(1)
 
-# Caminhos e configurações padrão
+# Default paths and settings
 DEFAULT_MODEL_PATH = os.environ.get("MODEL_PATH", os.path.join(ROOT_DIR, "data", "qwen3_0.6b.natq4"))
 DEFAULT_TOKENIZER_PATH = os.environ.get(
     "TOKENIZER_PATH", os.path.join(ROOT_DIR, "data", "qwen3_0.6b.natq4.tokenizer.json")
@@ -64,12 +64,12 @@ DEFAULT_ENGINE_PATH = os.environ.get("ENGINE_PATH", os.path.join(ROOT_DIR, "tool
 
 
 def sanitize_chatml(text: str) -> str:
-    """Remove marcadores especiais ChatML de entradas externas para evitar prompt injection."""
+    """Remove special ChatML markers from external inputs to prevent prompt injection."""
     return text.replace("<|im_start|>", "").replace("<|im_end|>", "")
 
 
 def extract_thinking(text: str) -> Tuple[Optional[str], str]:
-    """Extrai conteúdo delimitado por <think>...</think> (mesmo se <think> vier no prefixo do prompt)."""
+    """Extract content delimited by <think>...</think> (even if <think> comes in the prompt prefix)."""
     if TAG_THINK_END in text:
         parts = text.split(TAG_THINK_END, 1)
         reasoning = parts[0].replace(TAG_THINK, "").strip()
@@ -79,7 +79,7 @@ def extract_thinking(text: str) -> Tuple[Optional[str], str]:
 
 
 def _compute_safe_len(buf: str, printed_idx: int) -> int:
-    """Calcula tamanho seguro para corte sem quebrar marcador de turn."""
+    """Compute a safe slice length without breaking the turn marker."""
     safe_len = len(buf)
     if "[" in buf[printed_idx:]:
         last_bracket = buf.rfind("[")
@@ -89,7 +89,7 @@ def _compute_safe_len(buf: str, printed_idx: int) -> int:
 
 
 def _extract_stream_chunk(buf: str, printed_idx: int) -> Tuple[Optional[str], int, bool]:
-    """Extrai o próximo fragmento seguro para streaming e indica se o turno finalizou."""
+    """Extract the next safe fragment for streaming and indicate whether the turn has finished."""
     td_pos = buf.find(MARKER_TURN_DONE)
     if td_pos != -1:
         chunk = buf[printed_idx:td_pos] if td_pos > printed_idx else None
@@ -109,7 +109,7 @@ def _format_sse_chunk(
     delta: Dict[str, Any],
     finish_reason: Optional[str] = None,
 ) -> str:
-    """Formata um chunk SSE compatível com a API OpenAI."""
+    """Format an SSE chunk compatible with the OpenAI API."""
     data = {
         "id": completion_id,
         "object": OBJECT_CHAT_CHUNK,
@@ -122,19 +122,19 @@ def _format_sse_chunk(
 
 
 def _select_winner(candidate: str, choices: Dict[str, str]) -> str:
-    """Seleciona a opção vencedora priorizando casamento exato de palavra do fim para o início."""
+    """Select the winning option prioritizing exact word match from end to start."""
     cleaned = candidate.strip()
     keys = list(choices.keys())
     if not keys:
         return ""
 
-    # 1. Casamento exato com a resposta inteira (ignorando pontuação/aspas nas bordas)
+    # 1. Exact match with the entire response (ignoring surrounding punctuation/quotes)
     normalized_full = cleaned.strip(" \t\n\r'\"`.,:;!()[]{}").lower()
     for k in keys:
         if k.lower() == normalized_full:
             return k
 
-    # 2. Busca por palavra exata (word boundary), priorizando a última ocorrência no texto
+    # 2. Exact word search (word boundary), prioritizing the last occurrence in the text
     best_key = None
     best_pos = -1
     for k in keys:
@@ -146,7 +146,7 @@ def _select_winner(candidate: str, choices: Dict[str, str]) -> str:
     if best_key is not None:
         return best_key
 
-    # 3. Fallback por substring (última ocorrência)
+    # 3. Substring fallback (last occurrence)
     for k in keys:
         pos = cleaned.lower().rfind(k.lower())
         if pos > best_pos:
@@ -157,7 +157,7 @@ def _select_winner(candidate: str, choices: Dict[str, str]) -> str:
 
 
 class EngineRunner:
-    """Gerenciador do subprocesso do motor C com lock para requisições concorrentes."""
+    """C engine subprocess manager with a lock for concurrent requests."""
 
     def __init__(self, model_path: str, tokenizer_path: str, engine_path: str):
         self.model_path = os.path.abspath(model_path)
@@ -174,14 +174,14 @@ class EngineRunner:
 
     def start(self):
         if not os.path.isfile(self.model_path):
-            raise FileNotFoundError(f"Arquivo do modelo não encontrado: {self.model_path}")
+            raise FileNotFoundError(f"Model file not found: {self.model_path}")
         if not os.path.isfile(self.tokenizer_path):
-            raise FileNotFoundError(f"Arquivo do tokenizer não encontrado: {self.tokenizer_path}")
+            raise FileNotFoundError(f"Tokenizer file not found: {self.tokenizer_path}")
         if not os.path.isfile(self.engine_path):
-            raise FileNotFoundError(f"Executável do motor C não encontrado: {self.engine_path}")
+            raise FileNotFoundError(f"C engine executable not found: {self.engine_path}")
 
         if self.tokenizer is None:
-            print(f"[*] Inicializando Tokenizer: {self.tokenizer_path}")
+            print(f"[*] Initializing Tokenizer: {self.tokenizer_path}")
             self.tokenizer = nativa.Tokenizer(self.tokenizer_path)
 
         if not self.vocab_path or not os.path.isfile(self.vocab_path):
@@ -193,7 +193,7 @@ class EngineRunner:
         env = os.environ.copy()
         env.setdefault("OMP_WAIT_POLICY", "PASSIVE")
 
-        print(f"[*] Subindo Nativa C Engine: {self.engine_path} com {self.model_path}...")
+        print(f"[*] Starting Nativa C Engine: {self.engine_path} with {self.model_path}...")
         self.proc = subprocess.Popen(
             [self.engine_path, self.model_path, "--chat", "--vocab", self.vocab_path],
             stdin=subprocess.PIPE,
@@ -210,9 +210,9 @@ class EngineRunner:
             line = self.proc.stdout.readline()
             if not line:
                 stderr = self.proc.stderr.read() if self.proc.stderr else ""
-                raise RuntimeError(f"Motor C encerrou prematuramente. Stderr: {stderr}")
+                raise RuntimeError(f"C engine terminated prematurely. Stderr: {stderr}")
             if "[NATIVA_CHAT_READY]" in line:
-                print(f"[OK] Nativa Engine pronto para inferência! Modelo: {self.model_name}")
+                print(f"[OK] Nativa Engine ready for inference! Model: {self.model_name}")
                 break
 
     def stop(self):
@@ -232,7 +232,7 @@ class EngineRunner:
             except OSError:
                 pass
             self.vocab_path = None
-        print("[*] Nativa Engine finalizado.")
+        print("[*] Nativa Engine stopped.")
 
     def _write_stdin(self, cmd: str) -> None:
         if not self.proc or not self.proc.stdin:
@@ -241,7 +241,7 @@ class EngineRunner:
         self.proc.stdin.flush()
 
     async def generate(self, prompt: str, max_tokens: int = 512) -> AsyncGenerator[str, None]:
-        """Gera tokens em streaming a partir do prompt sem perda do chunk final."""
+        """Stream generated tokens from the prompt without losing the final chunk."""
         async with self.lock:
             if not self.is_alive():
                 await asyncio.to_thread(self.start)
@@ -293,7 +293,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title="Nativa Qwen3-0.6B INT4 API",
-    description="API Serverless de altíssimo desempenho em C99 puro para RAG, Agentes e Branch.dev",
+    description="High-performance pure C99 Serverless API for RAG, Agents, and Branch.dev",
     version="1.0.0",
     lifespan=lifespan,
 )
@@ -308,18 +308,18 @@ app.add_middleware(
 
 
 # ----------------------------------------------------------------------------
-# DTOs (Modelos Pydantic)
+# DTOs (Pydantic Models)
 # ----------------------------------------------------------------------------
 class ChatMessage(BaseModel):
     role: Literal["system", "user", "assistant"] = Field(
         default="user",
-        description="Papel do autor da mensagem na conversa.",
+        description="Role of the message author in the conversation.",
         examples=["user"],
     )
     content: str = Field(
         default=DEFAULT_CHAT_EXAMPLE_MSG,
         min_length=1,
-        description="Conteúdo textual da mensagem.",
+        description="Text content of the message.",
         examples=[DEFAULT_CHAT_EXAMPLE_MSG],
     )
 
@@ -336,7 +336,7 @@ class ChatCompletionRequest(BaseModel):
     messages: List[ChatMessage] = Field(
         default_factory=lambda: [ChatMessage(role="user", content=DEFAULT_CHAT_EXAMPLE_MSG)],
         min_length=1,
-        description="Lista de mensagens da conversa no formato ChatML.",
+        description="List of conversation messages in ChatML format.",
         examples=[[{"role": "user", "content": DEFAULT_CHAT_EXAMPLE_MSG}]],
     )
     temperature: Optional[float] = Field(default=0.7, ge=0.0, le=2.0)
@@ -376,13 +376,13 @@ class RagRequest(BaseModel):
     context: str = Field(
         default=DEFAULT_RAG_CONTEXT,
         min_length=1,
-        description="Documentos recuperados para embasamento",
+        description="Retrieved documents for grounding",
         examples=[DEFAULT_RAG_CONTEXT],
     )
     question: str = Field(
         default=DEFAULT_RAG_QUESTION,
         min_length=1,
-        description="Pergunta do usuário",
+        description="User question",
         examples=[DEFAULT_RAG_QUESTION],
     )
     temperature: Optional[float] = Field(default=0.1, ge=0.0, le=2.0)
@@ -414,7 +414,7 @@ class RagRequest(BaseModel):
 class DecisionRequest(BaseModel):
     state: Any = Field(
         default={"url": EXAMPLE_API_URL, "status_code": 500, "retries": 3},
-        description="Objeto ou texto representando o estado atual",
+        description="Object or text representing the current state",
         examples=[{"url": EXAMPLE_API_URL, "status_code": 500, "retries": 3}],
     )
     choices: Dict[str, str] = Field(
@@ -423,7 +423,7 @@ class DecisionRequest(BaseModel):
             "abortar": CHOICE_ABORT_DESC,
         },
         min_length=1,
-        description="Dicionário de escolhas (chave -> descrição)",
+        description="Dictionary of choices (key -> description)",
         examples=[{
             "tentar_novamente": CHOICE_RETRY_DESC,
             "abortar": CHOICE_ABORT_DESC,
@@ -432,7 +432,7 @@ class DecisionRequest(BaseModel):
     task: str = Field(
         default=EXAMPLE_TASK_DECISION,
         min_length=1,
-        description="Descrição da tarefa ou pergunta de decisão",
+        description="Task description or decision question",
         examples=[EXAMPLE_TASK_DECISION],
     )
     temperature: Optional[float] = Field(default=0.0, ge=0.0, le=2.0)
@@ -467,7 +467,7 @@ class DecisionRequest(BaseModel):
 
 
 # ----------------------------------------------------------------------------
-# ROTAS
+# ROUTES
 # ----------------------------------------------------------------------------
 @app.get("/")
 def root():
@@ -475,7 +475,7 @@ def root():
         "service": "Nativa Qwen3-0.6B INT4 Engine API",
         "status": "online",
         "architecture": "C99 OpenMP Q4x4",
-        "model": runner.model_name if runner else "carregando",
+        "model": runner.model_name if runner else "loading",
         "docs": "/docs",
     }
 
@@ -524,7 +524,7 @@ async def _stream_chat_chunks(
 
 @app.post("/v1/chat/completions", responses=STATUS_503_RESPONSES)
 async def chat_completions(req: ChatCompletionRequest):
-    """Endpoint compatível com OpenAI Chat Completions API."""
+    """Endpoint compatible with the OpenAI Chat Completions API."""
     if not runner:
         raise HTTPException(status_code=503, detail=MSG_ENGINE_NOT_READY)
 
@@ -593,17 +593,17 @@ async def chat_completions(req: ChatCompletionRequest):
 
 @app.post("/v1/rag/answer", responses=STATUS_503_RESPONSES)
 async def rag_answer(req: RagRequest):
-    """Endpoint otimizado para RAG com resposta direta e fundamentada."""
+    """RAG-optimized endpoint returning a direct, grounded answer."""
     if not runner:
         raise HTTPException(status_code=503, detail=MSG_ENGINE_NOT_READY)
 
     system_prompt = (
-        "Com base no contexto fornecido, responda à pergunta do usuário de forma direta e precisa em português."
+        "Based on the provided context, answer the user's question directly and accurately."
     )
 
     safe_context = sanitize_chatml(req.context)
     safe_question = sanitize_chatml(req.question)
-    user_prompt = f"Contexto:\n{safe_context}\n\nPergunta:\n{safe_question}"
+    user_prompt = f"Context:\n{safe_context}\n\nQuestion:\n{safe_question}"
     assistant_prefix = (
         PREFIX_ASSISTANT_THINK if req.enable_thinking else PREFIX_ASSISTANT_NO_THINK
     )
@@ -630,7 +630,7 @@ async def rag_answer(req: RagRequest):
 
 @app.post("/v1/decide", responses=STATUS_503_RESPONSES)
 async def branch_decide(req: DecisionRequest):
-    """Endpoint direto para tomada de decisão probabilística do Branch.dev."""
+    """Direct endpoint for Branch.dev probabilistic decision-making."""
     if not runner:
         raise HTTPException(status_code=503, detail=MSG_ENGINE_NOT_READY)
 
@@ -642,16 +642,16 @@ async def branch_decide(req: DecisionRequest):
     )
 
     system_prompt = (
-        "Você é o árbitro de decisões lógicas do Branch.dev (Sistema 2). "
-        "Analise o estado e escolha a opção correta. "
-        "Termine indicando o nome exato da escolha vencedora."
+        "You are the logical decision arbiter for Branch.dev (System 2). "
+        "Analyze the state and choose the correct option. "
+        "Finish by stating the exact name of the winning choice."
     )
 
     user_prompt = (
-        f"Estado:\n{sanitize_chatml(state_str)}\n\n"
-        f"Escolhas:\n{sanitize_chatml(choices_text)}\n\n"
-        f"Tarefa:\n{sanitize_chatml(req.task)}\n\n"
-        f"Qual escolha executar?"
+        f"State:\n{sanitize_chatml(state_str)}\n\n"
+        f"Choices:\n{sanitize_chatml(choices_text)}\n\n"
+        f"Task:\n{sanitize_chatml(req.task)}\n\n"
+        f"Which choice should be executed?"
     )
 
     assistant_prefix = (
@@ -683,7 +683,7 @@ async def branch_decide(req: DecisionRequest):
 if __name__ == "__main__":
     import uvicorn
 
-    # Por padrão vincula a 127.0.0.1 em dev local; HOST=0.0.0.0 é injetado pelo Docker/Render
+    # Defaults to binding 127.0.0.1 in local dev; HOST=0.0.0.0 is injected by Docker/Render
     host = os.environ.get("HOST", "127.0.0.1")
     port = int(os.environ.get("PORT", 8000))
     uvicorn.run("tools.api_server:app", host=host, port=port, reload=False)

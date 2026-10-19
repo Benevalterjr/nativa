@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
 """
-tools/experimento_5_memoria_episodica_real.py — Experimento 5: Agulha no Palheiro Real
-Testa a recuperação literal de um fato sintético (código aleatório imprevisível)
-inserido em posição conhecida após distâncias D = 20, 40, 60 tokens de distratores do WikiText-2.
+tools/experimento_5_memoria_episodica_real.py — Experiment 5: Real Needle-in-a-Haystack
+Tests literal recall of a synthetic fact (unpredictable random code)
+inserted at known position after distances D = 20, 40, 60 tokens of WikiText-2 distractors.
 
-Separação estrita:
-- Vetor de gravação: inserção contextual do código imprevisível ("O código secreto de acesso é 84920 .")
-- Distratores: parágrafos reais do WikiText-2
-- Vetor de busca: pergunta formulada com tokens distintos ("Pergunta: Qual é o código secreto? Resposta: O código secreto é")
-- Alvo medido: probabilidade e top-1 de recuperação literal do código secreto.
+Strict separation:
+- Recording vector: contextual insertion of unpredictable code ("The secret access code is 84920 .")
+- Distractors: real WikiText-2 paragraphs
+- Query vector: question formulated with distinct tokens ("Question: What is the secret code? Answer: The secret code is")
+- Measured target: probability and top-1 literal recall of secret code.
 """
 
 import os
@@ -107,7 +107,7 @@ def run_needle_test(
 
 def main():
     print("=" * 85)
-    print("EXPERIMENTO 5: RECUPERAÇÃO LITERAL DE MEMÓRIA EPISÓDICA (NEEDLE-IN-A-HAYSTACK REAL)")
+    print("EXPERIMENT 5: LITERAL EPISODIC MEMORY RECALL (REAL NEEDLE-IN-A-HAYSTACK)")
     print("Agulha: Código imprevisível '84920' | Distratores: WikiText-2 | Consulta: Pergunta distinta")
     print("=" * 85)
 
@@ -124,14 +124,14 @@ def main():
     ]
 
     print("\n" + "=" * 90)
-    print(f"{'DISTÂNCIA':<10} | {'REGIME':<22} | {'P(CÓDIGO)':<12} | {'TOP-1 RECALL':<14} | {'PREVISÃO TOP-1':<18} | {'MEMÓRIA KV'}")
+    print(f"{'DISTANCE':<10} | {'REGIME':<22} | {'P(CODE)':<12} | {'TOP-1 RECALL':<14} | {'TOP-1 PREDICTION':<18} | {'KV MEMORY'}")
     print("=" * 90)
 
     for dist in distances:
         for reg, bits in regimes:
             tag = f"{reg}_{bits}b" if reg == "biogated_turboquant" else reg
             res = run_needle_test(model, tok, distance=dist, regime=reg, tq_bits=bits)
-            match_str = "SUCESSO" if res["is_top1"] else "FALHA"
+            match_str = "SUCCESS" if res["is_top1"] else "FAILURE"
             print(f"{dist:<10} | {tag:<22} | {res['prob_code']*100:<10.3f}% | {match_str:<14} | {res['top1_str']:<18} | {res['mem_kb']:<8.1f} KB")
         print("-" * 90)
 

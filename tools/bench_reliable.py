@@ -1,11 +1,11 @@
-"""bench_reliable.py - Benchmark confiavel do motor Qwen 1.5B INT4.
+"""bench_reliable.py - Reliable benchmark of the Qwen 1.5B INT4 engine.
 
-- Gera exatamente N tokens (greedy, ignora EOS) por execucao.
-- Repete R vezes por configuracao e reporta MEDIANA, minimo e maximo.
-- Verifica o BENCH_HASH: se mudar entre execucoes/versoes, a saida mudou.
+- Generates exactly N tokens (greedy, ignores EOS) per run.
+- Repeats R times per configuration and reports MEDIAN, minimum, and maximum.
+- Verifies BENCH_HASH: if it changes across runs/versions, the output changed.
 
-Uso: python tools/bench_reliable.py [N_TOKENS] [REPETICOES] [configs...]
-     configs no formato THREADS:POLICY, ex: 4:PASSIVE 4:ACTIVE
+Usage: python tools/bench_reliable.py [N_TOKENS] [REPETITIONS] [configs...]
+       configs in THREADS:POLICY format, e.g., 4:PASSIVE 4:ACTIVE
 """
 import os
 import re
@@ -38,7 +38,7 @@ def run_once(threads, policy):
         "hash": h.group(1) if h else "?",
     }
 
-print(f"Benchmark: {n_tokens} tokens x {reps} repeticoes por configuracao (greedy)\n")
+print(f"Benchmark: {n_tokens} tokens x {reps} repetitions per configuration (greedy)\n")
 summary = []
 for threads, policy in configs:
     runs = []
@@ -60,7 +60,7 @@ for threads, policy in configs:
     print()
 
 print("=" * 96)
-print(f"{'Threads/Policy':<16}| {'Mediana':>8} | {'Min':>6} | {'Max':>6} | {'ms/tok':>7} | "
+print(f"{'Threads/Policy':<16}| {'Median':>8} | {'Min':>6} | {'Max':>6} | {'ms/tok':>7} | "
       f"{'Attn':>6} | {'MLP':>6} | {'LM':>6} | Hash")
 print("-" * 96)
 for s in summary:
@@ -68,4 +68,4 @@ for s in summary:
           f"{s['attn']:>6.1f} | {s['mlp']:>6.1f} | {s['lm']:>6.1f} | {s['hash']}")
 print("=" * 96)
 all_hashes = {s["hash"] for s in summary}
-print("Saida identica em todas as execucoes: " + ("SIM" if len(all_hashes) == 1 and "," not in next(iter(all_hashes)) else "NAO"))
+print("Identical output across all runs: " + ("YES" if len(all_hashes) == 1 and "," not in next(iter(all_hashes)) else "NO"))

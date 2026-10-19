@@ -1,5 +1,5 @@
-// bench_bandwidth.c - Mede a largura de banda real de LEITURA da RAM
-// (o mesmo padrao do decode: varrer pesos uma vez, sequencialmente).
+// bench_bandwidth.c - Measures real RAM READ bandwidth
+// (the same pattern as decode: sweep weights once, sequentially).
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdint.h>
@@ -23,7 +23,7 @@ static int cmp_d(const void* a, const void* b) {
     return (x > y) - (x < y);
 }
 
-// Leitura pura: 4 acumuladores independentes, custo de CPU minimo
+// Pure reading: 4 independent accumulators, minimal CPU overhead
 static uint64_t read_pass(const __m128i* buf, size_t n_vec) {
     __m128i a0 = _mm_setzero_si128(), a1 = a0, a2 = a0, a3 = a0;
     long long i;
@@ -50,19 +50,19 @@ static uint64_t read_pass(const __m128i* buf, size_t n_vec) {
 int main(void) {
     size_t bytes = (size_t)BUF_MB * 1024 * 1024;
     __m128i* buf = (__m128i*)_aligned_malloc(bytes, 64);
-    if (!buf) { printf("Falha ao alocar %d MB\n", BUF_MB); return 1; }
-    memset(buf, 1, bytes);   // forca o commit das paginas
+    if (!buf) { printf("Failed to allocate %d MB\n", BUF_MB); return 1; }
+    memset(buf, 1, bytes);   // force commit of the pages
     size_t n_vec = bytes / 16;
 
-    printf("Buffer: %d MB | %d repeticoes por configuracao\n\n", BUF_MB, REPS);
-    printf("Threads |  Melhor (GB/s) | Mediana (GB/s) | Tempo p/ 828 MB (mediana)\n");
+    printf("Buffer: %d MB | %d repetitions per configuration\n\n", BUF_MB, REPS);
+    printf("Threads |   Best (GB/s)  | Median (GB/s)  | Time for 828 MB (median)\n");
     printf("--------+----------------+----------------+--------------------------\n");
 
     int cfgs[3] = {1, 2, 4};
     uint64_t sink = 0;
     for (int c = 0; c < 3; c++) {
         omp_set_num_threads(cfgs[c]);
-        sink ^= read_pass(buf, n_vec);  // aquecimento
+        sink ^= read_pass(buf, n_vec);  // warmup
         double gbs[REPS];
         for (int r = 0; r < REPS; r++) {
             double t0 = now_s();
@@ -73,7 +73,7 @@ int main(void) {
         qsort(gbs, REPS, sizeof(double), cmp_d);
         double best = gbs[REPS - 1], med = gbs[REPS / 2];
         double ms_828 = (828.31 * 1024 * 1024 / 1e9) / med * 1000.0;
-        printf("   %d    |     %6.2f     |     %6.2f     |   %6.1f ms  (teto %.1f tok/s)\n",
+        printf("   %d    |     %6.2f     |     %6.2f     |   %6.1f ms  (ceiling %.1f tok/s)\n",
                cfgs[c], best, med, ms_828, 1000.0 / ms_828);
     }
     printf("\n(sink=%llu)\n", (unsigned long long)sink);

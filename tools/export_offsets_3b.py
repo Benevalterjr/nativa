@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """tools/export_offsets_3b.py
-Extrai offsets brutos dos shards safetensors de Qwen2.5-3B-Instruct
-e gera as tabelas de offsets:
-  1. tools/qwen_offsets_3b_raw.h (para o quantizador C mapear os 2 shards)
-  2. tools/qwen_offsets_3b_q4.h  (para o motor de inferência C99 ler o modelo quantizado)
+Extracts raw offsets from Qwen2.5-3B-Instruct safetensors shards
+and generates offset tables:
+  1. tools/qwen_offsets_3b_raw.h (for the C quantizer to map the 2 shards)
+  2. tools/qwen_offsets_3b_q4.h  (for the C99 inference engine to read the quantized model)
 """
 
 import json
@@ -38,11 +38,11 @@ def read_safetensors_header(path):
 
 def main():
     print("=" * 70)
-    print("  EXPORTADOR DE OFFSETS QWEN2.5-3B-INSTRUCT")
+    print("  QWEN2.5-3B-INSTRUCT OFFSETS EXPORTER")
     print("=" * 70)
 
     if not os.path.exists(SHARD1_PATH) or not os.path.exists(SHARD2_PATH):
-        print("[ERRO] Arquivos de shard safetensors não encontrados em data/qwen3b/")
+        print("[ERROR] Safetensors shard files not found in data/qwen3b/")
         return 1
 
     dstart1, hdr1 = read_safetensors_header(SHARD1_PATH)
@@ -63,8 +63,8 @@ def main():
             off = dstart2 + hdr2[tensor_name]["data_offsets"][0]
         return shard_idx, off
 
-    # 1. Gerar qwen_offsets_3b_raw.h
-    print("[*] Gerando tools/qwen_offsets_3b_raw.h...")
+    # 1. Generate qwen_offsets_3b_raw.h
+    print("[*] Generating tools/qwen_offsets_3b_raw.h...")
     emb_shard, emb_off = get_raw_loc("model.embed_tokens.weight")
     norm_shard, norm_off = get_raw_loc("model.norm.weight")
 
@@ -89,7 +89,7 @@ def main():
         for field, tname in tensors:
             s_idx, s_off = get_raw_loc(tname)
             layer_fields.append(f"            .{field} = {{ .shard = {s_idx}, .offset = {s_off}ULL }}")
-        layer_block = f"        // Camada {l}\n        {{\n" + ",\n".join(layer_fields) + "\n        }"
+        layer_block = f"        // Layer {l}\n        {{\n" + ",\n".join(layer_fields) + "\n        }"
         raw_layers_code.append(layer_block)
 
     raw_layers_str = ",\n".join(raw_layers_code)
@@ -137,14 +137,14 @@ static const RawModelLocs g_raw_model_locs = {{
 """
     with open(RAW_HEADER, "w", encoding="utf-8") as f:
         f.write(raw_content)
-    print(f"[OK] {RAW_HEADER} gerado!")
+    print(f"[OK] {RAW_HEADER} generated!")
 
-    # 2. Calcular offsets determinísticos para o formato q4x4 final
+    # 2. Calculate deterministic offsets for final q4x4 format
     # Layout Q4x4:
     #   BlockQ4x4 = 8 bytes escalas BF16 + 64 bytes nibbles = 72 bytes por bloco de 32 colunas x 4 linhas.
-    #   Tamanho de matriz rows x cols: (rows / 4) * (cols / 32) * 72 = rows * (cols / 32) * 18 bytes.
-    #   Tamanho de vetor BF16: dim * 2 bytes.
-    print("[*] Calculando layout q4x4 determinístico...")
+    #   Matrix size rows x cols: (rows / 4) * (cols / 32) * 72 = rows * (cols / 32) * 18 bytes.
+    #   BF16 vector size: dim * 2 bytes.
+    print("[*] Calculating deterministic q4x4 layout...")
 
     def q4x4_bytes(rows, cols):
         return rows * (cols // 32) * 18
@@ -200,7 +200,7 @@ static const RawModelLocs g_raw_model_locs = {{
         lo_wdown = cur_offset
         cur_offset += q4x4_bytes(DIM, INTERMEDIATE_DIM)
 
-        layer_block = f"""        // Camada {l}
+        layer_block = f"""        // Layer {l}
         {{
             .norm1 = {lo_norm1}ULL,
             .norm2 = {lo_norm2}ULL,
@@ -218,7 +218,7 @@ static const RawModelLocs g_raw_model_locs = {{
         q4_layers_code.append(layer_block)
 
     total_q4_size = cur_offset
-    print(f"[*] Tamanho final calculado do binário Q4x4: {total_q4_size} bytes ({total_q4_size / (1024*1024):.2f} MB)")
+    print(f"[*] Calculated final Q4x4 binary size: {total_q4_size} bytes ({total_q4_size / (1024*1024):.2f} MB)")
 
     q4_layers_str = ",\n".join(q4_layers_code)
 
@@ -270,7 +270,7 @@ static const Qwen3bModelOffsets g_qwen3b_offsets = {{
 """
     with open(Q4_HEADER, "w", encoding="utf-8") as f:
         f.write(q4_content)
-    print(f"[OK] {Q4_HEADER} gerado!")
+    print(f"[OK] {Q4_HEADER} generated!")
     print("=" * 70)
     return 0
 

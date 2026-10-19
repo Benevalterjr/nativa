@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """tools/baixar_qwen_3b.py
-Baixa os shards oficiais do Qwen2.5-3B-Instruct do Hugging Face com suporte a retomada (HTTP Range).
+Downloads the official Qwen2.5-3B-Instruct shards from Hugging Face with resume support (HTTP Range).
 """
 
 import os
@@ -26,16 +26,16 @@ def download_file(url: str, dest_path: str, desc: str):
         total_size = int(resp.headers.get("Content-Length", 0))
 
     total_mb = total_size / (1024 * 1024)
-    print(f"\n[*] Arquivo: {desc} ({total_mb:.1f} MB)")
+    print(f"\n[*] File: {desc} ({total_mb:.1f} MB)")
 
     downloaded = 0
     if os.path.exists(dest_path):
         downloaded = os.path.getsize(dest_path)
         if downloaded == total_size:
-            print(f"[OK] {desc} ja esta completo em disco!")
+            print(f"[OK] {desc} is already complete on disk!")
             return True
         elif downloaded < total_size:
-            print(f"[*] Retomando a partir de {downloaded / (1024*1024):.1f} MB...")
+            print(f"[*] Resuming from {downloaded / (1024*1024):.1f} MB...")
         else:
             downloaded = 0
 
@@ -73,19 +73,19 @@ def download_file(url: str, dest_path: str, desc: str):
                 t_last = now
                 bytes_since_last = 0
 
-    print(f"[OK] {desc} concluido!")
+    print(f"[OK] {desc} completed!")
     return True
 
 
 def main():
     print("=" * 70)
-    print("  DOWNLOAD DO QWEN 2.5 (3B INSTRUCT) SAFETENSORS")
+    print("  DOWNLOADING QWEN 2.5 (3B INSTRUCT) SAFETENSORS")
     print("=" * 70)
     for filename, local_path in FILES:
         url = f"{REPO_BASE}/{filename}"
         download_file(url, local_path, filename)
     print("\n" + "=" * 70)
-    print("  TODOS OS ARQUIVOS DO QWEN 2.5 3B FORAM BAIXADOS COM SUCESSO!")
+    print("  ALL QWEN 2.5 3B FILES DOWNLOADED SUCCESSFULLY!")
     print("=" * 70)
 
 

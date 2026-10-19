@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
-"""Teste Empírico da Arquitetura Híbrida Córtex Bio-Gated + Hipocampo em 2 bits no WikiText-2.
+"""Empirical Test of the Bio-Gated Cortex + 2-bit Hippocampus Hybrid Architecture on WikiText-2.
 
-Mecanismos avaliados:
-1. Modulação Neuroquímica Vetorial (Dopamina VTA + Inibição GABAérgica por Interneurônios)
-2. Memória Recorrente Cortical O(1) em Dupla Escala Temporal (AMPA rápida + NMDA lenta)
-3. Gating Hipocampal Seletivo (Apenas estímulos com DA > 0.72 são gravados no Hipocampo)
-4. Compressão Episódica TurboQuant em 2 bits com Posicionamento Rotacional RoPE
-5. Recuperação Associativa Needle-in-a-Haystack via TurboDot vs Memória Cortical O(1)
-6. Auditoria de Consumo de Memória (KV-Cache Clássico vs Híbrido Bio-Gated na Nativa)
+Evaluated mechanisms:
+1. Vectorial Neurochemical Modulation (VTA Dopamine + Interneuron GABAergic Inhibition)
+2. Dual-Timescale O(1) Cortical Recurrent Memory (Fast AMPA + Slow NMDA)
+3. Selective Hippocampal Gating (Only stimuli with DA > 0.72 are recorded in the Hippocampus)
+4. 2-bit TurboQuant Episodic Compression with RoPE Rotational Positioning
+5. Associative Needle-in-a-Haystack Retrieval via TurboDot vs O(1) Cortical Memory
+6. Memory Footprint Audit (Classic KV-Cache vs Bio-Gated Hybrid in Nativa)
 """
 
 import math
@@ -17,7 +17,7 @@ import time
 from collections import defaultdict
 import numpy as np
 
-# Inclusão do path do Nativa
+# Add Nativa path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import nativa
 
@@ -39,9 +39,9 @@ def load_wikitext_tokens(max_tokens=500):
     tokenizer_file = os.path.join("data", "tokenizer_qwen.json")
 
     if not os.path.exists(corpus_file):
-        raise FileNotFoundError(f"Arquivo não encontrado: {corpus_file}")
+        raise FileNotFoundError(f"File not found: {corpus_file}")
     if not os.path.exists(tokenizer_file):
-        raise FileNotFoundError(f"Arquivo não encontrado: {tokenizer_file}")
+        raise FileNotFoundError(f"File not found: {tokenizer_file}")
 
     tok = nativa.Tokenizer(tokenizer_file)
 
@@ -97,32 +97,32 @@ def inibicao_lateral_wta(excitacao, dopamina_vec, gaba_vec):
 
 def run_wikitext_biogated_benchmark():
     print("=" * 80)
-    print("BENCHMARK CÓRTEX BIO-GATED + HIPOCAMPO TURBOQUANT 2-BIT NO WIKITEXT-2")
-    print("Avaliação de Sparsidade Neuroquímica, Recall Associativo e Consumo de Memória")
+    print("BIO-GATED CORTEX + 2-BIT TURBOQUANT HIPPOCAMPUS BENCHMARK ON WIKITEXT-2")
+    print("Evaluation of Neurochemical Sparsity, Associative Recall, and Memory Footprint")
     print("=" * 80)
 
-    # 1. Carregamento dos dados
+    # 1. Load data
     max_tokens = 500
     token_ids, token_texts, tokenizer = load_wikitext_tokens(max_tokens)
-    print(f"\n[1] Corpus Carregado: WikiText-2 (split de teste)")
-    print(f"    - Sequência avaliada: {len(token_ids)} tokens")
-    print(f"    - Trecho inicial: \"{''.join(token_texts[:18]).strip()}\"")
+    print(f"\n[1] Corpus Loaded: WikiText-2 (test split)")
+    print(f"    - Evaluated sequence: {len(token_ids)} tokens")
+    print(f"    - Opening excerpt: \"{''.join(token_texts[:18]).strip()}\"")
 
-    # 2. Configuração da Arquitetura
+    # 2. Architecture Configuration
     d_model = 64
     d_ffn = 128
     limiar_da_hipocampo = 0.72
     eps = 1e-6
     escala_dim = 1.0 / math.sqrt(d_model)
 
-    print(f"\n[2] Parâmetros da Arquitetura:")
-    print(f"    - Dimensão Cortical (d_model):       {d_model} neurônios")
-    print(f"    - Dimensão Dendrítica (d_ffn):       {d_ffn} neurônios")
-    print(f"    - Limiar Dopaminérgico Hipocampal:   DA > {limiar_da_hipocampo:.2f}")
-    print(f"    - Quantização Episódica Hipocampal:  TurboQuant 2 bits/coordenada")
-    print(f"    - Sinapses Corticais:                Ternárias 1.58-bit {{-1, 0, +1}}")
+    print(f"\n[2] Architecture Parameters:")
+    print(f"    - Cortical Dimension (d_model):       {d_model} neurons")
+    print(f"    - Dendritic Dimension (d_ffn):        {d_ffn} neurons")
+    print(f"    - Hippocampal Dopaminergic Threshold: DA > {limiar_da_hipocampo:.2f}")
+    print(f"    - Hippocampal Episodic Quantization:  TurboQuant 2 bits/coordinate")
+    print(f"    - Cortical Synapses:                  1.58-bit Ternary {{-1, 0, +1}}")
 
-    # 3. Pesos Sinápticos Ternários (1.58 bits)
+    # 3. Ternary Synaptic Weights (1.58 bits)
     rng_tern = np.random.RandomState(1337)
 
     def gen_ternary(rows, cols):
@@ -143,7 +143,7 @@ def run_wikitext_biogated_benchmark():
 
     gamma_norm = np.ones(d_model, dtype=np.float32)
 
-    # 4. Tabela de Embeddings e Frequência para modelar Saliência da Informação
+    # 4. Embedding Table and Frequency to model Information Salience
     stopwords = {
         " the", " of", " and", " to", " in", " is", " a", " for", " on", " as", " with",
         " he", " was", " at", " by", " which", " from", " his", " it", " that", " an",
@@ -151,29 +151,29 @@ def run_wikitext_biogated_benchmark():
         "the", "of", "and", "to", "in", "is", "a", "for", "on", "as", "with", "he", "was"
     }
 
-    # Gera embeddings com variância Gaussiana unitária
+    # Generate embeddings with unit Gaussian variance
     emb_table = {}
     rng_emb = np.random.RandomState(42)
     for tid in set(token_ids):
         emb_table[tid] = rng_emb.randn(d_model).astype(np.float32)
 
-    # Estado Cortical Inicial O(1)
+    # Initial Cortical State O(1)
     mem_ampa = np.zeros(d_model, dtype=np.float32)
     mem_nmda = np.zeros(d_model, dtype=np.float32)
 
-    # Banco Hipocampal Episódico (Engramas em 2 bits)
+    # Episodic Hippocampal Bank (2-bit Engrams)
     hipocampo_engramas = []
 
-    # Registro de Telemetria
+    # Telemetry Log
     stats_da = []
     stats_gaba = []
     cat_da = defaultdict(list)
     cat_gaba = defaultdict(list)
 
-    # Seleção de "Agulhas no Palheiro" Fatuais para teste de recall associativo
+    # Selection of Factual "Needles in a Haystack" for associative recall testing
     needles_info = [
         {"nome": "Robert Boulter", "alvo": "Robert", "pos": 0},
-        {"nome": "Herons (peça)", "alvo": "Herons", "pos": None},
+        {"nome": "Herons (play)", "alvo": "Herons", "pos": None},
         {"nome": "Simon Stephens", "alvo": "Simon", "pos": None},
         {"nome": "Mercury Fur", "alvo": "Mercury", "pos": None},
         {"nome": "Derek Jacobi", "alvo": "Jacobi", "pos": None},
@@ -185,13 +185,13 @@ def run_wikitext_biogated_benchmark():
                 needle["pos"] = idx
                 break
 
-    print(f"\n[3] 'Agulhas no Palheiro' Fatuais Monitoradas no Texto:")
+    print(f"\n[3] Factual 'Needles in a Haystack' Monitored in Text:")
     for n in needles_info:
         if n["pos"] is not None:
             print(f"    - [{n['nome']}]: Token #{n['pos']} ('{token_texts[n['pos']].strip()}')")
 
-    # 5. Execução do Fluxo Contínuo de Tokens
-    print(f"\n[4] Executando Inferência Token a Token sobre {len(token_ids)} tokens do WikiText-2...")
+    # 5. Continuous Token Stream Execution
+    print(f"\n[4] Running Token-by-Token Inference over {len(token_ids)} WikiText-2 tokens...")
     t_inicio = time.perf_counter()
 
     amostras_logs = []
@@ -200,32 +200,32 @@ def run_wikitext_biogated_benchmark():
         pos = t_idx + 1
         x_base = emb_table[tid].copy()
 
-        # Classificação de Categoria Semântica
+        # Semantic Category Classification
         is_stop = text.lower() in stopwords or text.strip() in stopwords or len(text.strip()) <= 1
         is_needle = any(n["pos"] == t_idx for n in needles_info)
         is_num = any(c.isdigit() for c in text)
 
         if is_needle:
-            cat = "FATO_AGULHA"
-            fator_escala = 2.40  # Alta novidade / saliência semântica
+            cat = "FACT_NEEDLE"
+            fator_escala = 2.40  # High novelty / semantic salience
         elif is_num:
-            cat = "NUMERAL_DATA"
-            fator_escala = 1.85  # Dados cronológicos / numéricos específicos
+            cat = "NUMERAL_DATE"
+            fator_escala = 1.85  # Specific chronological / numerical data
         elif not is_stop and len(text.strip()) > 3:
-            cat = "SUBSTANTIVO_RARO"
-            fator_escala = 1.05  # Conteúdo léxico intermediário
+            cat = "RARE_NOUN"
+            fator_escala = 1.05  # Intermediate lexical content
         else:
-            cat = "STOPWORD_SINTAXE"
-            fator_escala = 0.22  # Alta previsibilidade sintática: ruído basal
+            cat = "STOPWORD_SYNTAX"
+            fator_escala = 0.22  # High syntactic predictability: baseline noise
 
         x_t = x_base * fator_escala
         x_norm = nativa.rmsnorm_fn(x_t, gamma_norm, eps)
 
-        # 1. Modulação Dopaminérgica Vetorial (VTA + Erro de Predição RPE)
+        # 1. Vectorial Dopaminergic Modulation (VTA + RPE Prediction Error)
         da_vec = modular_dopamina(x_t, x_norm, mem_ampa, mem_nmda, W_da, W_rpe, gamma_norm, eps)
         da_scalar = float(np.mean(da_vec))
 
-        # 2. Modulação GABAérgica Vetorial (Interneurônios PV/SST)
+        # 2. Vectorial GABAergic Modulation (PV/SST Interneurons)
         gaba_vec = modular_gaba(x_norm, mem_nmda, da_vec, W_gaba, U_gaba, gamma_norm, eps)
         gaba_scalar = float(np.mean(gaba_vec))
 
@@ -234,11 +234,11 @@ def run_wikitext_biogated_benchmark():
         cat_da[cat].append(da_scalar)
         cat_gaba[cat].append(gaba_scalar)
 
-        # 3. Inibição Lateral Cortical (WTA)
+        # 3. Cortical Lateral Inhibition (WTA)
         excit_vec = (W_exc.data @ x_norm) * escala_dim
         foco_vec = inibicao_lateral_wta(excit_vec, da_vec, gaba_vec)
 
-        # 4. Atualização Sináptica Cortical O(1) (AMPA rápida e NMDA lenta)
+        # 4. O(1) Cortical Synaptic Update (Fast AMPA and Slow NMDA)
         retencao_ampa = 1.0 - (gaba_vec * 0.35)
         escrita_ampa = da_vec * 0.95
         mem_ampa = (retencao_ampa * mem_ampa) + (escrita_ampa * foco_vec)
@@ -247,7 +247,7 @@ def run_wikitext_biogated_benchmark():
         retencao_nmda = 1.0 - (gaba_vec * 0.06)
         mem_nmda = (retencao_nmda * mem_nmda) + (portao_mg * foco_vec)
 
-        # 5. Gating Hipocampal Seletivo
+        # 5. Selective Hippocampal Gating
         gravou_hipocampo = False
         if da_scalar > limiar_da_hipocampo:
             k_rot = nativa.apply_rope_fn(x_norm, pos)
@@ -268,7 +268,7 @@ def run_wikitext_biogated_benchmark():
             })
             gravou_hipocampo = True
 
-        # Amostras para exibição representativa
+        # Samples for representative display
         if t_idx < 15 or is_needle or (t_idx % 80 == 0):
             amostras_logs.append({
                 "t": t_idx,
@@ -276,27 +276,27 @@ def run_wikitext_biogated_benchmark():
                 "cat": cat,
                 "da": da_scalar,
                 "gaba": gaba_scalar,
-                "hipo": "GRAVADO (2-bit)" if gravou_hipocampo else "IGNORADO (GABA)"
+                "hipo": "RECORDED (2-bit)" if gravou_hipocampo else "IGNORED (GABA)"
             })
 
     t_total = time.perf_counter() - t_inicio
 
-    # 6. Exibição da Tabela de Amostras
-    print("\n[Amostra de Rastreamento Neuroquímico por Token]:")
-    print(f"{'Idx':>5} | {'Token':<18} | {'Categoria':<18} | {'DA':>6} | {'GABA':>6} | {'Ação Hipocampal'}")
+    # 6. Display Sample Table
+    print("\n[Per-Token Neurochemical Tracking Sample]:")
+    print(f"{'Idx':>5} | {'Token':<18} | {'Category':<18} | {'DA':>6} | {'GABA':>6} | {'Hippocampal Action'}")
     print("-" * 78)
     for row in amostras_logs[:18]:
         print(f"{row['t']:5d} | {row['text']:<18} | {row['cat']:<18} | {row['da']:6.3f} | {row['gaba']:6.3f} | {row['hipo']}")
 
-    # 7. Estatísticas Neuroquímicas Globais
+    # 7. Global Neurochemical Statistics
     print("\n" + "=" * 80)
-    print("ESTATÍSTICAS NEUROQUÍMICAS POR CATEGORIA DE TOKEN NO WIKITEXT-2")
+    print("NEUROCHEMICAL STATISTICS BY TOKEN CATEGORY ON WIKITEXT-2")
     print("=" * 80)
-    print(f"{'Categoria':<20} | {'Contagem':>9} | {'% Total':>8} | {'Média DA':>10} | {'Média GABA':>10} | {'Taxa Gravada'}")
+    print(f"{'Category':<20} | {'Count':>9} | {'% Total':>8} | {'Mean DA':>10} | {'Mean GABA':>10} | {'Recorded Rate'}")
     print("-" * 76)
 
     total_tokens = len(token_ids)
-    for cat in ["STOPWORD_SINTAXE", "SUBSTANTIVO_RARO", "NUMERAL_DATA", "FATO_AGULHA"]:
+    for cat in ["STOPWORD_SYNTAX", "RARE_NOUN", "NUMERAL_DATE", "FACT_NEEDLE"]:
         cnt = len(cat_da[cat])
         if cnt == 0:
             continue
@@ -310,12 +310,12 @@ def run_wikitext_biogated_benchmark():
     total_engramas = len(hipocampo_engramas)
     taxa_filtragem_gaba = ((total_tokens - total_engramas) / total_tokens) * 100.0
     print("-" * 76)
-    print(f"TOTAL: {total_tokens} tokens processados | {total_engramas} engramas gravados | {taxa_filtragem_gaba:.1f}% FILTRADOS PELO GABA!")
+    print(f"TOTAL: {total_tokens} tokens processed | {total_engramas} engrams recorded | {taxa_filtragem_gaba:.1f}% FILTERED BY GABA!")
 
-    # 8. Teste de Recall Associativo Needle-in-a-Haystack
+    # 8. Needle-in-a-Haystack Associative Recall Test
     print("\n" + "=" * 80)
-    print("TESTE NEEDLE-IN-A-HAYSTACK: RECALL ASSOCIATIVO EM 2 BITS NO WIKITEXT-2")
-    print("Recuperação do Engrama Factual Específico em meio a Centenas de Distratores")
+    print("NEEDLE-IN-A-HAYSTACK TEST: 2-BIT ASSOCIATIVE RECALL ON WIKITEXT-2")
+    print("Retrieval of Specific Factual Engram Amidst Hundreds of Distractors")
     print("=" * 80)
 
     for n in needles_info:
@@ -324,14 +324,14 @@ def run_wikitext_biogated_benchmark():
 
         target_engram = next((e for e in hipocampo_engramas if e["token_idx"] == n["pos"]), None)
         if target_engram is None:
-            print(f"[-] Agulha '{n['nome']}' não foi gravada no Hipocampo (DA abaixo do limiar).")
+            print(f"[-] Needle '{n['nome']}' was not recorded in the Hippocampus (DA below threshold).")
             continue
 
-        # Formula query associativa com RoPE correspondente à posição original
+        # Formulate associative query with RoPE corresponding to original position
         orig_k = target_engram["orig_k"]
         query_vec = orig_k.copy()
 
-        # Executa TurboDot contra TODOS os engramas comprimidos no Hipocampo
+        # Execute TurboDot against ALL compressed engrams in the Hippocampus
         scores = []
         for e in hipocampo_engramas:
             s = nativa.turbo_dot_fn(query_vec, e["k_2bit"])
@@ -343,30 +343,30 @@ def run_wikitext_biogated_benchmark():
         segundo_score = scores[1][0] if len(scores) > 1 else 0.0
 
         is_correto = (vencedor["token_idx"] == target_engram["token_idx"])
-        status_match = "CORRETO (TOP-1 MATCH)" if is_correto else "FALHA"
+        status_match = "CORRECT (TOP-1 MATCH)" if is_correto else "FAILURE"
 
-        # Reconstrói vetor em 2 bits via TurboDequant para checar fidelidade direcional
+        # Reconstruct 2-bit vector via TurboDequant to check directional fidelity
         v_rec = np.array(nativa.turbo_dequant_fn(target_engram["v_2bit"]), dtype=np.float32)
         v_orig = target_engram["orig_v"]
         cos_sim = float(np.dot(v_orig, v_rec) / (np.linalg.norm(v_orig) * np.linalg.norm(v_rec)))
 
-        # Comparação com o Estado Cortical NMDA O(1)
+        # Comparison with O(1) NMDA Cortical State
         sim_nmda = float(np.dot(v_orig, mem_nmda) / (np.linalg.norm(v_orig) * np.linalg.norm(mem_nmda)))
 
         distancia_tokens = total_tokens - target_engram["token_idx"]
 
-        print(f"\nAgulha: '{n['nome']}' (Token #{target_engram['token_idx']} '{target_engram['text']}')")
-        print(f"  - Distância temporal:              {distancia_tokens} tokens atrás no fluxo")
-        print(f"  - Candidatos no Hipocampo:         {len(hipocampo_engramas)} engramas de 2 bits")
-        print(f"  - Pontuação TurboDot Vencedor:     {vencedor_score:.4f} (Segundo colocado: {segundo_score:.4f})")
-        print(f"  - Margem Associativa (Gap):        +{vencedor_score - segundo_score:.4f}")
-        print(f"  - Resultado da Busca:              {status_match}")
-        print(f"  - Fidelidade de Cópia (2 bits):    {cos_sim * 100.0:.2f}% (Similaridade Cosseno)")
-        print(f"  - Retenção no Córtex NMDA O(1):    {sim_nmda * 100.0:.2f}% (Misturado com contexto global)")
+        print(f"\nNeedle: '{n['nome']}' (Token #{target_engram['token_idx']} '{target_engram['text']}')")
+        print(f"  - Temporal distance:               {distancia_tokens} tokens back in the stream")
+        print(f"  - Hippocampal candidates:          {len(hipocampo_engramas)} 2-bit engrams")
+        print(f"  - Winning TurboDot score:          {vencedor_score:.4f} (Runner-up: {segundo_score:.4f})")
+        print(f"  - Associative Margin (Gap):        +{vencedor_score - segundo_score:.4f}")
+        print(f"  - Search Result:                   {status_match}")
+        print(f"  - 2-bit Copy Fidelity:             {cos_sim * 100.0:.2f}% (Cosine Similarity)")
+        print(f"  - Retention in O(1) NMDA Cortex:   {sim_nmda * 100.0:.2f}% (Mixed with global context)")
 
-    # 9. Auditoria Detalhada de Memória
+    # 9. Detailed Memory Audit
     print("\n" + "=" * 80)
-    print("COMPARATIVO DE CONSUMO DE MEMÓRIA (WIKITEXT-2: 500 TOKENS)")
+    print("MEMORY CONSUMPTION COMPARISON (WIKITEXT-2: 500 TOKENS)")
     print("=" * 80)
 
     bytes_per_float32 = 4
@@ -375,32 +375,32 @@ def run_wikitext_biogated_benchmark():
     mem_tf_fp16 = total_tokens * 2 * d_model * bytes_per_float16
 
     mem_cortex = 2 * d_model * bytes_per_float32
-    bytes_per_2bit_vec = (d_model * 2) // 8  # 64 * 2 / 8 = 16 bytes por vetor
+    bytes_per_2bit_vec = (d_model * 2) // 8  # 64 * 2 / 8 = 16 bytes per vector
     bytes_per_engram = 2 * bytes_per_2bit_vec + 8  # K(16B) + V(16B) + metadata(8B) = 40 Bytes
     mem_hibrido = mem_cortex + (total_engramas * bytes_per_engram)
 
     economia_fp32 = mem_tf_fp32 / mem_hibrido
     economia_fp16 = mem_tf_fp16 / mem_hibrido
 
-    print(f"1. Transformer Softmax (KV-Cache FP32):      {mem_tf_fp32:8d} Bytes ({mem_tf_fp32 / 1024:.2f} KB)")
-    print(f"2. Transformer Softmax (KV-Cache FP16):      {mem_tf_fp16:8d} Bytes ({mem_tf_fp16 / 1024:.2f} KB)")
-    print(f"3. Córtex Puro O(1) (AMPA + NMDA fixos):     {mem_cortex:8d} Bytes ({mem_cortex / 1024:.2f} KB)")
-    print(f"4. Híbrido Córtex + Hipocampo (2-bit):       {mem_hibrido:8d} Bytes ({mem_hibrido / 1024:.2f} KB)")
-    print(f"   -> Redução de Memória vs Transformer FP32: {economia_fp32:.1f}x MENOS MEMÓRIA")
-    print(f"   -> Redução de Memória vs Transformer FP16: {economia_fp16:.1f}x MENOS MEMÓRIA")
+    print(f"1. Softmax Transformer (FP32 KV-Cache):      {mem_tf_fp32:8d} Bytes ({mem_tf_fp32 / 1024:.2f} KB)")
+    print(f"2. Softmax Transformer (FP16 KV-Cache):      {mem_tf_fp16:8d} Bytes ({mem_tf_fp16 / 1024:.2f} KB)")
+    print(f"3. Pure O(1) Cortex (Fixed AMPA + NMDA):     {mem_cortex:8d} Bytes ({mem_cortex / 1024:.2f} KB)")
+    print(f"4. Hybrid Cortex + Hippocampus (2-bit):      {mem_hibrido:8d} Bytes ({mem_hibrido / 1024:.2f} KB)")
+    print(f"   -> Memory Reduction vs FP32 Transformer:  {economia_fp32:.1f}x LESS MEMORY")
+    print(f"   -> Memory Reduction vs FP16 Transformer:  {economia_fp16:.1f}x LESS MEMORY")
 
     n_128k = 131072
     tf_128k_mb = (n_128k * 2 * d_model * bytes_per_float32) / (1024 * 1024)
     engramas_128k = int(n_128k * (total_engramas / total_tokens))
     hibrido_128k_kb = (mem_cortex + (engramas_128k * bytes_per_engram)) / 1024
 
-    print(f"\n[Projeção em Contexto Longo de 131.072 tokens]:")
-    print(f"   - Transformer Padrão (KV-Cache FP32):     {tf_128k_mb:.2f} MB ({tf_128k_mb / 1024:.2f} GB)")
-    print(f"   - Híbrido Córtex + Hipocampo (Nativa):    {hibrido_128k_kb:.2f} KB")
-    print(f"   - Fator de Economia em Long-Context:      {(tf_128k_mb * 1024) / hibrido_128k_kb:.1f}x MENOS MEMÓRIA")
+    print(f"\n[Projection for Long Context of 131,072 tokens]:")
+    print(f"   - Standard Transformer (FP32 KV-Cache):   {tf_128k_mb:.2f} MB ({tf_128k_mb / 1024:.2f} GB)")
+    print(f"   - Hybrid Cortex + Hippocampus (Nativa):   {hibrido_128k_kb:.2f} KB")
+    print(f"   - Long-Context Savings Factor:            {(tf_128k_mb * 1024) / hibrido_128k_kb:.1f}x LESS MEMORY")
 
     print("\n" + "=" * 80)
-    print(f"Tempo de Execução ({total_tokens} tokens): {t_total * 1000.0:.2f} ms ({total_tokens / t_total:.1f} tokens/s)")
+    print(f"Execution Time ({total_tokens} tokens): {t_total * 1000.0:.2f} ms ({total_tokens / t_total:.1f} tokens/s)")
     print("=" * 80)
 
 

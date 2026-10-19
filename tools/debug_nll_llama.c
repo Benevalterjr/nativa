@@ -40,7 +40,7 @@ int main(int argc, char** argv) {
     GetFullPathNameA("tools/llama_cpp/llama.dll", MAX_PATH, abs_dll, NULL);
     HMODULE hDll = LoadLibraryA(abs_dll);
     if (!hDll) {
-        fprintf(stderr, "Erro ao carregar tools/llama_cpp/llama.dll (err=%lu)\n", GetLastError());
+        fprintf(stderr, "Error loading tools/llama_cpp/llama.dll (err=%lu)\n", GetLastError());
         return 1;
     }
 
@@ -81,7 +81,7 @@ int main(int argc, char** argv) {
     typedef void* (*fn_load)(const char*, char*);
     void* model = ((fn_load)llama_model_load_from_file)(model_path, mparams);
     if (!model) {
-        fprintf(stderr, "Erro ao carregar modelo: %s\n", model_path);
+        fprintf(stderr, "Error loading model: %s\n", model_path);
         return 1;
     }
 
@@ -98,17 +98,17 @@ int main(int argc, char** argv) {
     typedef void* (*fn_init_ctx)(void*, char*);
     void* ctx = ((fn_init_ctx)llama_init_from_model)(model, cparams);
     if (!ctx) {
-        fprintf(stderr, "Erro ao inicializar contexto llama\n");
+        fprintf(stderr, "Error initializing llama context\n");
         return 1;
     }
 
     int n_vocab = llama_n_vocab(model);
-    printf("llama.cpp carregado com sucesso! n_vocab=%d\n", n_vocab);
+    printf("llama.cpp loaded successfully! n_vocab=%d\n", n_vocab);
 
-    // Ler tokens
+    // Read tokens
     FILE* f = fopen(tokens_path, "r");
     if (!f) {
-        fprintf(stderr, "Erro ao abrir tokens: %s\n", tokens_path);
+        fprintf(stderr, "Error opening tokens: %s\n", tokens_path);
         return 1;
     }
     int tokens[4096] = {0};
@@ -119,14 +119,14 @@ int main(int argc, char** argv) {
     fclose(f);
 
     if (count < 2) {
-        fprintf(stderr, "Erro: Arquivo contem tokens insuficientes para avaliacao (count=%d)\n", count);
+        fprintf(stderr, "Error: File contains insufficient tokens for evaluation (count=%d)\n", count);
         return 1;
     }
 
     if (max_tokens > count) max_tokens = count;
-    printf("Tokens carregados: %d | Avaliando primeiros: %d\n", count, max_tokens);
+    printf("Tokens loaded: %d | Evaluating first: %d\n", count, max_tokens);
 
-    // Batch de 1 token
+    // 1-token batch
     typedef void (*fn_batch_init)(llama_batch*, int32_t, int32_t, int32_t);
     llama_batch batch;
     memset(&batch, 0, sizeof(batch));
@@ -142,7 +142,7 @@ int main(int argc, char** argv) {
 
         int res = llama_decode(ctx, batch);
         if (res != 0) {
-            fprintf(stderr, "Erro no llama_decode na posicao %d: %d\n", t, res);
+            fprintf(stderr, "Error in llama_decode at position %d: %d\n", t, res);
             break;
         }
 

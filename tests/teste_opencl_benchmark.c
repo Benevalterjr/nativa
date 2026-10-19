@@ -1,13 +1,13 @@
 // ============================================================================
-// TESTE E BENCHMARK PRÁTICO NATIVA OPENCL (CPU & GPU)
+// PRACTICAL NATIVA OPENCL TEST AND BENCHMARK (CPU & GPU)
 // ============================================================================
-// Demonstração e validação do backend OpenCL da Linguagem Nativa:
-//   1. Carrega OpenCL.dll sem exigir SDK
-//   2. Enumera os dispositivos (CPU i7-3770 e iGPU HD Graphics 4000)
-//   3. Compila um kernel JIT de tensores (1 Milhão de elementos)
-//   4. Executa no Dispositivo 0 (CPU) e valida resultado numérico
-//   5. Executa no Dispositivo 1 (GPU) e valida resultado numérico
-//   6. Compara tempos de latência e throughput
+// Demonstration and validation of the Nativa Language OpenCL backend:
+//   1. Dynamically loads OpenCL.dll without requiring an SDK
+//   2. Enumerates devices (CPU i7-3770 and iGPU HD Graphics 4000)
+//   3. Compiles a JIT tensor kernel (1 Million elements)
+//   4. Executes on Device 0 (CPU) and validates numerical result
+//   5. Executes on Device 1 (GPU) and validates numerical result
+//   6. Compares latency and throughput
 // ============================================================================
 
 #include <stdio.h>
@@ -18,7 +18,7 @@
 
 #include "../tools/nativa_opencl.h"
 
-// Kernel OpenCL de operação tensorial fundida (Mul-Add + ReLU): Y = relu(A * B + 0.5f)
+// Fused tensor operation OpenCL kernel (Mul-Add + ReLU): Y = relu(A * B + 0.5f)
 static const char* TENSOR_KERNEL_SOURCE = 
 "__kernel void tensor_fused_mul_add_relu(\n"
 "    __global const float* A,\n"
@@ -71,7 +71,7 @@ static int validate_results(const float* h_A, const float* h_B, const float* h_C
         if (fabsf(h_C[i] - expected) > 1e-4f) {
             errors++;
             if (errors <= 3) {
-                printf("    [FALHA] Indice %d: obtido=%f esperado=%f\n", i, h_C[i], expected);
+                printf("    [FAIL] Index %d: got=%f expected=%f\n", i, h_C[i], expected);
             }
         }
     }
@@ -83,35 +83,35 @@ static bool run_tensor_test_on_device(NativaCLContext* ctx, int dev_idx, int N) 
         return false;
     }
     const NativaCLDevice* dev = &ctx->devices[dev_idx];
-    printf("\n>>> Testando no Dispositivo [%d]: [%s] %s <<<\n",
+    printf("\n>>> Testing on Device [%d]: [%s] %s <<<\n",
            dev_idx, dev->is_gpu ? "GPU" : "CPU", dev->name);
 
     if (!nativa_cl_activate_device(ctx, dev_idx)) {
-        fprintf(stderr, "[ERRO] Falha ao criar contexto/fila no dispositivo %d\n", dev_idx);
+        fprintf(stderr, "[ERROR] Failed to create context/queue on device %d\n", dev_idx);
         return false;
     }
 
-    // 1. Compila o Kernel JIT para este dispositivo
+    // 1. Compile JIT Kernel for this device
     char err_buf[2048] = {0};
     double t_build_start = get_time_sec();
     cl_program prog = nativa_cl_build_program_from_source(ctx, TENSOR_KERNEL_SOURCE, err_buf, sizeof(err_buf));
     double t_build = get_time_sec() - t_build_start;
 
     if (!prog) {
-        fprintf(stderr, "[ERRO] Falha ao compilar kernel OpenCL:\n%s\n", err_buf);
+        fprintf(stderr, "[ERROR] Failed to compile OpenCL kernel:\n%s\n", err_buf);
         return false;
     }
-    printf("    -> Kernel OpenCL compilado via JIT em %.2f ms\n", t_build * 1000.0);
+    printf("    -> OpenCL kernel JIT-compiled in %.2f ms\n", t_build * 1000.0);
 
     cl_int err = 0;
     cl_kernel kernel = ctx->clCreateKernel(prog, "tensor_fused_mul_add_relu", &err);
     if (err != CL_SUCCESS || !kernel) {
-        fprintf(stderr, "[ERRO] clCreateKernel falhou com codigo %d\n", err);
+        fprintf(stderr, "[ERROR] clCreateKernel failed with code %d\n", err);
         ctx->clReleaseProgram(prog);
         return false;
     }
 
-    // 2. Prepara dados na memória do Host
+    // 2. Prepare data in Host memory
     size_t bytes = (size_t)N * sizeof(float);
     float* h_A = (float*)malloc(bytes);
     float* h_B = (float*)malloc(bytes);
@@ -127,25 +127,25 @@ static bool run_tensor_test_on_device(NativaCLContext* ctx, int dev_idx, int N) 
         h_C[i] = 0.0f;
     }
 
-    // 3. Aloca buffers de memória OpenCL
+    // 3. Allocate OpenCL memory buffers
     cl_mem d_A = ctx->clCreateBuffer(ctx->context, CL_MEM_READ_ONLY | CL_MEM_COPY_HOST_PTR, bytes, h_A, &err);
     cl_mem d_B = ctx->clCreateBuffer(ctx->context, CL_MEM_READ_ONLY | CL_MEM_COPY_HOST_PTR, bytes, h_B, &err);
     cl_mem d_C = ctx->clCreateBuffer(ctx->context, CL_MEM_WRITE_ONLY, bytes, NULL, &err);
 
     if (!d_A || !d_B || !d_C) {
-        fprintf(stderr, "[ERRO] Falha na alocacao de buffers cl_mem\n");
+        fprintf(stderr, "[ERROR] Failed to allocate cl_mem buffers\n");
         cleanup_host_buffers(h_A, h_B, h_C);
         cleanup_cl_resources(ctx, d_A, d_B, d_C, kernel, prog);
         return false;
     }
 
-    // 4. Configura argumentos do Kernel
+    // 4. Configure Kernel arguments
     ctx->clSetKernelArg(kernel, 0, sizeof(cl_mem), &d_A);
     ctx->clSetKernelArg(kernel, 1, sizeof(cl_mem), &d_B);
     ctx->clSetKernelArg(kernel, 2, sizeof(cl_mem), &d_C);
     ctx->clSetKernelArg(kernel, 3, sizeof(int), &N);
 
-    // 5. Executa o Kernel e mede o tempo de computação
+    // 5. Execute Kernel and measure compute time
     size_t global_size = ((size_t)N + 255) / 256 * 256;
     size_t local_size = 256;
     if (local_size > dev->max_workgroup_size) local_size = dev->max_workgroup_size;
@@ -158,18 +158,18 @@ static bool run_tensor_test_on_device(NativaCLContext* ctx, int dev_idx, int N) 
 
     double t_exec = get_time_sec() - t_exec_start;
 
-    // 6. Lê o resultado de volta para o Host
+    // 6. Read result back to Host
     ctx->clEnqueueReadBuffer(ctx->queue, d_C, CL_TRUE, 0, bytes, h_C, 0, NULL, NULL);
 
-    // 7. Validação numérica rigorosa
+    // 7. Rigorous numerical validation
     int errors = validate_results(h_A, h_B, h_C, N);
 
     if (errors == 0) {
         double mflops = ((double)N * 3.0) / (t_exec * 1e6);
-        printf("    [SUCESSO] %d elementos computados com 100%% de precisao numerica!\n", N);
-        printf("    -> Tempo de execucao do Kernel: %.3f ms (%.1f MFLOPS)\n", t_exec * 1000.0, mflops);
+        printf("    [SUCCESS] %d elements computed with 100%% numerical accuracy!\n", N);
+        printf("    -> Kernel execution time: %.3f ms (%.1f MFLOPS)\n", t_exec * 1000.0, mflops);
     } else {
-        printf("    [ERRO] Foram encontrados %d erros numericos!\n", errors);
+        printf("    [ERROR] Found %d numerical errors!\n", errors);
     }
 
     cleanup_host_buffers(h_A, h_B, h_C);
@@ -179,19 +179,19 @@ static bool run_tensor_test_on_device(NativaCLContext* ctx, int dev_idx, int N) 
 
 int main(void) {
     printf("====================================================================\n");
-    printf("  NATIVA - TESTE E VALIDAÇÃO PRÁTICA DO BACKEND OPENCL\n");
+    printf("  NATIVA - PRACTICAL TEST AND VALIDATION OF THE OPENCL BACKEND\n");
     printf("====================================================================\n");
 
     NativaCLContext ctx;
     if (!nativa_cl_init(&ctx)) {
-        printf("[INFO] OpenCL nao esta disponivel neste ambiente ou OpenCL.dll nao encontrada.\n");
+        printf("[INFO] OpenCL is not available in this environment or OpenCL.dll was not found.\n");
         return 0;
     }
 
     nativa_cl_print_devices(&ctx);
 
-    const int N = 1000000; // 1 Milhão de elementos
-    printf("\nExecutando calculo tensorial em lote (%d tensores float32)...\n", N);
+    const int N = 1000000; // 1 Million elements
+    printf("\nRunning batch tensor computation (%d float32 tensors)...\n", N);
 
     bool all_ok = true;
     for (int i = 0; i < ctx.device_count; i++) {
@@ -202,9 +202,9 @@ int main(void) {
 
     printf("\n====================================================================\n");
     if (all_ok) {
-        printf("  STATUS FINAL: TODOS OS DISPOSITIVOS OPENCL FORAM VALIDADOS COM SUCESSO!\n");
+        printf("  FINAL STATUS: ALL OPENCL DEVICES HAVE BEEN VALIDATED SUCCESSFULLY!\n");
     } else {
-        printf("  STATUS FINAL: ALGUNS TESTES APRESENTARAM FALHAS.\n");
+        printf("  FINAL STATUS: SOME TESTS FAILED.\n");
     }
     printf("====================================================================\n");
 

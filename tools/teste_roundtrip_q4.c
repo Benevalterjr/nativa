@@ -96,6 +96,6 @@ int main(void) {
         if (err > max_err) max_err = err;
         printf("i=%2d orig=%7.4f dequant=%7.4f err=%7.4f\n", i, orig[i], dequant[i], err);
     }
-    printf("Erro maximo de quantizacao INT4: %f\n", max_err);
+    printf("Maximum INT4 quantization error: %f\n", max_err);
     return 0;
 }

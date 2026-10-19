@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Converte Qwen2/Qwen3 CausalLM para NATQ4X4 (Q4 weights, BF16 norms)."""
+"""Converts Qwen2/Qwen3 CausalLM to NATQ4X4 (Q4 weights, BF16 norms)."""
 
 from __future__ import annotations
 
@@ -31,7 +31,7 @@ def _safe_resolve_path(base_dir: str, *segments: str) -> str:
     base = os.path.abspath(base_dir)
     target = os.path.abspath(os.path.join(base, *segments))
     if os.path.commonpath([base, target]) != base:
-        raise ValueError(f"Tentativa de travessia de diretório detectada: {segments}")
+        raise ValueError(f"Directory traversal attempt detected: {segments}")
     return target
 
 
@@ -40,11 +40,11 @@ def read_safe_header(path: str) -> tuple[int, dict[str, Any]]:
     with open(clean_path, "rb") as f:
         raw_len = f.read(8)
         if len(raw_len) != 8:
-            raise ValueError(f"Cabeçalho SafeTensors truncado: {clean_path}")
+            raise ValueError(f"Truncated SafeTensors header: {clean_path}")
         header_len = struct.unpack("<Q", raw_len)[0]
         file_size = os.fstat(f.fileno()).st_size
         if header_len <= 0 or header_len > file_size - 8:
-            raise ValueError(f"Tamanho de cabeçalho SafeTensors inválido: {clean_path}")
+            raise ValueError(f"Invalid SafeTensors header size: {clean_path}")
         header = json.loads(f.read(header_len).decode("utf-8"))
     return 8 + header_len, header
 
@@ -56,11 +56,11 @@ def make_tensor_map(model_dir: str) -> dict[str, tuple[str, int, dict[str, Any]]
         with open(index_path, "r", encoding="utf-8") as f:
             weight_map = json.load(f).get("weight_map", {})
         if not weight_map:
-            raise ValueError("O índice SafeTensors não contém weight_map.")
+            raise ValueError("SafeTensors index does not contain weight_map.")
     else:
         single = _safe_resolve_path(clean_model_dir, "model.safetensors")
         if not os.path.isfile(single):
-            raise FileNotFoundError("Não encontrei model.safetensors nem model.safetensors.index.json.")
+            raise FileNotFoundError("Could not find model.safetensors or model.safetensors.index.json.")
         weight_map = {key: "model.safetensors" for key in read_safe_header(single)[1] if key != "__metadata__"}
 
     shard_headers: dict[str, tuple[int, dict[str, Any]]] = {}
@@ -69,12 +69,12 @@ def make_tensor_map(model_dir: str) -> dict[str, tuple[str, int, dict[str, Any]]
         shard_path = _safe_resolve_path(clean_model_dir, shard_name)
         if shard_name not in shard_headers:
             if not os.path.isfile(shard_path):
-                raise FileNotFoundError(f"Shard ausente: {shard_path}")
+                raise FileNotFoundError(f"Missing shard: {shard_path}")
             shard_headers[shard_name] = read_safe_header(shard_path)
         base, header = shard_headers[shard_name]
         entry = header.get(key)
         if not isinstance(entry, dict) or "data_offsets" not in entry:
-            raise ValueError(f"Tensor {key} não existe no shard {shard_name}.")
+            raise ValueError(f"Tensor {key} does not exist in shard {shard_name}.")
         tensors[key] = (shard_path, base, entry)
     return tensors
 
@@ -91,22 +91,22 @@ class SafeTensorReader:
 
     def float32(self, key: str, expected_shape: tuple[int, ...] | None = None) -> np.ndarray:
         if key not in self.tensor_map:
-            raise ValueError(f"Peso obrigatório ausente: {key}")
+            raise ValueError(f"Missing required weight: {key}")
         path, base, entry = self.tensor_map[key]
         dtype_name = entry.get("dtype")
         shape = tuple(int(n) for n in entry.get("shape", ()))
         if expected_shape is not None and shape != expected_shape:
-            raise ValueError(f"Forma de {key}: esperada {expected_shape}, recebida {shape}.")
+            raise ValueError(f"Shape of {key}: expected {expected_shape}, got {shape}.")
         start, end = map(int, entry["data_offsets"])
         if start < 0 or end < start:
-            raise ValueError(f"Offsets inválidos para {key}.")
+            raise ValueError(f"Invalid offsets for {key}.")
         dtype_map = {"BF16": np.dtype("<u2"), "F16": np.dtype("<f2"), "F32": np.dtype("<f4")}
         if dtype_name not in dtype_map:
-            raise ValueError(f"Tipo {dtype_name!r} não suportado em {key}; use BF16, F16 ou F32.")
+            raise ValueError(f"Type {dtype_name!r} not supported in {key}; use BF16, F16, or F32.")
         dtype = dtype_map[dtype_name]
         count = int(np.prod(shape, dtype=np.int64))
         if end - start != count * dtype.itemsize:
-            raise ValueError(f"Tamanho de dados incompatível com a forma de {key}.")
+            raise ValueError(f"Data size mismatch with shape of {key}.")
         f = self.handles.get(path)
         if f is None:
             f = open(path, "rb")
@@ -114,7 +114,7 @@ class SafeTensorReader:
         f.seek(base + start)
         raw = f.read(end - start)
         if len(raw) != end - start:
-            raise ValueError(f"Dados truncados para {key}.")
+            raise ValueError(f"Truncated data for {key}.")
         values = np.frombuffer(raw, dtype=dtype)
         if dtype_name == "BF16":
             values = (values.astype(np.uint32) << 16).view(np.float32)
@@ -126,7 +126,7 @@ class SafeTensorReader:
 def q4x4_matrix(values: np.ndarray) -> bytes:
     rows, cols = values.shape
     if rows % 4 or cols % 32:
-        raise ValueError(f"Dimensões {rows}x{cols} não são compatíveis com Q4x4.")
+        raise ValueError(f"Dimensions {rows}x{cols} are not compatible with Q4x4.")
     blocks = values.reshape(rows // 4, 4, cols // 32, 32)
     amax = np.max(np.abs(blocks), axis=-1)
     scale32 = (amax / np.float32(7.0)).astype(np.float32)
@@ -156,7 +156,7 @@ def bf16_array(values: np.ndarray) -> bytes:
 
 def q4_size(rows: int, cols: int) -> int:
     if rows % 4 or cols % 32:
-        raise ValueError(f"Dimensões {rows}x{cols} não são compatíveis com Q4x4.")
+        raise ValueError(f"Dimensions {rows}x{cols} are not compatible with Q4x4.")
     return rows * (cols // 32) * 18
 
 
@@ -174,11 +174,11 @@ def eos_ids(model_dir: str, cfg: dict[str, Any]) -> tuple[int, int]:
                 ids.append(int(added["id"]))
     ids = list(dict.fromkeys(ids))
     if not ids:
-        raise ValueError("config.json não declara eos_token_id e tokenizer.json não fornece um token EOS.")
+        raise ValueError("config.json does not declare eos_token_id and tokenizer.json does not provide an EOS token.")
     if len(ids) > 2:
-        raise ValueError("O runtime NATQ4 aceita até dois IDs de parada EOS por modelo.")
+        raise ValueError("The NATQ4 runtime accepts up to two EOS stop IDs per model.")
     if any(i < 0 or i >= int(cfg["vocab_size"]) for i in ids):
-        raise ValueError("eos_token_id está fora do vocabulário declarado.")
+        raise ValueError("eos_token_id is outside the declared vocabulary.")
     return ids[0], ids[1] if len(ids) > 1 else 0xFFFFFFFF
 
 
@@ -193,13 +193,13 @@ def tokenizer_vocab_size(model_dir: str, model_vocab_size: int) -> int:
     ids = [int(value) for value in vocab.values()]
     ids.extend(int(item["id"]) for item in tokenizer.get("added_tokens", []) if "id" in item)
     if not ids:
-        raise ValueError("tokenizer.json não contém IDs de vocabulário reconhecíveis.")
+        raise ValueError("tokenizer.json does not contain recognizable vocabulary IDs.")
     unique_ids = set(ids)
     size = max(ids) + 1
     if size < 4 or size > model_vocab_size:
-        raise ValueError(f"O tokenizer cobre {size} IDs, incompatíveis com vocab_size={model_vocab_size}.")
+        raise ValueError(f"Tokenizer covers {size} IDs, incompatible with vocab_size={model_vocab_size}.")
     if min(unique_ids) < 0 or len(unique_ids) != size:
-        raise ValueError("Os IDs do tokenizer são esparsos; o runtime exige IDs contíguos a partir de zero.")
+        raise ValueError("Tokenizer IDs are sparse; runtime requires contiguous IDs starting from zero.")
     return size
 
 
@@ -207,7 +207,7 @@ def quantize_qwen(model_dir: str, out_file: str, max_seq_len: int = 2048) -> Non
     clean_model_dir = os.path.abspath(model_dir)
     config_path = _safe_resolve_path(clean_model_dir, "config.json")
     if not os.path.isfile(config_path):
-        raise FileNotFoundError(f"config.json não encontrado em {clean_model_dir}")
+        raise FileNotFoundError(f"config.json not found in {clean_model_dir}")
     with open(config_path, "r", encoding="utf-8") as f:
         cfg = json.load(f)
 
@@ -215,17 +215,17 @@ def quantize_qwen(model_dir: str, out_file: str, max_seq_len: int = 2048) -> Non
     archs = cfg.get("architectures", [])
     arch_by_type = {"qwen2": ("Qwen2ForCausalLM", ARCH_QWEN2), "qwen3": ("Qwen3ForCausalLM", ARCH_QWEN3)}
     if model_type not in arch_by_type or not any(arch_by_type[model_type][0] == a for a in archs):
-        raise ValueError("Este conversor aceita Qwen2ForCausalLM e Qwen3ForCausalLM.")
+        raise ValueError("This converter accepts Qwen2ForCausalLM and Qwen3ForCausalLM.")
     arch_id = arch_by_type[model_type][1]
     if cfg.get("hidden_act", "silu") != "silu":
-        raise ValueError("O motor NATQ4X4 implementa SwiGLU/SiLU; hidden_act incompatível.")
+        raise ValueError("The NATQ4X4 engine implements SwiGLU/SiLU; incompatible hidden_act.")
     rope = cfg.get("rope_parameters") or cfg.get("rope_scaling") or {}
     if rope and rope.get("rope_type", rope.get("type", "default")) not in ("default", "linear"):
-        raise ValueError("A configuração de RoPE não é suportada por este motor.")
+        raise ValueError("RoPE configuration is not supported by this engine.")
     if rope and rope.get("rope_type", rope.get("type", "default")) == "linear":
-        raise ValueError("RoPE linear não é suportado por este motor; use RoPE padrão.")
+        raise ValueError("Linear RoPE is not supported by this engine; use default RoPE.")
     if cfg.get("use_sliding_window") or "sliding_attention" in cfg.get("layer_types", []):
-        raise ValueError("Camadas Qwen3 com sliding window ainda não são suportadas.")
+        raise ValueError("Qwen3 layers with sliding window are not supported yet.")
 
     dim = int(cfg["hidden_size"])
     inter = int(cfg["intermediate_size"])
@@ -239,14 +239,14 @@ def quantize_qwen(model_dir: str, out_file: str, max_seq_len: int = 2048) -> Non
     if (layers_n < 1 or layers_n > MAX_LAYERS or dim < 32 or dim % 32 or inter < 32 or inter % 32
             or vocab < 4 or vocab % 4 or heads < 1 or kv_heads < 1 or heads % kv_heads
             or (model_type != "qwen3" and head_dim != dim // heads) or q_dim % 32 != 0 or head_dim % 16 or (kv_heads * head_dim) % 4):
-        raise ValueError("Dimensões do modelo incompatíveis com o layout/runtime Q4x4.")
+        raise ValueError("Model dimensions are incompatible with the Q4x4 layout/runtime.")
     if max_seq_len < 2 or max_seq_len > model_context or max_seq_len > MAX_CONTEXT:
-        raise ValueError(f"max_seq_len deve estar entre 2 e {min(model_context, MAX_CONTEXT)}.")
+        raise ValueError(f"max_seq_len must be between 2 and {min(model_context, MAX_CONTEXT)}.")
 
     tie_embeddings = bool(cfg.get("tie_word_embeddings", model_type == "qwen2"))
     has_bias = bool(cfg.get("attention_bias", model_type == "qwen2"))
     if model_type == "qwen3" and has_bias:
-        raise ValueError("Qwen3 com attention_bias=true requer suporte ao bias de o_proj, ainda não implementado.")
+        raise ValueError("Qwen3 with attention_bias=true requires o_proj bias support, which is not yet implemented.")
     eps = float(cfg.get("rms_norm_eps", 1e-6))
     rope_theta = float(rope.get("rope_theta", cfg.get("rope_theta", 1_000_000.0)))
     eos1, eos2 = eos_ids(model_dir, cfg)
@@ -357,30 +357,30 @@ def quantize_qwen(model_dir: str, out_file: str, max_seq_len: int = 2048) -> Non
             pass
         raise
 
-    print(f"[OK] {model_type.upper()} quantizado para NATQ4X4: {out_abs}")
-    print(f"     {layers_n} camadas | {file_size:,} bytes | contexto {max_seq_len} | EOS {eos1}, {eos2}")
-    print(f"     Vocabulário: {tokenizer_size} IDs ativos de {vocab} linhas de embedding")
+    print(f"[OK] {model_type.upper()} quantized to NATQ4X4: {out_abs}")
+    print(f"     {layers_n} layers | {file_size:,} bytes | context {max_seq_len} | EOS {eos1}, {eos2}")
+    print(f"     Vocabulary: {tokenizer_size} active IDs out of {vocab} embedding rows")
     if os.path.isfile(out_abs + ".tokenizer.json"):
-        print(f"     Tokenizer salvo em {out_abs}.tokenizer.json")
+        print(f"     Tokenizer saved to {out_abs}.tokenizer.json")
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Quantiza Qwen2/Qwen3ForCausalLM BF16/F16/F32 para NATQ4X4 Q4x4.")
-    parser.add_argument("model_dir", help="Diretório com config.json e SafeTensors")
-    parser.add_argument("output_pos", nargs="?", help="Arquivo .natq4 de saída (opcional)")
-    parser.add_argument("--out", dest="output_flag", help="Arquivo .natq4 de saída")
-    parser.add_argument("--max-seq-len", type=int, default=2048, help="Contexto alocado pelo motor (padrão: 2048)")
+    parser = argparse.ArgumentParser(description="Quantizes Qwen2/Qwen3ForCausalLM BF16/F16/F32 to NATQ4X4 Q4x4.")
+    parser.add_argument("model_dir", help="Directory containing config.json and SafeTensors")
+    parser.add_argument("output_pos", nargs="?", help="Output .natq4 file (optional)")
+    parser.add_argument("--out", dest="output_flag", help="Output .natq4 file")
+    parser.add_argument("--max-seq-len", type=int, default=2048, help="Context allocated by the engine (default: 2048)")
     args = parser.parse_args()
     if args.output_pos and args.output_flag:
-        parser.error("informe o destino como argumento posicional ou com --out, não ambos")
+        parser.error("provide destination as a positional argument or with --out, not both")
     model_dir = os.path.abspath(args.model_dir)
     if not os.path.isdir(model_dir):
-        parser.error(f"Diretório do modelo não encontrado: {args.model_dir}")
+        parser.error(f"Model directory not found: {args.model_dir}")
     output = os.path.abspath(args.output_flag or args.output_pos or os.path.join(model_dir, "model.natq4"))
     try:
         quantize_qwen(model_dir, output, args.max_seq_len)
     except (OSError, ValueError, KeyError, json.JSONDecodeError) as exc:
-        parser.exit(2, f"[ERRO] {exc}\n")
+        parser.exit(2, f"[ERROR] {exc}\n")
     return 0
 
 

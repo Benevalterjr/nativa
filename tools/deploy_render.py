@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-Utilitário de Automação de Deploy no Render via API Oficial.
-Permite criar o Web Service, disparar deploys e verificar logs/status.
+Render Deployment Automation Utility via Official API.
+Allows creating the Web Service, triggering deployments, and checking logs/status.
 """
 
 import json
@@ -31,7 +31,7 @@ def make_request(endpoint: str, method: str = "GET", data: dict = None) -> dict:
             return json.loads(content) if content else {}
     except urllib.error.HTTPError as e:
         err_msg = e.read().decode("utf-8")
-        print(f"[ERRO HTTP {e.code}] {err_msg}", file=sys.stderr)
+        print(f"[HTTP ERROR {e.code}] {err_msg}", file=sys.stderr)
         return {"error": err_msg, "code": e.code}
 
 
@@ -62,7 +62,7 @@ def create_service(name: str = "nativa-qwen3-api"):
             ],
         },
     }
-    print(f"[*] Criando Web Service '{name}' no Render...")
+    print(f"[*] Creating Web Service '{name}' on Render...")
     res = make_request("services", method="POST", data=payload)
     print(json.dumps(res, indent=2))
     return res
@@ -76,4 +76,4 @@ if __name__ == "__main__":
         name = sys.argv[2] if len(sys.argv) > 2 else "nativa-qwen3-api"
         create_service(name)
     else:
-        print("Uso: python deploy_render.py [list|create <nome>]")
+        print("Usage: python deploy_render.py [list|create <name>]")

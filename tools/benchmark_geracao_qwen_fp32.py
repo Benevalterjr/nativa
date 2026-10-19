@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Benchmark oficial de velocidade de geração (Tokens/s) do Qwen2.5-0.5B em FP32.
+"""Official generation speed benchmark (Tokens/s) of Qwen2.5-0.5B in FP32.
 
-Mede o Throughput de Decode Auto-regressivo Token-a-Token utilizando o runtime do Nativa
-com pesos residentes em RAM e KVCache Memory Arena (estilo llama2.c).
+Measures token-by-token autoregressive decode throughput using the Nativa runtime
+with weights resident in RAM and a KVCache Memory Arena (llama2.c style).
 """
 
 import os
@@ -52,7 +52,7 @@ def softmax(x):
 
 
 def load_model_weights():
-    print("[*] Carregando pesos oficiais do Qwen2.5-0.5B (24 camadas) para a RAM...")
+    print("[*] Loading official Qwen2.5-0.5B weights (24 layers) into RAM...")
     t0 = time.perf_counter()
     w = {}
     w["embed"] = nativa.load_safetensors_fn(MODEL_FILE, "model.embed_tokens.weight").data.astype(np.float32)
@@ -82,7 +82,7 @@ def load_model_weights():
     for lw in w["layers"]:
         total_mb += sum(arr.nbytes for arr in lw.values())
     total_mb /= (1024 * 1024)
-    print(f"    -> {NUM_LAYERS} camadas carregadas na memória RAM em {elapsed:.2f}s ({total_mb:.1f} MB em FP32).")
+    print(f"    -> {NUM_LAYERS} layers loaded into RAM in {elapsed:.2f}s ({total_mb:.1f} MB in FP32).")
     return w
 
 
@@ -90,26 +90,26 @@ def run_benchmark(num_tokens_generate=25):
     weights = load_model_weights()
     tokenizer = nativa.Tokenizer(TOKENIZER_FILE)
     
-    # Prompt de teste
+    # Test prompt
     prompt = "Artificial Intelligence is transforming"
     print(f"\n[*] Prompt: {prompt!r}")
     prompt_tokens = tokenizer.encode(prompt).tolist()
     prompt_len = len(prompt_tokens)
-    print(f"[*] Tokens no prompt: {prompt_len}")
+    print(f"[*] Tokens in prompt: {prompt_len}")
     
-    # Inicializa os 24 KV-Caches com Memory Arena
+    # Initialize the 24 KV-Caches with Memory Arena
     kv_caches = [nativa.KVCache(max_seq_len=1024, dim=NUM_KV_HEADS * HEAD_DIM) for _ in range(NUM_LAYERS)]
     
     # -------------------------------------------------------------
-    # 1. PREFILL DO PROMPT
+    # 1. PROMPT PREFILL
     # -------------------------------------------------------------
-    print("[*] Executando Prefill do prompt...")
+    print("[*] Running prompt prefill...")
     t_prefill_start = time.perf_counter()
     
-    # Fatias de embedding para todos os tokens do prompt
+    # Embedding slices for all prompt tokens
     h = weights["embed"][prompt_tokens].copy()  # shape (prompt_len, 896)
     
-    # Processa cada token do prompt alimentando o KV Cache
+    # Process each prompt token feeding the KV Cache
     for pos, tok_id in enumerate(prompt_tokens):
         x = weights["embed"][tok_id].copy()
         for l in range(NUM_LAYERS):
@@ -122,7 +122,7 @@ def run_benchmark(num_tokens_generate=25):
             q_rot = apply_rope_single(q, pos, NUM_HEADS)
             k_rot = apply_rope_single(k, pos, NUM_KV_HEADS)
             
-            # Insere no KV Cache
+            # Insert into KV Cache
             k_cache, v_cache = kv_caches[l].update(k_rot, v)
             cur_len = kv_caches[l].seq_len
             
@@ -143,19 +143,19 @@ def run_benchmark(num_tokens_generate=25):
             h_mlp = nativa.silu_fn(nativa.Tensor(gate)).data * up
             x = x + (lw["wdown"] @ h_mlp)
             
-    # Projeção de saída do último token do prompt
+    # Output projection of the last prompt token
     x_final = rmsnorm(x, weights["norm"])
     logits = weights["embed"] @ x_final
     next_token = int(np.argmax(logits))
     
     t_prefill = time.perf_counter() - t_prefill_start
-    print(f"    -> Prefill concluído em {t_prefill*1000.0:.2f} ms ({prompt_len / t_prefill:.1f} tokens/s).")
-    print(f"    -> Primeiro token gerado: {tokenizer.decode([next_token])!r}")
+    print(f"    -> Prefill completed in {t_prefill*1000.0:.2f} ms ({prompt_len / t_prefill:.1f} tokens/s).")
+    print(f"    -> First generated token: {tokenizer.decode([next_token])!r}")
     
     # -------------------------------------------------------------
-    # 2. DECODE AUTO-REGRESSIVO (TOKEN-A-TOKEN COM KV-CACHE)
+    # 2. AUTOREGRESSIVE DECODE (TOKEN-BY-TOKEN WITH KV-CACHE)
     # -------------------------------------------------------------
-    print(f"\n[*] Gerando {num_tokens_generate} tokens em modo Decode Auto-regressivo FP32...")
+    print(f"\n[*] Generating {num_tokens_generate} tokens in FP32 Autoregressive Decode mode...")
     generated_tokens = [next_token]
     times = []
     
@@ -211,13 +211,13 @@ def run_benchmark(num_tokens_generate=25):
     
     texto_completo = tokenizer.decode(prompt_tokens + generated_tokens)
     print("=" * 70)
-    print("  RESULTADO DO BENCHMARK DE GERAÇÃO FP32 (QWEN2.5-0.5B NO NATIVA)")
+    print("  FP32 GENERATION BENCHMARK RESULT (QWEN2.5-0.5B ON NATIVA)")
     print("=" * 70)
-    print(f"• Texto completo gerado:\n  {texto_completo!r}\n")
-    print(f"• Tokens gerados no decode: {len(generated_tokens)}")
-    print(f"• Tempo médio por token:    {avg_step_time * 1000.0:.2f} ms")
-    print(f"• Velocidade de Decode:     {tokens_per_sec:.2f} TOKENS/SEGUNDO!")
-    print(f"• Tempo total de Decode:    {total_decode_time:.2f} s")
+    print(f"• Full generated text:\n  {texto_completo!r}\n")
+    print(f"• Tokens generated in decode: {len(generated_tokens)}")
+    print(f"• Average time per token:     {avg_step_time * 1000.0:.2f} ms")
+    print(f"• Decode speed:               {tokens_per_sec:.2f} TOKENS/SECOND!")
+    print(f"• Total decode time:          {total_decode_time:.2f} s")
     print("=" * 70)
 
 

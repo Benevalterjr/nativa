@@ -175,7 +175,7 @@ int main(void) {
 
     double dt = (double)(t1.QuadPart - t0.QuadPart) / (double)freq.QuadPart;
     double per_iter_ms = (dt / iters) * 1000.0;
-    printf("Tempo medio wdown (1536x8960): %.3f ms\n", per_iter_ms);
+    printf("Average time wdown (1536x8960): %.3f ms\n", per_iter_ms);
 
     free(W);
     free(x_q8);

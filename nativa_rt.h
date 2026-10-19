@@ -1,6 +1,6 @@
 /* ========================================================================= */
-/* Runtime C99 Unificado da Linguagem Nativa (nativa_rt.h)                   */
-/* Compartilhado entre AOTKernelEngine (ctypes DLL) e CTranspiler (nativa)   */
+/* Unified C99 Runtime for the Nativa Language (nativa_rt.h)                 */
+/* Shared between AOTKernelEngine (ctypes DLL) and CTranspiler (nativa)      */
 /* ========================================================================= */
 #ifndef NATIVA_RT_H
 #define NATIVA_RT_H
@@ -40,7 +40,7 @@
 #endif
 
 /* ------------------------------------------------------------------------- */
-/* 1. Kernels AOT Float32 / BitNet b1.58 (usados via FFI e C99)              */
+/* 1. Float32 / BitNet b1.58 AOT Kernels (used via FFI and C99)              */
 /* ------------------------------------------------------------------------- */
 
 NAT_API void nat_c_gemv_ternary(const int8_t* W, const float* x, float* y, int64_t M, int64_t K) {
@@ -220,7 +220,7 @@ NAT_API void nat_c_softmax(const float* x, float* out, int64_t N) {
 }
 
 /* ------------------------------------------------------------------------- */
-/* 2. Complexos e Transformada Rápida de Fourier Cooley-Tukey O(N log N)     */
+/* 2. Complex Numbers and O(N log N) Cooley-Tukey Fast Fourier Transform     */
 /* ------------------------------------------------------------------------- */
 
 typedef struct {
@@ -247,7 +247,7 @@ static inline double nat_complex_power(NatComplex c) {
     return c.real * c.real + c.imag * c.imag;
 }
 
-/* Algoritmo Radix-2 Cooley-Tukey in-place O(N log N) para potências de 2 */
+/* In-place O(N log N) Radix-2 Cooley-Tukey algorithm for powers of 2 */
 static inline void nat_fft_cooley_tukey(NatComplex* a, int64_t N, bool inverse) {
     for (int64_t i = 1, j = 0; i < N; i++) {
         int64_t bit = N >> 1;
@@ -376,7 +376,7 @@ static inline void nat_power_spectrum_signal(const double* x, double* out_ps, in
 }
 
 /* ------------------------------------------------------------------------- */
-/* 3. Quantização Ternária, BitNet b1.58 e Primitivas Matemáticas F64        */
+/* 3. Ternary Quantization, BitNet b1.58 and F64 Math Primitives             */
 /* ------------------------------------------------------------------------- */
 
 static inline int8_t* nat_quantize_ternary(const double* v, int64_t length, double threshold) {
@@ -744,7 +744,7 @@ static inline void nat_random_ternary(int8_t* out, int64_t length, uint64_t seed
 }
 
 /* ------------------------------------------------------------------------- */
-/* 4. KVCache Contíguo em C99 para Inferência Autoregressiva de LLMs         */
+/* 4. Contiguous C99 KVCache for Autoregressive LLM Inference                */
 /* ------------------------------------------------------------------------- */
 
 typedef struct {
@@ -793,7 +793,7 @@ static inline void nat_kvcache_clear(NatKVCache* c) {
 }
 
 /* ------------------------------------------------------------------------- */
-/* 5. Impressão Formatada, Sistema Result[T] e I/O Seguro em C99             */
+/* 5. Formatted Printing, Result[T] System and Safe C99 I/O                  */
 /* ------------------------------------------------------------------------- */
 
 static inline void nat_print_vec_f64(const double* v, int64_t n) {
@@ -835,21 +835,21 @@ static inline bool nat_is_ok(NatResult r) { return r.is_ok; }
 static inline bool nat_is_err(NatResult r) { return !r.is_ok; }
 static inline const char* nat_unwrap_str(NatResult r) {
     if (!r.is_ok) {
-        fprintf(stderr, "Erro de execucao: tentativa de unwrap em Result com erro: %s\n", r.err ? r.err : "desconhecido");
+        fprintf(stderr, "Runtime error: attempted to unwrap a Result containing an error: %s\n", r.err ? r.err : "unknown");
         exit(1);
     }
     return r.val_str ? r.val_str : "";
 }
 static inline int64_t nat_unwrap_i64(NatResult r) {
     if (!r.is_ok) {
-        fprintf(stderr, "Erro de execucao: tentativa de unwrap em Result com erro: %s\n", r.err ? r.err : "desconhecido");
+        fprintf(stderr, "Runtime error: attempted to unwrap a Result containing an error: %s\n", r.err ? r.err : "unknown");
         exit(1);
     }
     return r.val_i64;
 }
 static inline double nat_unwrap_f64(NatResult r) {
     if (!r.is_ok) {
-        fprintf(stderr, "Erro de execucao: tentativa de unwrap em Result com erro: %s\n", r.err ? r.err : "desconhecido");
+        fprintf(stderr, "Runtime error: attempted to unwrap a Result containing an error: %s\n", r.err ? r.err : "unknown");
         exit(1);
     }
     return r.val_f64;
@@ -873,12 +873,12 @@ static inline bool nat_exists_file(const char* path) {
 }
 static inline NatResult nat_read_file_safe(const char* path) {
     FILE* f = fopen(path, "rb");
-    if (!f) return nat_err("arquivo nao encontrado ou inacessivel");
+    if (!f) return nat_err("file not found or inaccessible");
     fseek(f, 0, SEEK_END);
     long sz = ftell(f);
     fseek(f, 0, SEEK_SET);
     char* buf = (char*)malloc(sz + 1);
-    if (!buf) { fclose(f); return nat_err("falha de alocacao de memoria para leitura"); }
+    if (!buf) { fclose(f); return nat_err("memory allocation failed for reading"); }
     size_t rd = fread(buf, 1, sz, f);
     buf[rd] = '\0';
     fclose(f);

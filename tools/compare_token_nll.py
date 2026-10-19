@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-tools/compare_token_nll.py — Diagnóstico Token a Token: Nativa vs llama.cpp
-Mede e compara o NLL exato de cada token em condições idênticas de contexto.
+tools/compare_token_nll.py — Token-by-Token Diagnostics: Nativa vs llama.cpp
+Measures and compares the exact NLL of each token under identical context conditions.
 """
 
 import ctypes
@@ -24,13 +24,13 @@ NATIVE_LOG = os.path.join(
     "task-2676.log"
 )
 
-# 1. Carregar IDs e Tokenizer para decodificar texto
+# 1. Load IDs and Tokenizer to decode text
 with open(TOKENS_FILE, "r") as f:
     token_ids = [int(x) for x in f.read().split()]
 
 tok = nativa.Tokenizer(TOKENIZER_JSON)
 
-# 2. Carregar NLLs do Nativa
+# 2. Load Nativa NLLs
 nativa_nlls = {}
 with open(NATIVE_LOG, "r") as f:
     for line in f:
@@ -44,7 +44,7 @@ with open(NATIVE_LOG, "r") as f:
                 "best": int(m.group(5)),
             }
 
-# 3. Inicializar llama.dll com logs silenciados
+# 3. Initialize llama.dll with silenced logs
 abs_dir = os.path.join(ROOT, "tools", "llama_cpp")
 os.add_dll_directory(abs_dir)
 ggml = ctypes.CDLL(os.path.join(abs_dir, "ggml.dll"))
@@ -52,7 +52,7 @@ ggml.ggml_backend_load_all_from_path(abs_dir.encode("utf-8"))
 
 llama = ctypes.CDLL(os.path.join(abs_dir, "llama.dll"))
 
-# Silenciar logs do llama.cpp
+# Silence llama.cpp logs
 LOG_CALLBACK = ctypes.CFUNCTYPE(None, ctypes.c_int, ctypes.c_char_p, ctypes.c_void_p)
 def dummy_log(level, text, user_data): pass
 cb_log = LOG_CALLBACK(dummy_log)
@@ -96,8 +96,8 @@ llama.llama_get_logits_ith.restype = ctypes.POINTER(ctypes.c_float)
 n_vocab = 151936
 llama_nlls = {}
 
-N_EVAL = min(len(token_ids) - 1, 280)  # cobrir pos 0..32 e pos 256..275
-print(f"[*] Avaliando {N_EVAL} tokens no llama.cpp (token a token com KV cache progressivo)...")
+N_EVAL = min(len(token_ids) - 1, 280)  # cover pos 0..32 and pos 256..275
+print(f"[*] Evaluating {N_EVAL} tokens in llama.cpp (token-by-token with progressive KV cache)...")
 
 for t in range(N_EVAL):
     batch.n_tokens = 1
@@ -109,12 +109,12 @@ for t in range(N_EVAL):
 
     ret = llama.llama_decode(ctx, batch)
     if ret != 0:
-        print(f"Erro no llama_decode na pos {t}")
+        print(f"Error in llama_decode at pos {t}")
         break
 
     logits_ptr = llama.llama_get_logits_ith(ctx, 0)
     logits = np.ctypeslib.as_array(logits_ptr, shape=(n_vocab,)).copy()
-    logits[151669:] = -1e9  # mascara tokens de padding fora do vocab do Qwen3
+    logits[151669:] = -1e9  # mask out-of-vocab padding tokens for Qwen3
 
     target = token_ids[t + 1]
     max_l = np.max(logits)
@@ -129,9 +129,9 @@ for t in range(N_EVAL):
         "best": best
     }
 
-# 4. Formatar e exibir tabela comparativa
+# 4. Format and display comparative table
 print("\n" + "=" * 105)
-print("TABELA COMPARATIVA TOKEN A TOKEN: NATIVA (.natq4) vs. LLAMA.CPP (GGUF)")
+print("TOKEN-BY-TOKEN COMPARATIVE TABLE: NATIVA (.natq4) vs. LLAMA.CPP (GGUF)")
 print("=" * 105)
 print(f"{'Pos':>4} | {'Target ID':>9} | {'Token':^14} | {'NLL Nativa':>11} | {'NLL llama':>10} | {'Delta (N-L)':>11} | {'Diag':^8}")
 print("-" * 105)
@@ -141,7 +141,7 @@ def print_row(pos):
     llm = llama_nlls.get(pos, {})
     target = nat.get("target", token_ids[pos + 1])
     tok_str = tok.decode([target])
-    # Limpar quebras de linha e caracteres de controle
+    # Strip line breaks and control characters
     tok_repr = repr(tok_str)[1:-1]
     if len(tok_repr) > 12:
         tok_repr = tok_repr[:10] + ".."
@@ -152,25 +152,25 @@ def print_row(pos):
     diag = "OK" if abs(delta) < 0.5 else ("WARN" if abs(delta) < 2.0 else "DIVERG")
     print(f"{pos:4d} | {target:9d} | {tok_repr:<14} | {n_nll:11.4f} | {l_nll:10.4f} | {delta:+11.4f} | {diag:^8}")
 
-print("[FAIXA A: TOKENS INICIAIS (0 a 16) — PARTIDA A FRIO / SEM CONTEXTO]")
+print("[BAND A: INITIAL TOKENS (0 to 16) — COLD START / NO CONTEXT]")
 for p in range(17):
     print_row(p)
 
-print("\n[FAIXA B: CONTEXTO INTERMEDIÁRIO (17 a 31)]")
+print("\n[BAND B: INTERMEDIATE CONTEXT (17 to 31)]")
 for p in range(17, 32):
     print_row(p)
 
-print("\n[FAIXA C: CONTEXTO SATURADO (256 a 272) — EXATAMENTE O CHUNK 1 DO LLAMA-PERPLEXITY]")
+print("\n[BAND C: SATURATED CONTEXT (256 to 272) — EXACTLY CHUNK 1 OF LLAMA-PERPLEXITY]")
 for p in range(256, 273):
     print_row(p)
 
 print("=" * 105)
 
-# Médias
+# Means
 c_nat = [nativa_nlls[p]["nll"] for p in range(17)]
 c_llm = [llama_nlls[p]["nll"] for p in range(17)]
 w_nat = [nativa_nlls[p]["nll"] for p in range(256, min(N_EVAL, 273))]
 w_llm = [llama_nlls[p]["nll"] for p in range(256, min(N_EVAL, 273))]
 
-print(f"Média Faixa A (Pos 0..16)   : Nativa={np.mean(c_nat):.4f} (PPL={math.exp(np.mean(c_nat)):.2f}) | llama.cpp={np.mean(c_llm):.4f} (PPL={math.exp(np.mean(c_llm)):.2f}) | Delta={np.mean(c_nat)-np.mean(c_llm):+.4f}")
-print(f"Média Faixa C (Pos 256..272): Nativa={np.mean(w_nat):.4f} (PPL={math.exp(np.mean(w_nat)):.2f}) | llama.cpp={np.mean(w_llm):.4f} (PPL={math.exp(np.mean(w_llm)):.2f}) | Delta={np.mean(w_nat)-np.mean(w_llm):+.4f}")
+print(f"Mean Band A (Pos 0..16)   : Nativa={np.mean(c_nat):.4f} (PPL={math.exp(np.mean(c_nat)):.2f}) | llama.cpp={np.mean(c_llm):.4f} (PPL={math.exp(np.mean(c_llm)):.2f}) | Delta={np.mean(c_nat)-np.mean(c_llm):+.4f}")
+print(f"Mean Band C (Pos 256..272): Nativa={np.mean(w_nat):.4f} (PPL={math.exp(np.mean(w_nat)):.2f}) | llama.cpp={np.mean(w_llm):.4f} (PPL={math.exp(np.mean(w_llm)):.2f}) | Delta={np.mean(w_nat)-np.mean(w_llm):+.4f}")

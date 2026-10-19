@@ -180,7 +180,7 @@ int main(void) {
     QueryPerformanceFrequency(&freq);
 
     matvec_q4_q8_4row(y, W, x_q8, NULL, rows, cols);
-    printf("Resultado y[0]: %f\n", y[0]);
+    printf("Result y[0]: %f\n", y[0]);
 
     QueryPerformanceCounter(&t0);
     int iters = 500;
@@ -191,7 +191,7 @@ int main(void) {
 
     double dt = (double)(t1.QuadPart - t0.QuadPart) / (double)freq.QuadPart;
     double per_iter_ms = (dt / iters) * 1000.0;
-    printf("Tempo medio por matvec 4-row (1536x1536): %.3f ms\n", per_iter_ms);
+    printf("Average time per 4-row matvec (1536x1536): %.3f ms\n", per_iter_ms);
 
     free(W);
     free(x_q8);

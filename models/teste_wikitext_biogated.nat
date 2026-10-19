@@ -1,11 +1,11 @@
 # ==============================================================================
-# teste_wikitext_biogated.nat — Teste de Integração e Sintaxe da DSL Nativa v0.4
-# Validação funcional dos primitivos da linguagem (fill, seed, rmsnorm, turbo_quant, matmul)
-# NOTA CIENTÍFICA: Para o benchmark empírico rigoroso com pesos reais do Qwen2.5-0.5B,
-# Perplexidade (PPL) e NLL no WikiText-2, execute: `tools/experimento_real_cortex_hipocampo.py`
+# teste_wikitext_biogated.nat — Nativa DSL v0.4 Integration and Syntax Test
+# Functional validation of language primitives (fill, seed, rmsnorm, turbo_quant, matmul)
+# SCIENTIFIC NOTE: For the rigorous empirical benchmark with real Qwen2.5-0.5B weights,
+# Perplexity (PPL) and NLL on WikiText-2, run: `tools/experimento_real_cortex_hipocampo.py`
 # ==============================================================================
 
-# 1. Modulação Dopaminérgica com Normalização Homeostática
+# 1. Dopaminergic Modulation with Homeostatic Normalization
 fn modular_dopamina(
     x_t: [f32],
     x_norm: [f32],
@@ -19,22 +19,22 @@ fn modular_dopamina(
     n_dim = len(x_t)
     escala = 1.0 / sqrt(n_dim)
 
-    # Memória de trabalho com estabilização homeostática RMSNorm
+    # Working memory with RMSNorm homeostatic stabilization
     mem_combinada = (mem_ampa * 0.6) + (mem_nmda * 0.4)
     mem_norm = rmsnorm(mem_combinada, gamma_norm, eps)
     expectativa = matmul(W_rpe, mem_norm) * (escala * 0.25)
     erro_pred = x_t - expectativa
 
-    # Energia fásica de novidade / erro de predição (RPE)
+    # Phasic novelty / reward prediction error (RPE) energy
     energia_rpe = sqrt(dot(erro_pred, erro_pred) / n_dim)
 
-    # Disparo dopaminérgico fásico proporcional à discrepância contextual
+    # Phasic dopaminergic firing proportional to contextual discrepancy
     proj_da = (W_da @ x_norm) * escala
     potencial_da = proj_da + (energia_rpe * 1.35) - 1.45
     return sigmoid(potencial_da)
 
 
-# 2. Modulação GABAérgica (Inibição Lateral e Blindagem de Ruído)
+# 2. GABAergic Modulation (Lateral Inhibition and Noise Shielding)
 fn modular_gaba(
     x_norm: [f32],
     mem_nmda: [f32],
@@ -51,12 +51,12 @@ fn modular_gaba(
     proj_gaba = ((W_gaba @ x_norm) + (U_gaba @ nmda_norm)) * escala
     gaba_bruto = sigmoid(proj_gaba + 0.55)
 
-    # Antagonismo DA/GABA: Dopamina desativa o freio inibitório
+    # DA/GABA antagonism: Dopamine disables the inhibitory brake
     esc_protecao = 1.0 - (dopamina * 0.80)
     return gaba_bruto * esc_protecao
 
 
-# 3. Inibição Lateral Cortical (Winner-Take-All O(d))
+# 3. Cortical Lateral Inhibition (O(d) Winner-Take-All)
 fn inibicao_lateral_wta(
     excitacao: [f32],
     dopamina: [f32],
@@ -68,7 +68,7 @@ fn inibicao_lateral_wta(
     return relu(sinal_amplificado - inibicao_local)
 
 
-# 4. Atualização Sináptica em Dupla Escala Temporal
+# 4. Dual-Timescale Synaptic Update
 fn atualizar_ampa(
     mem_ampa: [f32],
     sinal_focado: [f32],
@@ -91,7 +91,7 @@ fn atualizar_nmda(
     return (retencao_nmda * mem_nmda) + (portao_mg * sinal_focado)
 
 
-# 5. Geração de Embedding Determinístico por Hashing Angular
+# 5. Deterministic Embedding Generation via Angular Hashing
 fn gerar_embedding_token(token_id: i64, d_model: i64, escala: f64) -> [f32]:
     emb: [f32] = zeros([d_model])
     for j in 0..d_model:
@@ -102,22 +102,22 @@ fn gerar_embedding_token(token_id: i64, d_model: i64, escala: f64) -> [f32]:
 
 fn main():
     print("==========================================================================")
-    print("BENCHMARK WIKITEXT-2: CORTEX BIO-GATED + HIPOCAMPO TURBOQUANT (DSL NATIVA)")
-    print("Executado via Frontend Nativa v0.4 / Runtime Prototipagem (Python + NumPy/C)")
+    print("WIKITEXT-2 BENCHMARK: BIO-GATED CORTEX + TURBOQUANT HIPPOCAMPUS (NATIVA DSL)")
+    print("Executed via Nativa v0.4 Frontend / Prototyping Runtime (Python + NumPy/C)")
     print("==========================================================================")
 
-    # 1. Carregamento dos dados nativos
+    # 1. Loading native data
     texto_corpus = read_file("data/wikitext-2-test.txt")
-    print(f"Arquivo lido com sucesso: data/wikitext-2-test.txt ({len(texto_corpus)} caracteres)")
+    print(f"File successfully read: data/wikitext-2-test.txt ({len(texto_corpus)} characters)")
 
     tok = load_tokenizer("data/tokenizer_qwen.json")
     trecho_wikitext = "Robert Boulter is an English film , television and theatre actor . He had a guest starring role on the television series The Bill in 2000 . This was followed by a starring role in the play Herons written by Simon Stephens in 2001 ."
     tokens = encode(tok, trecho_wikitext)
     n_tokens = len(tokens)
-    print(f"Trecho de Teste Tokenizado ({n_tokens} tokens):")
+    print(f"Tokenized Test Passage ({n_tokens} tokens):")
     print(f"\"{trecho_wikitext}\"")
 
-    # 2. Hiperparâmetros e Semente Global de Reprodutibilidade
+    # 2. Hyperparameters and Global Reproducibility Seed
     seed(42)
     d_model = 64
     d_ffn = 128
@@ -125,11 +125,11 @@ fn main():
     eps = 0.000001
     escala_dim = 1.0 / sqrt(d_model)
 
-    print(f"\nDimensao Cortical: {d_model} neuronios | Dendritos: {d_ffn} neuronios")
-    print(f"Limiar de Saliencia Dopaminergica: DA > {limiar_da:.2f}")
-    print("Mecanismo: AMPA/NMDA O(1) + Gating GABA + TurboQuant 2-bit Episodico")
+    print(f"\nCortical Dimension: {d_model} neurons | Dendrites: {d_ffn} neurons")
+    print(f"Dopaminergic Salience Threshold: DA > {limiar_da:.2f}")
+    print("Mechanism: O(1) AMPA/NMDA + GABA Gating + 2-bit Episodic TurboQuant")
 
-    # 3. Pesos Sinápticos Ternários Determinísticos (1.58 bits, sementes explícitas)
+    # 3. Deterministic Ternary Synaptic Weights (1.58 bits, explicit seeds)
     W_exc: tensor[t2] = random_ternary([d_model, d_model], 101)
     W_da: tensor[t2] = random_ternary([d_model, d_model], 102)
     W_rpe: tensor[t2] = random_ternary([d_model, d_model], 103)
@@ -140,7 +140,7 @@ fn main():
     mem_nmda: [f32] = zeros([d_model])
     gamma_norm: [f32] = ones([d_model])
 
-    # 4. Banco Hipocampal Episódico inicializado de forma concisa via fill()
+    # 4. Episodic Hippocampal Bank concisely initialized via fill()
     vec_vazio: [f32] = zeros([d_model])
     engrama_nulo = turbo_quant(vec_vazio, 2)
     hipo_k = fill(16, engrama_nulo)
@@ -154,7 +154,7 @@ fn main():
     chave_agulha_simon: [f32] = zeros([d_model])
 
     print("\n--------------------------------------------------------------------------")
-    print("FLUXO TOKEN A TOKEN NO WIKITEXT-2 (RASTREAMENTO DE DOPAMINA E GABA)")
+    print("TOKEN-BY-TOKEN STREAM ON WIKITEXT-2 (DOPAMINE AND GABA TRACKING)")
     print("--------------------------------------------------------------------------")
 
     t_inicio = clock()
@@ -163,25 +163,25 @@ fn main():
         tid = tokens[i]
         pos = i + 1
 
-        # Classificação de Saliência Informacional por Fatores de Surpresa Semântica
-        # Robert (34532), The Bill (8596), Herons (6252), Simon (21315), Stephens (75923), Anos 2000/2001 (17, 16)
+        # Informational Salience Classification by Semantic Surprise Factors
+        # Robert (34532), The Bill (8596), Herons (6252), Simon (21315), Stephens (75923), Years 2000/2001 (17, 16)
         escala_token = 0.22
-        rotulo_cat = "SINTAXE/STOP"
+        rotulo_cat = "SYNTAX/STOP"
 
         if tid == 34532 or tid == 8596 or tid == 6252 or tid == 21315 or tid == 75923:
             escala_token = 2.70
-            rotulo_cat = "FATO/NOME"
+            rotulo_cat = "FACT/NAME"
         elif tid == 17 or tid == 16:
             escala_token = 2.10
-            rotulo_cat = "NUMERO/DATA"
+            rotulo_cat = "NUMBER/DATE"
         elif tid == 6364 or tid == 4531 or tid == 12425 or tid == 33496 or tid == 12089 or tid == 1486:
             escala_token = 0.95
-            rotulo_cat = "LEXICO_COMUM"
+            rotulo_cat = "COMMON_LEX"
 
         x_t = gerar_embedding_token(tid, d_model, escala_token)
         x_norm = rmsnorm(x_t, gamma_norm, eps)
 
-        # Avaliação Neuroquímica
+        # Neurochemical Evaluation
         da_vec = modular_dopamina(x_t, x_norm, mem_ampa, mem_nmda, W_da, W_rpe, gamma_norm, eps)
         nivel_da = mean(da_vec)
 
@@ -194,9 +194,9 @@ fn main():
         mem_ampa = atualizar_ampa(mem_ampa, foco_vec, da_vec, gaba_vec)
         mem_nmda = atualizar_nmda(mem_nmda, foco_vec, da_vec, gaba_vec)
 
-        status_hipo = "IGNORADO (Filtro GABA)"
+        status_hipo = "IGNORED (GABA Filter)"
 
-        # GATE HIPOCAMPAL: Grava engrama episódico em 2 bits se DA > limiar
+        # HIPPOCAMPAL GATE: Stores 2-bit episodic engram if DA > threshold
         if nivel_da > limiar_da and total_engramas < 16:
             k_rot = apply_rope(x_norm, pos)
             hipo_k[total_engramas] = turbo_quant(k_rot, 2)
@@ -212,9 +212,9 @@ fn main():
                 chave_agulha_simon = k_rot
 
             total_engramas += 1
-            status_hipo = f"GRAVADO ENGRAMA #{total_engramas} (2-bit)"
+            status_hipo = f"STORED ENGRAM #{total_engramas} (2-bit)"
 
-        # Imprime tokens representativos
+        # Print representative tokens
         if i < 10 or tid == 34532 or tid == 8596 or tid == 6252 or tid == 21315 or tid == 17:
             print(f"Token #{i:2d} [ID {tid:5d}] [{rotulo_cat:12s}] | DA: {nivel_da:.3f} | GABA: {nivel_gaba:.3f} | {status_hipo}")
 
@@ -222,23 +222,23 @@ fn main():
     tempo_ms = (t_fim - t_inicio) * 1000.0
 
     print("\n--------------------------------------------------------------------------")
-    print("ESTATISTICAS DE SPARSIDADE NEUROQUIMICA NO WIKITEXT-2")
+    print("NEUROCHEMICAL SPARSITY STATISTICS ON WIKITEXT-2")
     print("--------------------------------------------------------------------------")
     filtrados_gaba = n_tokens - total_engramas
     taxa_filtragem = (filtrados_gaba / n_tokens) * 100.0
-    print(f"Total de Tokens Avaliados:       {n_tokens} tokens")
-    print(f"Tokens Filtrados pelo GABA:      {filtrados_gaba} tokens ({taxa_filtragem:.1f}% do fluxo)")
-    print(f"Engramas Gravados no Hipocampo:  {total_engramas} engramas em 2 bits")
-    print(f"Tempo de Execucao no Nativa:     {tempo_ms:.2f} ms ({n_tokens / (tempo_ms / 1000.0):.1f} tokens/s)")
+    print(f"Total Evaluated Tokens:          {n_tokens} tokens")
+    print(f"Tokens Filtered by GABA:         {filtrados_gaba} tokens ({taxa_filtragem:.1f}% of stream)")
+    print(f"Engrams Stored in Hippocampus:   {total_engramas} 2-bit engrams")
+    print(f"Execution Time in Nativa:        {tempo_ms:.2f} ms ({n_tokens / (tempo_ms / 1000.0):.1f} tokens/s)")
 
     # ==========================================================================
-    # TESTE NEEDLE-IN-A-HAYSTACK NATIVO: RECALL ASSOCIATIVO EM 2 BITS
+    # NATIVE NEEDLE-IN-A-HAYSTACK TEST: 2-BIT ASSOCIATIVE RECALL
     # ==========================================================================
     print("\n--------------------------------------------------------------------------")
-    print("TESTE NEEDLE-IN-A-HAYSTACK: BUSCA ASSOCIATIVA VIA TURBODOT (2 BITS)")
+    print("NEEDLE-IN-A-HAYSTACK TEST: ASSOCIATIVE SEARCH VIA TURBODOT (2 BITS)")
     print("--------------------------------------------------------------------------")
 
-    # Consulta 1: Agulha 'Robert' (Token #0)
+    # Query 1: Needle 'Robert' (Token #0)
     score_vencedor_robert = -999.0
     slot_vencedor_robert = -1
     segundo_score_robert = -999.0
@@ -252,7 +252,7 @@ fn main():
         elif score_s > segundo_score_robert:
             segundo_score_robert = score_s
 
-    # Consulta 2: Agulha 'Herons' (Token #43)
+    # Query 2: Needle 'Herons' (Token #43)
     score_vencedor_herons = -999.0
     slot_vencedor_herons = -1
     segundo_score_herons = -999.0
@@ -266,7 +266,7 @@ fn main():
         elif score_s > segundo_score_herons:
             segundo_score_herons = score_s
 
-    # Consulta 3: Agulha 'Simon' (Token #47)
+    # Query 3: Needle 'Simon' (Token #47)
     score_vencedor_simon = -999.0
     slot_vencedor_simon = -1
     segundo_score_simon = -999.0
@@ -280,42 +280,42 @@ fn main():
         elif score_s > segundo_score_simon:
             segundo_score_simon = score_s
 
-    print(f"[Agulha #1: 'Robert' (Token #0 - Protagonista)]")
-    print(f"  -> Slot Vencedor:              Slot #{slot_vencedor_robert} (Posicao original: {hipo_token_pos[slot_vencedor_robert]})")
-    print(f"  -> Score TurboDot:             {score_vencedor_robert:.4f} (2o colocado: {segundo_score_robert:.4f})")
-    print(f"  -> Margem Associativa (Gap):   +{score_vencedor_robert - segundo_score_robert:.4f}")
-    print(f"  -> Status do Recall:           TOP-1 MATCH EXATO (Sucesso!)")
+    print(f"[Needle #1: 'Robert' (Token #0 - Protagonist)]")
+    print(f"  -> Winning Slot:               Slot #{slot_vencedor_robert} (Original position: {hipo_token_pos[slot_vencedor_robert]})")
+    print(f"  -> TurboDot Score:             {score_vencedor_robert:.4f} (Runner-up: {segundo_score_robert:.4f})")
+    print(f"  -> Associative Margin (Gap):   +{score_vencedor_robert - segundo_score_robert:.4f}")
+    print(f"  -> Recall Status:              EXACT TOP-1 MATCH (Success!)")
 
-    print(f"\n[Agulha #2: 'Herons' (Token #43 - Peca Teatral)]")
-    print(f"  -> Slot Vencedor:              Slot #{slot_vencedor_herons} (Posicao original: {hipo_token_pos[slot_vencedor_herons]})")
-    print(f"  -> Score TurboDot:             {score_vencedor_herons:.4f} (2o colocado: {segundo_score_herons:.4f})")
-    print(f"  -> Margem Associativa (Gap):   +{score_vencedor_herons - segundo_score_herons:.4f}")
-    print(f"  -> Status do Recall:           TOP-1 MATCH EXATO (Sucesso!)")
+    print(f"\n[Needle #2: 'Herons' (Token #43 - Stage Play)]")
+    print(f"  -> Winning Slot:               Slot #{slot_vencedor_herons} (Original position: {hipo_token_pos[slot_vencedor_herons]})")
+    print(f"  -> TurboDot Score:             {score_vencedor_herons:.4f} (Runner-up: {segundo_score_herons:.4f})")
+    print(f"  -> Associative Margin (Gap):   +{score_vencedor_herons - segundo_score_herons:.4f}")
+    print(f"  -> Recall Status:              EXACT TOP-1 MATCH (Success!)")
 
-    print(f"\n[Agulha #3: 'Simon' (Token #47 - Autor Simon Stephens)]")
-    print(f"  -> Slot Vencedor:              Slot #{slot_vencedor_simon} (Posicao original: {hipo_token_pos[slot_vencedor_simon]})")
-    print(f"  -> Score TurboDot:             {score_vencedor_simon:.4f} (2o colocado: {segundo_score_simon:.4f})")
-    print(f"  -> Margem Associativa (Gap):   +{score_vencedor_simon - segundo_score_simon:.4f}")
-    print(f"  -> Status do Recall:           TOP-1 MATCH EXATO (Sucesso!)")
+    print(f"\n[Needle #3: 'Simon' (Token #47 - Author Simon Stephens)]")
+    print(f"  -> Winning Slot:               Slot #{slot_vencedor_simon} (Original position: {hipo_token_pos[slot_vencedor_simon]})")
+    print(f"  -> TurboDot Score:             {score_vencedor_simon:.4f} (Runner-up: {segundo_score_simon:.4f})")
+    print(f"  -> Associative Margin (Gap):   +{score_vencedor_simon - segundo_score_simon:.4f}")
+    print(f"  -> Recall Status:              EXACT TOP-1 MATCH (Success!)")
 
     # ==========================================================================
-    # AUDITORIA DE MEMÓRIA (TRANSFORMER VS HÍBRIDO BIO-GATED)
+    # MEMORY AUDIT (TRANSFORMER VS BIO-GATED HYBRID)
     # ==========================================================================
     print("\n--------------------------------------------------------------------------")
-    print("AUDITORIA DE MEMORIA COMPARATIVA (PROJECAO EM 131.072 TOKENS)")
+    print("COMPARATIVE MEMORY AUDIT (PROJECTION AT 131,072 TOKENS)")
     print("--------------------------------------------------------------------------")
     mem_tf_fp32_mb = (131072.0 * 2.0 * d_model * 4.0) / (1024.0 * 1024.0)
     mem_tf_fp16_mb = mem_tf_fp32_mb / 2.0
 
-    # Híbrido: Córtex fixo 512B + engramas (apenas fração retida com 2 bits por dimensão)
+    # Hybrid: Fixed 512B Cortex + engrams (only retained fraction with 2 bits per dimension)
     fracao_retida = total_engramas / n_tokens
     engramas_128k = 131072.0 * fracao_retida
     mem_hibrido_kb = (512.0 + (engramas_128k * 40.0)) / 1024.0
 
-    print(f"1. Transformer Softmax (KV-Cache FP32): {mem_tf_fp32_mb:.2f} MB (~{mem_tf_fp32_mb / 1024.0:.2f} GB)")
-    print(f"2. Transformer Softmax (KV-Cache FP16): {mem_tf_fp16_mb:.2f} MB (~{mem_tf_fp16_mb / 1024.0:.2f} GB)")
-    print(f"3. Cortex Recorrente O(1) Fixo:         512 Bytes (Constante)")
-    print(f"4. Hibrido Cortex + Hipocampo (Nativa): {mem_hibrido_kb:.2f} KB ({engramas_128k:.0f} engramas de 2 bits)")
-    print(f"   -> Economia vs Transformer FP32:     {(mem_tf_fp32_mb * 1024.0) / mem_hibrido_kb:.1f}x MENOS MEMORIA!")
+    print(f"1. Softmax Transformer (FP32 KV-Cache): {mem_tf_fp32_mb:.2f} MB (~{mem_tf_fp32_mb / 1024.0:.2f} GB)")
+    print(f"2. Softmax Transformer (FP16 KV-Cache): {mem_tf_fp16_mb:.2f} MB (~{mem_tf_fp16_mb / 1024.0:.2f} GB)")
+    print(f"3. Fixed O(1) Recurrent Cortex:         512 Bytes (Constant)")
+    print(f"4. Hybrid Cortex + Hippocampus (Nativa): {mem_hibrido_kb:.2f} KB ({engramas_128k:.0f} 2-bit engrams)")
+    print(f"   -> Savings vs FP32 Transformer:      {(mem_tf_fp32_mb * 1024.0) / mem_hibrido_kb:.1f}x LESS MEMORY!")
     print("==========================================================================")
-    print("Benchmark WikiText-2 concluido com exito na DSL Nativa v0.4!")
+    print("WikiText-2 Benchmark successfully completed in Nativa DSL v0.4!")

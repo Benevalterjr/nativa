@@ -1,44 +1,44 @@
 # safetensors_demo.nat
-# Demonstração de interoperabilidade SafeTensors + Computação Ternária na Linguagem Nativa
+# Demonstration of SafeTensors interoperability + Ternary Computing in Nativa
 
 fn main():
     arquivo = "pesos_llama.safetensors"
     nome_camada = "model.layers.0.mlp.gate_proj.weight"
 
-    print("=== 1. Exportando pesos de IA para SafeTensors ===")
-    # Matriz de pesos simulando uma camada densa de projeção
+    print("=== 1. Exporting AI weights to SafeTensors ===")
+    # Weight matrix simulating a dense projection layer
     pesos_originais: tensor[f32] = [
         [ 0.85, -0.12,  0.03,  1.42],
         [-0.95,  0.64, -0.05, -0.81],
         [ 0.08, -1.15,  0.92, -0.02]
     ]
     save_safetensors(arquivo, nome_camada, pesos_originais)
-    print(f"Pesos salvos com sucesso no arquivo '{arquivo}'!")
+    print(f"Weights successfully saved to file '{arquivo}'!")
 
-    print("\n=== 2. Inspecionando metadados do SafeTensors ===")
+    print("\n=== 2. Inspecting SafeTensors metadata ===")
     chaves = safetensors_keys(arquivo)
-    print(f"Tensores encontrados no arquivo: {chaves}")
+    print(f"Tensors found in file: {chaves}")
 
-    print("\n=== 3. Carregando tensor do SafeTensors ===")
+    print("\n=== 3. Loading tensor from SafeTensors ===")
     W_carregado = load_safetensors(arquivo, nome_camada)
-    print(f"Tensor carregado: {W_carregado}")
-    print(f"Shape do tensor: {shape(W_carregado)}")
+    print(f"Loaded tensor: {W_carregado}")
+    print(f"Tensor shape: {shape(W_carregado)}")
 
-    print("\n=== 4. Quantização para 1.58 bits (BitNet b1.58) ===")
-    # Converte os pesos contínuos em pesos ternários {-1, 0, +1}
+    print("\n=== 4. Quantization to 1.58 bits (BitNet b1.58) ===")
+    # Converts continuous weights into ternary weights {-1, 0, +1}
     W_t2: tensor[t2] = quantize_ternary(W_carregado, 0.5)
-    print(f"Matriz de pesos ternários {{-1, 0, +1}}:\n{W_t2}")
+    print(f"Ternary weight matrix {{-1, 0, +1}}:\n{W_t2}")
 
-    print("\n=== 5. Inferência Add-Only GEMM (Sem Multiplicações) ===")
-    # Ativações de entrada contínuas
+    print("\n=== 5. Add-Only GEMM Inference (Multiplication-Free) ===")
+    # Continuous input activations
     x: [f32] = [1.2, -0.8, 2.0, 0.5]
     y = W_t2 @ x
-    print(f"Vetor de entrada x: {x}")
-    print(f"Saída da projeção y = W @ x: {y}")
+    print(f"Input vector x: {x}")
+    print(f"Projection output y = W @ x: {y}")
 
-    print("\n=== 6. Compactação de Memória (Bit Packing: 4 trits/byte) ===")
+    print("\n=== 6. Memory Packing (Bit Packing: 4 trits/byte) ===")
     compactado = pack_ternary(W_t2)
     descompactado = unpack_ternary(compactado, len(W_t2) * 4)
-    print(f"Bytes compactados: {compactado}")
-    print(f"Trits reconstruídos: {descompactado}")
-    print("\n[OK] Pipeline SafeTensors -> BitNet 1.58-bit executado com maestria!")
+    print(f"Packed bytes: {compactado}")
+    print(f"Reconstructed trits: {descompactado}")
+    print("\n[OK] SafeTensors -> BitNet 1.58-bit pipeline executed seamlessly!")

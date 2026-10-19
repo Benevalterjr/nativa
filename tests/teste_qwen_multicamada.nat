@@ -1,29 +1,29 @@
 # tests/teste_qwen_multicamada.nat
-# Execucao sequencial de multiplas camadas reais do Qwen2.5-0.5B no Nativa v0.3
+# Sequential execution of multiple real layers of Qwen2.5-0.5B in Nativa v0.3
 
 fn main():
     print("==========================================================================")
-    print("  NATIVA v0.3: PIPELINE MULTI-CAMADA DO QWEN2.5-0.5B (ALIBABA CLOUD)")
-    print("  Execucao de Multiplas Camadas Consecutivas em Loop (Camada 0 -> Camada 1)")
+    print("  NATIVA v0.3: MULTI-LAYER PIPELINE OF QWEN2.5-0.5B (ALIBABA CLOUD)")
+    print("  Execution of Multiple Consecutive Layers in a Loop (Layer 0 -> Layer 1)")
     print("==========================================================================")
 
     arquivo = "qwen2.5_2camadas.safetensors"
     chaves = safetensors_keys(arquivo)
-    print(f"\n[*] Arquivo carregado com {len(chaves)} tensores reais do Qwen!")
+    print(f"\n[*] File loaded with {len(chaves)} real Qwen tensors!")
 
     num_layers = 2
     d_model = 896
 
-    # Vetor de ativacao inicial simulando o embedding
+    # Initial activation vector simulating the embedding
     x = randn([d_model]) * 0.1
-    print(f"[*] Vetor de ativacao inicial: shape = {shape(x)}")
+    print(f"[*] Initial activation vector: shape = {shape(x)}")
 
     t_inicio = clock()
 
     for l in 0..num_layers:
-        print(f"\n[+] Executando Camada {l} do Qwen...")
+        print(f"\n[+] Running Qwen Layer {l}...")
 
-        # 1. Carregar pesos reais da camada l
+        # 1. Load real weights of layer l
         t_load_s = clock()
         norm_w = load_safetensors(arquivo, f"model.layers.{l}.input_layernorm.weight")
         W_gate = load_safetensors(arquivo, f"model.layers.{l}.mlp.gate_proj.weight")
@@ -31,7 +31,7 @@ fn main():
         W_down = load_safetensors(arquivo, f"model.layers.{l}.mlp.down_proj.weight")
         t_load = clock() - t_load_s
 
-        # 2. Forward SwiGLU MLP com Conexao Residual: x = x + MLP(RMSNorm(x))
+        # 2. SwiGLU MLP Forward with Residual Connection: x = x + MLP(RMSNorm(x))
         t_fwd_s = clock()
         xn = rmsnorm(x, norm_w)
         gate = W_gate @ xn
@@ -39,19 +39,19 @@ fn main():
         h    = silu(gate) * up
         mlp_out = W_down @ h
 
-        # Conexao Residual que alimenta a proxima camada
+        # Residual Connection that feeds the next layer
         x = x + mlp_out
         t_fwd = clock() - t_fwd_s
 
-        print(f"    - Carregamento dos tensores da camada {l}: {t_load * 1000.0:.2f} ms")
-        print(f"    - Forward pass SwiGLU da camada {l}:      {t_fwd * 1000.0:.2f} ms")
-        print(f"    - Vetor propagado para a proxima camada:   shape = {shape(x)}")
+        print(f"    - Tensor loading for layer {l}:        {t_load * 1000.0:.2f} ms")
+        print(f"    - SwiGLU forward pass for layer {l}:   {t_fwd * 1000.0:.2f} ms")
+        print(f"    - Vector propagated to next layer:   shape = {shape(x)}")
 
     t_total = clock() - t_inicio
-    print(f"\n[OK] Pipeline de {num_layers} camadas concluido com sucesso em {t_total * 1000.0:.2f} ms!")
-    print(f"     Media por camada: {t_total * 1000.0 / to_f64(num_layers):.2f} ms/camada")
+    print(f"\n[OK] Pipeline of {num_layers} layers completed successfully in {t_total * 1000.0:.2f} ms!")
+    print(f"     Average per layer: {t_total * 1000.0 / to_f64(num_layers):.2f} ms/layer")
 
     print("\n==========================================================================")
-    print("  CONCLUSAO: O NATIVA EXECUTA QUALQUER NUMERO DE CAMADAS DO QWEN!")
-    print("  Pode rodar 2, 4, 12 ou todas as 24 camadas em loop encadeado!")
+    print("  CONCLUSION: NATIVA EXECUTES ANY NUMBER OF QWEN LAYERS!")
+    print("  Can run 2, 4, 12, or all 24 layers in a chained loop!")
     print("==========================================================================")

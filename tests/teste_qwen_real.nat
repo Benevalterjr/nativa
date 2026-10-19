@@ -1,28 +1,28 @@
 # tests/teste_qwen_real.nat
-# Validacao completa: Carregamento de Pesos Reais do Qwen2.5-0.5B (Alibaba Cloud)
-# e Execucao da Camada Transformer no Nativa v0.3 com BitNet b1.58
+# Complete validation: Loading Real Weights of Qwen2.5-0.5B (Alibaba Cloud)
+# and Executing the Transformer Layer in Nativa v0.3 with BitNet b1.58
 
 fn main():
     print("==========================================================================")
-    print("  NATIVA v0.3: INFERENCIA DE PESOS REAIS DO QWEN2.5-0.5B (ALIBABA CLOUD)")
-    print("  Arquivo: data/qwen2.5_camada0.safetensors (BFloat16 -> FP32 / BitNet)")
+    print("  NATIVA v0.3: INFERENCE OF REAL QWEN2.5-0.5B WEIGHTS (ALIBABA CLOUD)")
+    print("  File: data/qwen2.5_camada0.safetensors (BFloat16 -> FP32 / BitNet)")
     print("==========================================================================")
 
     arquivo = "qwen2.5_camada0.safetensors"
 
-    # 1. Inspecionar chaves do arquivo SafeTensors real do Qwen
-    print("\n[1] Lendo cabecalho SafeTensors oficial do Qwen2.5:")
+    # 1. Inspect keys of the real Qwen SafeTensors file
+    print("\n[1] Reading official Qwen2.5 SafeTensors header:")
     t_inicio = clock()
     chaves = safetensors_keys(arquivo)
     t_chaves = clock() - t_inicio
-    print(f"    Cabecalho lido em {t_chaves * 1000.0:.2f} ms!")
-    print(f"    Total de tensores na Camada 0: {len(chaves)}")
+    print(f"    Header read in {t_chaves * 1000.0:.2f} ms!")
+    print(f"    Total tensors in Layer 0: {len(chaves)}")
 
     for i in 0..len(chaves):
         print(f"      - {chaves[i]}")
 
-    # 2. Carregar Tensores Reais da Camada 0 (Atenção e MLP)
-    print("\n[2] Carregando tensores reais da Camada 0:")
+    # 2. Load Real Tensors from Layer 0 (Attention and MLP)
+    print("\n[2] Loading real tensors from Layer 0:")
 
     t1 = clock()
     norm_w = load_safetensors(arquivo, "model.layers.0.input_layernorm.weight")
@@ -33,36 +33,36 @@ fn main():
     W_down = load_safetensors(arquivo, "model.layers.0.mlp.down_proj.weight")
     t2 = clock()
 
-    print(f"    Tensores decodificados em {t2 - t1:.3f}s!")
+    print(f"    Tensors decoded in {t2 - t1:.3f}s!")
     print(f"    - Input RMSNorm:  {shape(norm_w)}")
     print(f"    - Self-Attn Q:    {shape(W_q)} (bias: {shape(b_q)})")
     print(f"    - MLP Gate:       {shape(W_gate)}")
     print(f"    - MLP Up:         {shape(W_up)}")
     print(f"    - MLP Down:       {shape(W_down)}")
 
-    # 3. Execucao do Forward Pass Real em FP32 (SwiGLU MLP do Qwen)
-    print("\n[3] Executando SwiGLU MLP Real do Qwen em FP32:")
+    # 3. Execute Real Forward Pass in FP32 (Qwen SwiGLU MLP)
+    print("\n[3] Running Real Qwen SwiGLU MLP in FP32:")
     d_model = 896
     x = randn([d_model]) * 0.1
 
     t_fp32_s = clock()
     xn = rmsnorm(x, norm_w)
 
-    # No Qwen: gate_proj e up_proj mapeiam d_model (896) -> intermediate (4864)
-    # W_gate tem shape [4864, 896]. A projecao e W_gate @ xn
+    # In Qwen: gate_proj and up_proj map d_model (896) -> intermediate (4864)
+    # W_gate has shape [4864, 896]. Projection is W_gate @ xn
     gate_fp32 = W_gate @ xn
     up_fp32   = W_up @ xn
     h_fp32    = silu(gate_fp32) * up_fp32
 
-    # Down proj mapeia intermediate (4864) -> d_model (896)
+    # Down proj maps intermediate (4864) -> d_model (896)
     out_mlp_fp32 = W_down @ h_fp32
     t_fp32 = clock() - t_fp32_s
 
-    print(f"    Tempo SwiGLU FP32: {t_fp32 * 1000.0:.2f} ms")
-    print(f"    Shape da saida MLP: {shape(out_mlp_fp32)}")
+    print(f"    SwiGLU FP32 time:  {t_fp32 * 1000.0:.2f} ms")
+    print(f"    MLP output shape:  {shape(out_mlp_fp32)}")
 
-    # 4. Quantizacao BitNet b1.58 Canônica dos Pesos do Qwen
-    print("\n[4] Quantizando Pesos Reais do Qwen para BitNet b1.58 (AbsMean + 5-trits):")
+    # 4. Canonical BitNet b1.58 Quantization of Qwen Weights
+    print("\n[4] Quantizing Real Qwen Weights to BitNet b1.58 (AbsMean + 5-trits):")
     t_q_s = clock()
 
     gamma_gate = tensor_absmean(W_gate)
@@ -73,7 +73,7 @@ fn main():
     W_up_t   = quantize_bitnet(W_up)
     W_down_t = quantize_bitnet(W_down)
 
-    # Empacotamento em 5 trits por byte (1.6 bits/peso)
+    # Packing into 5 trits per byte (1.6 bits/weight)
     W_gate_p = pack_ternary_5trits(W_gate_t)
     W_up_p   = pack_ternary_5trits(W_up_t)
     W_down_p = pack_ternary_5trits(W_down_t)
@@ -81,12 +81,12 @@ fn main():
 
     mb_original = to_f64((4864 * 896 * 2 + 896 * 4864) * 2) / (1024.0 * 1024.0)
     mb_bitnet   = to_f64(len(W_gate_p) + len(W_up_p) + len(W_down_p)) / (1024.0 * 1024.0)
-    print(f"    3 matrizes MLP quantizadas e compactadas em {t_q * 1000.0:.2f} ms")
-    print(f"    Memoria dos pesos MLP: {mb_original:.2f} MB (BF16) -> {mb_bitnet:.2f} MB (BitNet 5-trits)!")
-    print(f"    Taxa de compressao:    {mb_original / mb_bitnet:.1f}x menor!")
+    print(f"    3 MLP matrices quantized and packed in {t_q * 1000.0:.2f} ms")
+    print(f"    MLP weights memory: {mb_original:.2f} MB (BF16) -> {mb_bitnet:.2f} MB (BitNet 5-trits)!")
+    print(f"    Compression ratio:  {mb_original / mb_bitnet:.1f}x smaller!")
 
-    # 5. Execucao SwiGLU com Kernel Add-Only Ternario (BitNet)
-    print("\n[5] Executando SwiGLU do Qwen com Kernels Add-Only AOT:")
+    # 5. SwiGLU Execution with Add-Only Ternary Kernel (BitNet)
+    print("\n[5] Running Qwen SwiGLU with Add-Only AOT Kernels:")
     t_bit_s = clock()
     gate_t = (W_gate_t @ xn) * gamma_gate
     up_t   = (W_up_t @ xn) * gamma_up
@@ -94,21 +94,21 @@ fn main():
     out_mlp_bitnet = (W_down_t @ h_t) * gamma_down
     t_bit = clock() - t_bit_s
 
-    print(f"    Tempo SwiGLU BitNet:   {t_bit * 1000.0:.2f} ms")
+    print(f"    SwiGLU BitNet time:    {t_bit * 1000.0:.2f} ms")
 
-    # 6. Prova de Fidelidade Numérica contra o Qwen Original
-    print("\n[6] Prova de Fidelidade Numerica (Qwen BitNet vs Qwen FP32):")
+    # 6. Numerical Fidelity Proof against Original Qwen
+    print("\n[6] Numerical Fidelity Proof (Qwen BitNet vs Qwen FP32):")
     r_corr = pearson_corr(out_mlp_fp32, out_mlp_bitnet)
     c_sim  = cosine_sim(out_mlp_fp32, out_mlp_bitnet)
     err_l2 = relative_error(out_mlp_fp32, out_mlp_bitnet)
 
-    print(f"    - Correlacao de Pearson: {r_corr:.6f}  (altissima correlacao!)")
-    print(f"    - Similaridade de Cosseno: {c_sim:.6f}")
-    print(f"    - Erro Relativo L2:        {err_l2 * 100.0:.2f}%")
+    print(f"    - Pearson Correlation: {r_corr:.6f}  (extremely high correlation!)")
+    print(f"    - Cosine Similarity:   {c_sim:.6f}")
+    print(f"    - L2 Relative Error:   {err_l2 * 100.0:.2f}%")
 
     print("\n==========================================================================")
-    print("  CONCLUSAO: O NATIVA CARREGA E EXECUTA SAFETENSORS DO QWEN COM SUCESSO!")
-    print("  - Leitura nativa de BFloat16 do Qwen oficial da Alibaba Cloud")
-    print("  - Compressao de 10x via BitNet b1.58 mantendo a estrutura SwiGLU")
-    print("  - Execucao ultrarrapida em CPU com kernels C OpenMP Add-Only")
+    print("  CONCLUSION: NATIVA LOADS AND EXECUTES QWEN SAFETENSORS SUCCESSFULLY!")
+    print("  - Native BFloat16 reading from official Alibaba Cloud Qwen")
+    print("  - 10x compression via BitNet b1.58 while preserving SwiGLU structure")
+    print("  - Ultra-fast CPU execution with Add-Only OpenMP C kernels")
     print("==========================================================================")

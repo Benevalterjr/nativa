@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """
 tools/teste_geracao_qwen.py
-Demonstracao de geracao de texto comparando Qwen2.5-0.5B:
-1. Original (Pesos BF16/FP32 oficiais da Alibaba)
-2. BitNet b1.58 (Pesos quantizados para {-1, 0, 1} com AbsMean Scaling)
+Text generation demonstration comparing Qwen2.5-0.5B:
+1. Original (Official BF16/FP32 weights from Alibaba)
+2. BitNet b1.58 (Weights quantized to {-1, 0, 1} with AbsMean Scaling)
 """
 
 import os
@@ -68,35 +68,35 @@ def run_test():
     tok_path = os.path.join("data", "tokenizer_qwen.json")
 
     if not os.path.exists(model_path):
-        print(f"Erro: {model_path} nao encontrado.")
+        print(f"Error: {model_path} not found.")
         return
 
     print("==========================================================================")
-    print("  TESTE DE GERACAO DE TEXTO: QWEN2.5-0.5B (FP32 vs BITNET b1.58)")
+    print("  TEXT GENERATION TEST: QWEN2.5-0.5B (FP32 vs BITNET b1.58)")
     print("==========================================================================")
 
-    # 1. Carregar Tokenizer
+    # 1. Load Tokenizer
     tok = Tokenizer(tok_path)
-    prompt = "A capital do Brasil é"
+    prompt = "The capital of Brazil is"
     prompt_tokens = tok.encode(prompt).tolist()
     print(f"[*] Prompt: \"{prompt}\"")
     print(f"[*] Tokens: {prompt_tokens}")
 
-    # 2. Carregar Cabecalho SafeTensors
+    # 2. Load SafeTensors Header
     f = open(model_path, "rb")
     header, hdr_len = load_qwen_header(model_path)
 
-    # Carregar Embeddings e Final Norm
-    print("[*] Carregando Embeddings e Final Norm...")
+    # Load Embeddings and Final Norm
+    print("[*] Loading Embeddings and Final Norm...")
     t0 = time.time()
     embed_table = load_tensor(f, header, hdr_len, "model.embed_tokens.weight")
     final_norm = load_tensor(f, header, hdr_len, "model.norm.weight")
-    print(f"    Carregado em {time.time() - t0:.2f}s! Embeddings shape: {embed_table.shape}")
+    print(f"    Loaded in {time.time() - t0:.2f}s! Embeddings shape: {embed_table.shape}")
 
-    # Para demonstrar rapido e sem estourar memoria, vamos usar 4 camadas ou 24 camadas
-    # Vamos verificar quantas camadas queremos testar:
-    num_layers = 4  # Teste rapido com 4 camadas reais
-    print(f"[*] Carregando e quantizando {num_layers} camadas para BitNet b1.58...")
+    # For a quick demo without running out of memory, we will use 4 layers or 24 layers
+    # Check how many layers we want to test:
+    num_layers = 4  # Fast test with 4 real layers
+    print(f"[*] Loading and quantizing {num_layers} layers to BitNet b1.58...")
 
     layers_fp32 = []
     layers_bitnet = []
@@ -118,7 +118,7 @@ def run_test():
         }
         layers_fp32.append(l_dict)
 
-        # Quantizacao BitNet b1.58
+        # BitNet b1.58 Quantization
         W_q_t, g_q = quantize_bitnet(l_dict["W_q"])
         W_k_t, g_k = quantize_bitnet(l_dict["W_k"])
         W_v_t, g_v = quantize_bitnet(l_dict["W_v"])
@@ -141,9 +141,9 @@ def run_test():
         layers_bitnet.append(l_bit)
 
     f.close()
-    print(f"[OK] {num_layers} camadas carregadas e quantizadas!")
+    print(f"[OK] {num_layers} layers loaded and quantized!")
 
-    # Funcao de Forward Pass para 1 token
+    # Forward Pass function for 1 token
     def forward_token(token_id, layers, is_bitnet, pos, kv_caches):
         x = embed_table[token_id].copy()
 
@@ -159,7 +159,7 @@ def run_test():
                 k = (l["W_k"] @ xn) + l["b_k"]
                 v = (l["W_v"] @ xn) + l["b_v"]
 
-            # Aplicar RoPE em cada cabeca (dim_head = 64)
+            # Apply RoPE to each head (dim_head = 64)
             q_heads = []
             for h in range(14):
                 qh = q[h * 64 : (h + 1) * 64]
@@ -172,12 +172,12 @@ def run_test():
                 k_heads.append(apply_rope(kh_vec, pos))
             k_rot = np.concatenate(k_heads)
 
-            # Atualizar KV Cache da camada
+            # Update layer KV Cache
             k_cache, v_cache = kv_caches[l_idx]
             k_cache.append(k_rot)
             v_cache.append(v)
 
-            # Atencao GQA (14 Query heads, 2 KV heads -> 7 Q heads por KV head)
+            # GQA Attention (14 Query heads, 2 KV heads -> 7 Q heads per KV head)
             k_mat = np.array(k_cache) # [seq_len, 128]
             v_mat = np.array(v_cache) # [seq_len, 128]
 
@@ -223,7 +223,7 @@ def run_test():
         return logits
 
     def generate(layers, is_bitnet, name, max_tokens=10):
-        print(f"\n--- Iniciando Geracao com {name} ---")
+        print(f"\n--- Starting Generation with {name} ---")
         kv_caches = [[[], []] for _ in range(num_layers)]
 
         # Prefill prompt
@@ -231,7 +231,7 @@ def run_test():
         for idx, tok_id in enumerate(prompt_tokens):
             logits = forward_token(tok_id, layers, is_bitnet, idx, kv_caches)
 
-        # Gerar novos tokens
+        # Generate new tokens
         generated = []
         curr_token = int(np.argmax(logits))
         generated.append(curr_token)
@@ -244,20 +244,20 @@ def run_test():
 
         total_time = time.time() - t_start
         text = tok.decode(generated)
-        print(f"Tokens gerados ({name}): {generated}")
-        print(f"Texto gerado: \"{text}\"")
-        print(f"Velocidade: {max_tokens / total_time:.2f} tokens/s (Tempo total: {total_time:.2f}s)")
+        print(f"Tokens generated ({name}): {generated}")
+        print(f"Generated text: \"{text}\"")
+        print(f"Speed: {max_tokens / total_time:.2f} tokens/s (Total time: {total_time:.2f}s)")
         return generated, text
 
-    gen_fp32, text_fp32 = generate(layers_fp32, False, "Qwen Original (FP32)")
-    gen_bit, text_bit = generate(layers_bitnet, True, "Qwen BitNet b1.58 (Ternário)")
+    gen_fp32, text_fp32 = generate(layers_fp32, False, "Original Qwen (FP32)")
+    gen_bit, text_bit = generate(layers_bitnet, True, "Qwen BitNet b1.58 (Ternary)")
 
     print("\n==========================================================================")
-    print("  COMPARATIVO FINAL DE RESULTADOS")
+    print("  FINAL RESULTS COMPARISON")
     print("==========================================================================")
-    print(f"Prompt Original:        \"{prompt}\"")
-    print(f"Continuacao FP32:       \"{text_fp32}\"")
-    print(f"Continuacao BitNet 1.58:\"{text_bit}\"")
+    print(f"Original Prompt:          \"{prompt}\"")
+    print(f"FP32 Continuation:        \"{text_fp32}\"")
+    print(f"BitNet 1.58 Continuation: \"{text_bit}\"")
     print("==========================================================================")
 
 if __name__ == "__main__":

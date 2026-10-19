@@ -1,15 +1,15 @@
 #!/usr/bin/env python3
 """
-tools/nativa_benchmark.py — Suíte Oficial de Benchmarks do Ecossistema Nativa
+tools/nativa_benchmark.py — Official Benchmark Suite for the Nativa Ecosystem
 Bilingual Benchmark Suite for Nativa Engine (INT4 Q4x4 C99 Runtime).
 
-Avalia:
-  1. Perplexidade (PPL) e NLL no split canônico WikiText-2.
-  2. Throughput de inferência (prefill vs decode) e latência TTFT em 1, 2, 4 e 8 threads.
-  3. Footprint de recursos (tamanho de binário <500KB vs ~35MB llama.cpp, RAM RSS de pico, mmap cold-load).
-  4. Avaliação qualitativa bilíngue zero-shot (Raciocínio, Matemática, Programação em PT e EN).
+Evaluates:
+  1. Perplexity (PPL) and NLL on the canonical WikiText-2 split.
+  2. Inference throughput (prefill vs decode) and TTFT latency across 1, 2, 4, and 8 threads.
+  3. Resource footprint (<500KB binary size vs ~35MB llama.cpp, peak RSS RAM, mmap cold-load).
+  4. Zero-shot bilingual qualitative evaluation (Reasoning, Mathematics, Coding in PT and EN).
 
-Zero dependências externas: Python puro (ctypes/subprocess/os/sys) + numpy + nativa.
+Zero external dependencies: pure Python (ctypes/subprocess/os/sys) + numpy + nativa.
 """
 
 from __future__ import annotations
@@ -36,11 +36,11 @@ from tools.chat_natq4 import write_vocab_file
 
 
 # ----------------------------------------------------------------------------
-# 1. Utilidades de Monitoramento de Memória (Zero Dependências Externas)
+# 1. Memory Monitoring Utilities (Zero External Dependencies)
 # ----------------------------------------------------------------------------
 
 def get_peak_rss_bytes(pid: int) -> int:
-    """Retorna o pico de consumo de memória física (Peak Working Set / RSS) em bytes."""
+    """Returns peak physical memory consumption (Peak Working Set / RSS) in bytes."""
     if sys.platform == "win32":
         try:
             from ctypes import wintypes
@@ -82,7 +82,7 @@ def get_peak_rss_bytes(pid: int) -> int:
             with open(f"/proc/{pid}/status", "r", encoding="utf-8") as f:
                 for line in f:
                     if line.startswith("VmHWM:"):
-                        # VmHWM: Peak resident set size ("high water mark") em kB
+                        # VmHWM: Peak resident set size ("high water mark") in kB
                         parts = line.split()
                         if len(parts) >= 2:
                             return int(parts[1]) * 1024
@@ -92,7 +92,7 @@ def get_peak_rss_bytes(pid: int) -> int:
 
 
 def strip_ansi(text: str) -> str:
-    """Remove códigos de escape ANSI do terminal."""
+    """Removes terminal ANSI escape codes."""
     return re.sub(r"\x1b\[[0-9;]*[a-zA-Z]", "", text)
 
 
@@ -101,22 +101,22 @@ def validate_safe_path(
     must_exist: bool = True,
     allowed_exts: Optional[Tuple[str, ...]] = None
 ) -> str:
-    """Valida e sanitiza caminhos contra Path Traversal e Injeção de Argumentos (CWE-78/CWE-88/CWE-22)."""
+    """Validates and sanitizes paths against Path Traversal and Argument Injection (CWE-78/CWE-88/CWE-22)."""
     if not path or not isinstance(path, str):
-        raise ValueError("Caminho inválido ou nulo.")
+        raise ValueError("Invalid or null path.")
     cleaned = path.strip()
     if cleaned.startswith("-"):
-        raise ValueError(f"Argumento com formato de flag detectado como caminho: {path}")
+        raise ValueError(f"Flag-formatted argument detected as path: {path}")
     if any(c in cleaned for c in ("\0", "\r", "\n")):
-        raise ValueError("Caminho contém caracteres de controle ilegais.")
+        raise ValueError("Path contains illegal control characters.")
 
     resolved = os.path.abspath(os.path.realpath(cleaned))
     if allowed_exts:
         valid_ext = any(resolved.lower().endswith(ext.lower()) for ext in allowed_exts)
         if not valid_ext:
-            raise ValueError(f"Extensão do arquivo não permitida: {resolved} (permitidas: {allowed_exts})")
+            raise ValueError(f"File extension not allowed: {resolved} (allowed: {allowed_exts})")
     if must_exist and not os.path.isfile(resolved):
-        raise FileNotFoundError(f"Arquivo não encontrado ou inválido: {resolved}")
+        raise FileNotFoundError(f"File not found or invalid: {resolved}")
     return resolved
 
 
@@ -124,20 +124,20 @@ def validate_safe_output_path(
     path: str,
     allowed_exts: Optional[Tuple[str, ...]] = None
 ) -> str:
-    """Valida caminho de saída contra Path Traversal e caracteres ilegais (CWE-22)."""
+    """Validates output path against Path Traversal and illegal characters (CWE-22)."""
     if not path or not isinstance(path, str):
-        raise ValueError("Caminho de saída inválido ou nulo.")
+        raise ValueError("Invalid or null output path.")
     cleaned = path.strip()
     if cleaned.startswith("-"):
-        raise ValueError(f"Argumento com formato de flag detectado como caminho de saída: {path}")
+        raise ValueError(f"Flag-formatted argument detected as output path: {path}")
     if any(c in cleaned for c in ("\0", "\r", "\n")):
-        raise ValueError("Caminho de saída contém caracteres de controle ilegais.")
+        raise ValueError("Output path contains illegal control characters.")
 
     resolved = os.path.abspath(os.path.realpath(cleaned))
     if allowed_exts:
         valid_ext = any(resolved.lower().endswith(ext.lower()) for ext in allowed_exts)
         if not valid_ext:
-            raise ValueError(f"Extensão do arquivo de saída não permitida: {resolved} (permitidas: {allowed_exts})")
+            raise ValueError(f"Output file extension not allowed: {resolved} (allowed: {allowed_exts})")
     parent = os.path.dirname(resolved)
     if parent and not os.path.exists(parent):
         os.makedirs(parent, exist_ok=True)  # NOSONAR(pythonsecurity:S8707)
@@ -145,7 +145,7 @@ def validate_safe_output_path(
 
 
 # ----------------------------------------------------------------------------
-# 2. Informações de Hardware e Ambiente
+# 2. Hardware and Environment Information
 # ----------------------------------------------------------------------------
 
 def get_system_specs(engine_path: str, model_path: str) -> Dict[str, Any]:
@@ -161,26 +161,26 @@ def get_system_specs(engine_path: str, model_path: str) -> Dict[str, Any]:
         "model_size_bytes": os.path.getsize(safe_model) if os.path.isfile(safe_model) else 0,
     }
 
-    # Executa o engine com --bench 1 para extrair a detecção de CPU do próprio binário com shell=False
+    # Runs the engine with --bench 1 to extract CPU detection from the binary itself with shell=False
     try:
         res = subprocess.run([safe_engine, safe_model, "--bench", "1"], capture_output=True, text=True, encoding="utf-8", shell=False)  # NOSONAR(pythonsecurity:S8701)
         clean_out = strip_ansi(res.stdout)
-        m_proc = re.search(r"Processador\s*:\s*(.+)", clean_out)
+        m_proc = re.search(r"(?:Processador|Processor)\s*:\s*(.+)", clean_out)
         if m_proc:
             specs["cpu_name"] = m_proc.group(1).strip()
-        m_rec = re.search(r"Recursos\s*:\s*(.+)", clean_out)
+        m_rec = re.search(r"(?:Recursos|Features)\s*:\s*(.+)", clean_out)
         if m_rec:
             specs["cpu_features"] = m_rec.group(1).strip()
-        m_dim = re.search(r"Dimensao\s*:\s*(\d+)\s*\|\s*Intermediaria:\s*(\d+)", clean_out)
+        m_dim = re.search(r"(?:Dimensao|Dimension)\s*:\s*(\d+)\s*\|\s*(?:Intermediaria|Intermediate):\s*(\d+)", clean_out)
         if m_dim:
             specs["dim"] = int(m_dim.group(1))
             specs["intermediate_dim"] = int(m_dim.group(2))
-        m_lay = re.search(r"Camadas\s*:\s*(\d+)\s*\|\s*Cabecas:\s*(\d+)\s*Q\s*/\s*(\d+)\s*KV", clean_out)
+        m_lay = re.search(r"(?:Camadas|Layers)\s*:\s*(\d+)\s*\|\s*(?:Cabecas|Heads):\s*(\d+)\s*Q\s*/\s*(\d+)\s*KV", clean_out)
         if m_lay:
             specs["layers"] = int(m_lay.group(1))
             specs["q_heads"] = int(m_lay.group(2))
             specs["kv_heads"] = int(m_lay.group(3))
-        m_ctx = re.search(r"Contexto Max:\s*(\d+)", clean_out)
+        m_ctx = re.search(r"(?:Contexto Max|Max Context):\s*(\d+)", clean_out)
         if m_ctx:
             specs["max_seq_len"] = int(m_ctx.group(1))
     except Exception:
@@ -190,7 +190,7 @@ def get_system_specs(engine_path: str, model_path: str) -> Dict[str, Any]:
 
 
 # ----------------------------------------------------------------------------
-# 3. Benchmark de Escalabilidade de Threads e Throughput (tok/s & TTFT)
+# 3. Thread Scaling and Throughput Benchmark (tok/s & TTFT)
 # ----------------------------------------------------------------------------
 
 def run_thread_scaling_benchmark(
@@ -204,10 +204,10 @@ def run_thread_scaling_benchmark(
     safe_bench_tokens = max(1, min(int(bench_tokens), 65536))
 
     print("\n" + "=" * 76)
-    print("  [1/4] BENCHMARK DE ESCALABILIDADE DE THREADS E THROUGHPUT")
+    print("  [1/4] THREAD SCALING AND THROUGHPUT BENCHMARK")
     print("=" * 76)
-    print(f"  Modelo: {os.path.basename(safe_model)} | Tokens gerados por teste: {safe_bench_tokens}")
-    print(f"  Threads avaliadas: {thread_counts}")
+    print(f"  Model: {os.path.basename(safe_model)} | Tokens generated per test: {safe_bench_tokens}")
+    print(f"  Evaluated threads: {thread_counts}")
     print("-" * 76)
 
     results = []
@@ -231,7 +231,7 @@ def run_thread_scaling_benchmark(
         )
 
         peak_rss = 0
-        # Amostra memória enquanto roda
+        # Sample memory while running
         while proc.poll() is None:
             rss = get_peak_rss_bytes(proc.pid)
             if rss > peak_rss:
@@ -246,16 +246,16 @@ def run_thread_scaling_benchmark(
 
         clean_out = strip_ansi(stdout)
 
-        # Extrai prefill
+        # Extract prefill
         prefill_sec = 0.0
-        m_prefill = re.search(r"Prefill concluido em ([0-9.]+)\s*s", clean_out)
+        m_prefill = re.search(r"Prefill (?:concluido em|completed in) ([0-9.]+)\s*s", clean_out)
         if m_prefill:
             prefill_sec = float(m_prefill.group(1))
 
-        # Extrai decode
-        m_gen = re.search(r"Tokens gerados\s*:\s*(\d+)", clean_out)
-        m_time = re.search(r"Tempo total\s*:\s*([0-9.]+)\s*s", clean_out)
-        m_speed = re.search(r"Velocidade\s*:\s*([0-9.]+)\s*tokens/segundo", clean_out)
+        # Extract decode
+        m_gen = re.search(r"Tokens (?:gerados|generated)\s*:\s*(\d+)", clean_out)
+        m_time = re.search(r"(?:Tempo total|Total time)\s*:\s*([0-9.]+)\s*s", clean_out)
+        m_speed = re.search(r"(?:Velocidade|Speed)\s*:\s*([0-9.]+)\s*tokens/(?:segundo|second)", clean_out)
 
         gen_tokens = int(m_gen.group(1)) if m_gen else bench_tokens
         decode_time = float(m_time.group(1)) if m_time else total_wall_sec
@@ -290,7 +290,7 @@ def run_thread_scaling_benchmark(
 
 
 # ----------------------------------------------------------------------------
-# 4. Benchmark de Perplexidade no WikiText-2 (Qualidade da Quantização Q4)
+# 4. WikiText-2 Perplexity Benchmark (Q4 Quantization Quality)
 # ----------------------------------------------------------------------------
 
 def run_wikitext_perplexity_benchmark(
@@ -309,11 +309,11 @@ def run_wikitext_perplexity_benchmark(
     safe_threads = max(1, min(int(threads), 256))
 
     print("\n" + "=" * 76)
-    print("  [2/4] AVALIAÇÃO DE QUALIDADE E PERPLEXIDADE (WikiText-2 Test Set)")
+    print("  [2/4] QUALITY AND PERPLEXITY EVALUATION (WikiText-2 Test Set)")
     print("=" * 76)
     print(f"  Corpus     : {safe_corpus} ({os.path.getsize(safe_corpus) / 1024:.1f} KB)")
     print(f"  Tokenizer  : {os.path.basename(safe_tokenizer)}")
-    print(f"  Limite PPL : {safe_max_tokens} tokens causais | Threads: {safe_threads}")
+    print(f"  PPL Limit  : {safe_max_tokens} causal tokens | Threads: {safe_threads}")
     print("-" * 76)
 
     tok = nativa.Tokenizer(safe_tokenizer)
@@ -360,12 +360,12 @@ def run_wikitext_perplexity_benchmark(
             "eval_tok_s": round(eval_speed, 2),
         }
 
-        print(f"  [RESULTADO WIKITEXT-2]:")
-        print(f"    Tokens avaliados : {tok_count}")
-        print(f"    NLL Médio        : {mean_nll:.4f} nats/token")
-        print(f"    Perplexidade PPL : \033[1;32m{ppl_val:.4f}\033[0m")
-        print(f"    Acurácia Top-1   : {top1_acc:.2f}%")
-        print(f"    Throughput       : {eval_speed:.2f} tok/s em {eval_time:.2f}s")
+        print(f"  [WIKITEXT-2 RESULT]:")
+        print(f"    Evaluated tokens : {tok_count}")
+        print(f"    Mean NLL         : {mean_nll:.4f} nats/token")
+        print(f"    Perplexity PPL   : \033[1;32m{ppl_val:.4f}\033[0m")
+        print(f"    Top-1 Accuracy   : {top1_acc:.2f}%")
+        print(f"    Throughput       : {eval_speed:.2f} tok/s in {eval_time:.2f}s")
         print("-" * 76)
         return ppl_metrics
 
@@ -378,7 +378,7 @@ def run_wikitext_perplexity_benchmark(
 
 
 # ----------------------------------------------------------------------------
-# 5. Avaliação Qualitativa Bilíngue (Raciocínio, Matemática, Código)
+# 5. Bilingual Qualitative Evaluation (Reasoning, Math, Code)
 # ----------------------------------------------------------------------------
 
 PROMPT_SUITE = [
@@ -445,7 +445,7 @@ def run_qualitative_eval_benchmark(
     safe_threads = max(1, min(int(threads), 256))
 
     print("\n" + "=" * 76)
-    print("  [3/4] AVALIAÇÃO QUALITATIVA BILÍNGUE (Zero-Shot QA, Raciocínio, Código)")
+    print("  [3/4] BILINGUAL QUALITATIVE EVALUATION (Zero-Shot QA, Reasoning, Code)")
     print("=" * 76)
 
     tok = nativa.Tokenizer(safe_tokenizer)
@@ -456,7 +456,7 @@ def run_qualitative_eval_benchmark(
     try:
         write_vocab_file(tok, vocab_path)
     except Exception as exc:
-        print(f"[ERRO] Falha ao escrever vocabulário temporário: {exc}")
+        print(f"[ERROR] Failed to write temporary vocabulary: {exc}")
         return []
 
     env = os.environ.copy()
@@ -483,9 +483,14 @@ def run_qualitative_eval_benchmark(
     qual_results = []
 
     for item in PROMPT_SUITE:
+        sys_msg = (
+            "Você é um assistente inteligente. Responda de forma clara, exata e direta."
+            if item["language"] == "PT"
+            else "You are an intelligent assistant. Respond clearly, accurately, and directly."
+        )
         prompt_text = (
             f"<|im_start|>system\n"
-            f"Você é um assistente inteligente. Responda de forma clara, exata e direta.<|im_end|>\n"
+            f"{sys_msg}<|im_end|>\n"
             f"<|im_start|>user\n{item['prompt']}<|im_end|>\n"
             f"<|im_start|>assistant\n"
         )
@@ -520,16 +525,16 @@ def run_qualitative_eval_benchmark(
         gen_time = float(m.group(2)) if m else total_sec
         tok_speed = float(m.group(3)) if m else (tok_count / gen_time if gen_time > 0 else 0.0)
 
-        # Remove <think> ... </think> se existir para resposta concisa
+        # Strip <think> ... </think> if present for concise response
         clean_answer = re.sub(r"<think>.*?</think>", "", answer_text, flags=re.DOTALL).strip()
         if not clean_answer:
             clean_answer = answer_text.strip()
 
-        # Resumo visual
+        # Visual summary
         print(f"  [{item['language']}] {item['category']}: \"{item['prompt']}\"")
-        print(f"      -> Speed: {tok_speed:5.2f} tok/s | Tokens: {tok_count:3d} em {gen_time:.2f}s")
+        print(f"      -> Speed: {tok_speed:5.2f} tok/s | Tokens: {tok_count:3d} in {gen_time:.2f}s")
         one_line_resp = clean_answer.replace("\n", " ")[:90] + ("..." if len(clean_answer) > 90 else "")
-        print(f"      -> Resposta: {one_line_resp}")
+        print(f"      -> Response: {one_line_resp}")
 
         qual_results.append({
             "id": item["id"],
@@ -561,7 +566,7 @@ def run_qualitative_eval_benchmark(
 
 
 # ----------------------------------------------------------------------------
-# 6. Comparativo de Footprint Arquitetural (Nativa vs Alternativas)
+# 6. Architectural Footprint Comparison (Nativa vs Alternatives)
 # ----------------------------------------------------------------------------
 
 def get_footprint_comparison(specs: Dict[str, Any], peak_rss_mb: float) -> Dict[str, Any]:
@@ -571,7 +576,7 @@ def get_footprint_comparison(specs: Dict[str, Any], peak_rss_mb: float) -> Dict[
             "binary_size": f"{engine_size_kb:.0f} KB",
             "runtime_deps": "Zero (C99 Standard + OpenMP)",
             "cold_load_time": "< 5 ms (mmap zero-copy)",
-            "peak_rss": f"{peak_rss_mb:.1f} MB (modelo + arena)",
+            "peak_rss": f"{peak_rss_mb:.1f} MB (model + arena)",
             "license": "MIT Open Source",
         },
         "llama_cpp": {
@@ -585,14 +590,14 @@ def get_footprint_comparison(specs: Dict[str, Any], peak_rss_mb: float) -> Dict[
             "binary_size": "~2.5 GB (Python wheel + PyTorch DLLs)",
             "runtime_deps": "Python 3.10+, PyTorch, CFFI, BLAS, CUDA runtime",
             "cold_load_time": "~3500 ms",
-            "peak_rss": "~1800 MB (overhead do runtime Python/Torch)",
+            "peak_rss": "~1800 MB (Python/Torch runtime overhead)",
             "license": "Apache 2.0 / BSD",
         }
     }
 
 
 # ----------------------------------------------------------------------------
-# 7. Gerador de Relatórios em Markdown (Português e Inglês)
+# 7. Markdown Report Generator (Portuguese and English)
 # ----------------------------------------------------------------------------
 
 def generate_markdown_reports(
@@ -608,7 +613,7 @@ def generate_markdown_reports(
     footprint = get_footprint_comparison(specs, peak_rss)
 
     # ------------------------------------------------------------------------
-    # RELATÓRIO EM PORTUGUÊS (BENCHMARKS.md)
+    # PORTUGUESE REPORT (BENCHMARKS.md)
     # ------------------------------------------------------------------------
     pt_lines = [
         "# Relatório Oficial de Benchmarks — Linguagem Nativa",
@@ -714,7 +719,7 @@ def generate_markdown_reports(
     ])
 
     # ------------------------------------------------------------------------
-    # RELATÓRIO EM INGLÊS (BENCHMARKS_EN.md)
+    # ENGLISH REPORT (BENCHMARKS_EN.md)
     # ------------------------------------------------------------------------
     en_lines = [
         "# Official Benchmark Report — Nativa Language",
@@ -827,7 +832,7 @@ def generate_markdown_reports(
     with open(output_en_path, "w", encoding="utf-8") as f:
         f.write(en_content)
 
-    print(f"\n[OK] Relatórios gerados com sucesso:")
+    print(f"\n[OK] Reports generated successfully:")
     print(f"  -> {os.path.abspath(output_pt_path)}")
     print(f"  -> {os.path.abspath(output_en_path)}")
 
@@ -835,23 +840,23 @@ def generate_markdown_reports(
 
 
 # ----------------------------------------------------------------------------
-# 8. Ponto de Entrada CLI
+# 8. CLI Entry Point
 # ----------------------------------------------------------------------------
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Suíte Oficial de Benchmarks Nativa (INT4 C99 Runtime)")
-    parser.add_argument("--model", default=os.path.join(ROOT_DIR, "data", "qwen3_0.6b.natq4"), help="Caminho do modelo .natq4")
-    parser.add_argument("--engine", default=os.path.join(ROOT_DIR, "tools", "nativa_engine.exe" if sys.platform == "win32" else "tools/nativa_engine"), help="Caminho do executável nativa_engine")
-    parser.add_argument("--tokenizer", default=None, help="Caminho do tokenizer.json (opcional, detectado automaticamente)")
-    parser.add_argument("--corpus", default=os.path.join(ROOT_DIR, "data", "wikitext-2-test.txt"), help="Arquivo do corpus WikiText-2")
-    parser.add_argument("--threads", default="1,2,4,8", help="Lista de contagem de threads (ex: 1,2,4,8)")
-    parser.add_argument("--tokens", type=int, default=32, help="Tokens gerados por teste de thread (padrão: 32)")
-    parser.add_argument("--ppl", action="store_true", help="Executa o benchmark de perplexidade no WikiText-2")
-    parser.add_argument("--ppl-tokens", type=int, default=512, help="Tokens para teste de perplexidade (padrão: 512)")
-    parser.add_argument("--prompts", action="store_true", help="Executa a bateria de prompts qualitativos bilíngues")
-    parser.add_argument("--all", action="store_true", help="Executa todos os benchmarks e gera relatórios")
-    parser.add_argument("--output-md", action="store_true", help="Gera BENCHMARKS.md e BENCHMARKS_EN.md")
-    parser.add_argument("--json-output", default=None, help="Caminho para salvar os resultados brutos em JSON")
+    parser = argparse.ArgumentParser(description="Official Nativa Benchmark Suite (INT4 C99 Runtime)")
+    parser.add_argument("--model", default=os.path.join(ROOT_DIR, "data", "qwen3_0.6b.natq4"), help="Path to the .natq4 model")
+    parser.add_argument("--engine", default=os.path.join(ROOT_DIR, "tools", "nativa_engine.exe" if sys.platform == "win32" else "tools/nativa_engine"), help="Path to the nativa_engine executable")
+    parser.add_argument("--tokenizer", default=None, help="Path to tokenizer.json (optional, auto-detected)")
+    parser.add_argument("--corpus", default=os.path.join(ROOT_DIR, "data", "wikitext-2-test.txt"), help="WikiText-2 corpus file")
+    parser.add_argument("--threads", default="1,2,4,8", help="Comma-separated thread counts (e.g., 1,2,4,8)")
+    parser.add_argument("--tokens", type=int, default=32, help="Tokens generated per thread test (default: 32)")
+    parser.add_argument("--ppl", action="store_true", help="Run the WikiText-2 perplexity benchmark")
+    parser.add_argument("--ppl-tokens", type=int, default=512, help="Tokens for perplexity test (default: 512)")
+    parser.add_argument("--prompts", action="store_true", help="Run the bilingual qualitative prompt suite")
+    parser.add_argument("--all", action="store_true", help="Run all benchmarks and generate reports")
+    parser.add_argument("--output-md", action="store_true", help="Generate BENCHMARKS.md and BENCHMARKS_EN.md")
+    parser.add_argument("--json-output", default=None, help="Path to save raw results in JSON format")
     args = parser.parse_args()
 
     try:
@@ -859,16 +864,16 @@ def main() -> int:
         engine_path = validate_safe_path(args.engine, must_exist=True, allowed_exts=(".exe", "") if sys.platform == "win32" else None)
         corpus_path = validate_safe_path(args.corpus, must_exist=True, allowed_exts=(".txt", ".raw", ".json"))
     except (ValueError, FileNotFoundError) as exc:
-        print(f"[ERRO] Parâmetro de entrada inválido: {exc}", file=sys.stderr)
+        print(f"[ERROR] Invalid input parameter: {exc}", file=sys.stderr)
         return 1
 
-    # Detecta tokenizer
+    # Detect tokenizer
     tokenizer_path = args.tokenizer
     if tokenizer_path:
         try:
             tokenizer_path = validate_safe_path(tokenizer_path, must_exist=True, allowed_exts=(".json",))
         except (ValueError, FileNotFoundError) as exc:
-            print(f"[ERRO] Tokenizer especificado inválido: {exc}", file=sys.stderr)
+            print(f"[ERROR] Invalid specified tokenizer: {exc}", file=sys.stderr)
             return 1
     else:
         for cand in [model_path + ".tokenizer.json", os.path.join(ROOT_DIR, "data", "tokenizer_qwen.json")]:
@@ -876,7 +881,7 @@ def main() -> int:
                 tokenizer_path = validate_safe_path(cand, must_exist=True, allowed_exts=(".json",))
                 break
     if not tokenizer_path or not os.path.isfile(tokenizer_path):
-        print(f"[ERRO] Tokenizer não encontrado para o modelo {model_path}", file=sys.stderr)
+        print(f"[ERROR] Tokenizer not found for model {model_path}", file=sys.stderr)
         return 1
 
     try:
@@ -884,7 +889,7 @@ def main() -> int:
     except ValueError:
         threads_list = [1, 2, 4, 8]
 
-    # Descobre specs do sistema
+    # Discover system specs
     specs = get_system_specs(engine_path, model_path)
 
     run_all = args.all or (not args.ppl and not args.prompts and not args.output_md)
@@ -899,7 +904,7 @@ def main() -> int:
     print(f"  CPU        : {specs.get('cpu_name')} ({specs.get('cpu_cores')} cores)")
     print(f"  OS         : {specs.get('os')}")
     print(f"  Engine     : {os.path.basename(engine_path)} ({specs.get('engine_size_bytes', 0) / 1024:.1f} KB)")
-    print(f"  Modelo     : {os.path.basename(model_path)} ({specs.get('model_size_bytes', 0) / (1024*1024):.1f} MB)")
+    print(f"  Model      : {os.path.basename(model_path)} ({specs.get('model_size_bytes', 0) / (1024*1024):.1f} MB)")
     print("============================================================================")
 
     scaling_results: List[Dict[str, Any]] = []
@@ -937,9 +942,9 @@ def main() -> int:
         safe_json = validate_safe_output_path(args.json_output, allowed_exts=(".json",))
         with open(safe_json, "w", encoding="utf-8") as f:  # NOSONAR(pythonsecurity:S8707)
             json.dump(full_report, f, indent=2, ensure_ascii=False)
-        print(f"[OK] Dados JSON exportados para: {safe_json}")
+        print(f"[OK] JSON data exported to: {safe_json}")
 
-    print("\n[OK] Benchmark Suite concluída com sucesso!")
+    print("\n[OK] Benchmark Suite completed successfully!")
     return 0
 
 

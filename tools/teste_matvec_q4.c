@@ -101,7 +101,7 @@ int main(void) {
             W[i].qs[k] = 0x88; // 8 - 8 = 0
         }
     }
-    // Colocar alguns pesos nao zero no primeiro bloco da primeira linha
+    // Place some non-zero weights in the first block of the first row
     // byte 0: lo=10 (10-8 = 2), hi=6 (6-8 = -2)
     W[0].qs[0] = 0x6A; // lo=10, hi=6
 
@@ -110,7 +110,7 @@ int main(void) {
 
     // Warmup
     matvec_q4(y, W, x, NULL, rows, cols);
-    printf("Resultado y[0] (esperado: 0.0f): %f\n", y[0]); // (2 + -2) * 0.1 = 0.0
+    printf("Result y[0] (expected: 0.0f): %f\n", y[0]); // (2 + -2) * 0.1 = 0.0
 
     // Benchmark 100 iteracoes
     QueryPerformanceCounter(&t0);
@@ -122,7 +122,7 @@ int main(void) {
 
     double dt = (double)(t1.QuadPart - t0.QuadPart) / (double)freq.QuadPart;
     double per_iter_ms = (dt / iters) * 1000.0;
-    printf("Tempo medio por matvec (1536x1536): %.3f ms\n", per_iter_ms);
+    printf("Average time per matvec (1536x1536): %.3f ms\n", per_iter_ms);
 
     free(W);
     free(x);

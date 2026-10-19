@@ -1,19 +1,19 @@
 # mini_llm_completo.nat
-# Mini Decoder-Only Transformer completo em Nativa v0.4
-# Componentes:
-#   - Tokenizer BPE
+# Complete Mini Decoder-Only Transformer in Nativa v0.4
+# Components:
+#   - BPE Tokenizer
 #   - Token Embedding
 #   - 2 × Transformer Block (RMSNorm → Multi-Head Attention + RoPE → Residual → RMSNorm → MLP → Residual)
 #   - Final RMSNorm + LM Head
-#   - KV Cache para geracao autoregressiva
+#   - KV Cache for autoregressive generation
 
 fn main():
-    print(f"  MINI LLM COMPLETO — Decoder-Only Transformer (Nativa v0.4)")
+    print(f"  COMPLETE MINI LLM — Decoder-Only Transformer (Nativa v0.4)")
     print("  d_model=64 | n_heads=4 | n_layers=2 | dim_head=16")
     print("==========================================================================")
 
     # =====================================================================
-    # Hiperparametros
+    # Hyperparameters
     # =====================================================================
     d_model   = 64
     n_heads   = 4
@@ -23,12 +23,12 @@ fn main():
     max_seq   = 128
     vocab_size = 1024
     n_new_tokens = 10
-    print(f"    Configuracao: d_model={d_model} | n_heads={n_heads} | n_layers={n_layers} | dim_head={dim_head}")
+    print(f"    Configuration: d_model={d_model} | n_heads={n_heads} | n_layers={n_layers} | dim_head={dim_head}")
 
     # =====================================================================
     # 1. Tokenizer
     # =====================================================================
-    print("\n[1] Tokenizer BPE + Byte-Fallback")
+    print("\n[1] BPE Tokenizer + Byte-Fallback")
     tok = Tokenizer()
     prompt = "Nativa e uma linguagem para IA"
     tokens = encode(tok, prompt)
@@ -38,14 +38,14 @@ fn main():
     print(f"    Prompt len  : {prompt_len}")
 
     # =====================================================================
-    # 2. Inicializacao dos pesos
+    # 2. Weight Initialization
     # =====================================================================
-    print("\n[2] Inicializando todos os pesos do modelo...")
+    print("\n[2] Initializing all model weights...")
 
     # Embedding
     emb = randn([vocab_size, d_model]) * 0.02
 
-    # ----- Camada 1 -----
+    # ----- Layer 1 -----
     Wq1 = randn([d_model, d_model]) * 0.02
     Wk1 = randn([d_model, d_model]) * 0.02
     Wv1 = randn([d_model, d_model]) * 0.02
@@ -55,7 +55,7 @@ fn main():
     g_attn1 = ones([d_model])
     g_mlp1  = ones([d_model])
 
-    # ----- Camada 2 -----
+    # ----- Layer 2 -----
     Wq2 = randn([d_model, d_model]) * 0.02
     Wk2 = randn([d_model, d_model]) * 0.02
     Wv2 = randn([d_model, d_model]) * 0.02
@@ -69,22 +69,22 @@ fn main():
     g_final = ones([d_model])
     lm_head = randn([d_model, vocab_size]) * 0.02
 
-    print("    Embedding + 2 camadas completas + LM Head criados.")
+    print("    Embedding + 2 complete layers + LM Head created.")
 
     # =====================================================================
-    # 3. Helper: processa um vetor atraves de uma camada completa
+    # 3. Helper: processes a vector through a complete layer
     # =====================================================================
-    # (implementado inline no loop por limitacoes de funcoes com muitos args)
+    # (implemented inline in the loop due to limitations of functions with many args)
 
     # =====================================================================
-    # 4. Prefill do prompt (processa todos os tokens do prompt)
+    # 4. Prompt Prefill (processes all prompt tokens)
     # =====================================================================
-    print("\n[3] Prefill do prompt (processando contexto)...")
+    print("\n[3] Prompt prefill (processing context)...")
 
     cache1 = KVCache(max_seq, dim_head)
     cache2 = KVCache(max_seq, dim_head)
 
-    # Vamos guardar apenas o ultimo hidden state apos o prefill
+    # Keep only the last hidden state after prefill
     x = zeros([d_model])
 
     for i in 0..prompt_len:
@@ -93,16 +93,16 @@ fn main():
             tid = tid % vocab_size
         x = emb[tid]
 
-        # ---------- Camada 1 ----------
+        # ---------- Layer 1 ----------
         xn = rmsnorm(x, g_attn1)
-        # Projecoes Q/K/V
+        # Q/K/V Projections
         q = xn @ Wq1
         k = xn @ Wk1
         v = xn @ Wv1
-        # RoPE no Q e K (simplificado: aplica no vetor inteiro)
+        # RoPE on Q and K (simplified: applied to the full vector)
         q = apply_rope(q, i)
         k = apply_rope(k, i)
-        # Atualiza cache (usamos so a primeira head por simplicidade de shape)
+        # Update cache (using only the first head for shape simplicity)
         cache1.update([k[0..dim_head]], [v[0..dim_head]])
         # SDPA (1 token)
         mask = causal_mask(1)
@@ -115,7 +115,7 @@ fn main():
         h = silu(h)
         x = x + (h @ W2_1)
 
-        # ---------- Camada 2 ----------
+        # ---------- Layer 2 ----------
         xn = rmsnorm(x, g_attn2)
         q = xn @ Wq2
         k = xn @ Wk2
@@ -131,24 +131,24 @@ fn main():
         h = silu(h)
         x = x + (h @ W2_2)
 
-    print(f"    Prefill concluido. Shape do ultimo hidden: {shape(x)}")
-    print(f"    KV Cache camada 1: seq_len = {cache1.seq_len}")
-    print(f"    KV Cache camada 2: seq_len = {cache2.seq_len}")
+    print(f"    Prefill completed. Shape of last hidden state: {shape(x)}")
+    print(f"    KV Cache layer 1: seq_len = {cache1.seq_len}")
+    print(f"    KV Cache layer 2: seq_len = {cache2.seq_len}")
 
     # =====================================================================
-    # 5. Geracao Autoregressiva
+    # 5. Autoregressive Generation
     # =====================================================================
-    print(f"\n[4] Geracao de {n_new_tokens} novos tokens...")
+    print(f"\n[4] Generating {n_new_tokens} new tokens...")
 
-    # Final norm do ultimo estado
+    # Final norm of the last state
     x = rmsnorm(x, g_final)
 
-    print("    Tokens gerados:")
+    print("    Generated tokens:")
     novos_tokens = []
     for step in 0..n_new_tokens:
         pos = prompt_len + step
 
-        # LM Head → proximo token
+        # LM Head → next token
         logits = x @ lm_head
         next_id = argmax(logits)
         if next_id >= vocab_size:
@@ -157,10 +157,10 @@ fn main():
 
         print(f"      [{step + 1:2d}] id = {next_id:4d} | cache1.seq_len = {cache1.seq_len}")
 
-        # Embedding do novo token
+        # Embedding of the new token
         x = emb[next_id]
 
-        # ---------- Camada 1 ----------
+        # ---------- Layer 1 ----------
         xn = rmsnorm(x, g_attn1)
         q = xn @ Wq1
         k = xn @ Wk1
@@ -177,7 +177,7 @@ fn main():
         h = silu(h)
         x = x + (h @ W2_1)
 
-        # ---------- Camada 2 ----------
+        # ---------- Layer 2 ----------
         xn = rmsnorm(x, g_attn2)
         q = xn @ Wq2
         k = xn @ Wk2
@@ -193,16 +193,16 @@ fn main():
         h = silu(h)
         x = x + (h @ W2_2)
 
-        # Final norm para o proximo passo
+        # Final norm for the next step
         x = rmsnorm(x, g_final)
 
     texto_gerado = decode(tok, novos_tokens)
-    print(f"\n    Texto gerado: \"{texto_gerado}\"")
+    print(f"\n    Generated text: \"{texto_gerado}\"")
 
     # =====================================================================
-    # 6. Resumo
+    # 6. Summary
     # =====================================================================
-    print("\n[5] Resumo da arquitetura executada:")
+    print("\n[5] Executed architecture summary:")
     print("    ┌─────────────────────────────────────────────────────┐")
     print("    │  Token Embedding          (vocab × 64)             │")
     print("    │           ↓                                        │")
@@ -217,12 +217,12 @@ fn main():
     print("    │  └────────────────────────────────────────────┘   │")
     print("    │           ↓                                        │")
     print("    │  Final RMSNorm → LM Head → argmax                  │")
-    print("    │  + KV Cache em ambas as camadas                    │")
+    print("    │  + KV Cache in both layers                         │")
     print("    └─────────────────────────────────────────────────────┘")
 
     print("\n==========================================================================")
-    print("  MINI LLM COMPLETO EXECUTADO COM SUCESSO")
-    print("  Todos os componentes nativos foram utilizados:")
+    print("  COMPLETE MINI LLM SUCCESSFULLY EXECUTED")
+    print("  All native components were utilized:")
     print("  Tokenizer | Embedding | RMSNorm | RoPE | SDPA | Causal Mask")
     print("  Multi-Head Proj | SiLU MLP | Residual | KV Cache | LM Head")
     print("==========================================================================")

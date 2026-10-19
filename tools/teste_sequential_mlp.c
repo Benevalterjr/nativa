@@ -163,7 +163,7 @@ int main(void) {
 
     double dt = (double)(t1.QuadPart - t0.QuadPart) / (double)freq.QuadPart;
     double per_iter_ms = (dt / iters) * 1000.0;
-    printf("Tempo total Gate + Up + SwiGLU Sequencial (8960x1536): %.3f ms\n", per_iter_ms);
+    printf("Total time Gate + Up + SwiGLU Sequential (8960x1536): %.3f ms\n", per_iter_ms);
 
     free(Wgate);
     free(Wup);

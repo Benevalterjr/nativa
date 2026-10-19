@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
 """
-tools/experimento_3_isolar_gate.py — Experimento 3: Isolar a Política de Gating
-Mantém a PRECISÃO ESTITAMENTE FIXA (FP16) e o ORÇAMENTO DE TOKENS FIXO:
-Sinks = 4, Janela Recente = 16, Tokens Passados Mantidos = 8.
-Tamanho do KV Cache idêntico em todos os regimes: exatamente 28 tokens por camada (344.0 KB).
+tools/experimento_3_isolar_gate.py — Experiment 3: Isolate Gating Policy
+Maintains STRICTLY FIXED PRECISION (FP16) and FIXED TOKEN BUDGET:
+Sinks = 4, Recent Window = 16, Past Tokens Retained = 8.
+Identical KV Cache size across all regimes: exactly 28 tokens per layer (344.0 KB).
 
-Compara puramente o critério de seleção do gate:
-1. Surprisal Gate (Dopamina / RPE: top-8 tokens passados por erro de predição -log P(x))
-2. Random Gate (Seleção uniforme aleatória de 8 tokens passados)
-3. H2O Gate (Heavy Hitter Oracle: top-8 tokens passados por atenção acumulada)
+Compares purely the gate selection criterion:
+1. Surprisal Gate (Dopamine / RPE: top-8 past tokens by prediction error -log P(x))
+2. Random Gate (Uniform random selection of 8 past tokens)
+3. H2O Gate (Heavy Hitter Oracle: top-8 past tokens by accumulated attention)
 """
 
 import os
@@ -98,7 +98,7 @@ def evaluate_gate(
     num_sinks: int = 4,
     past_budget: int = 8
 ) -> Dict[str, Any]:
-    print(f"\n---> Avaliando Gate: {mode.upper()} (Sinks: {num_sinks}, Janela: {window_size}, Orçamento Passado: {past_budget})...")
+    print(f"\n---> Avaliando Gate: {mode.upper()} (Sinks: {num_sinks}, Window: {window_size}, Orçamento Passado: {past_budget})...")
     caches = [GatedLayerKVCache(mode=mode, window_size=window_size, num_sinks=num_sinks, past_budget=past_budget) for _ in range(model.num_layers)]
     
     n_tokens = len(tokens)
@@ -191,16 +191,16 @@ def evaluate_gate(
 def main():
     parser = argparse.ArgumentParser(description="Experimento 3: Isolar a Política de Gating")
     parser.add_argument("--tokens", type=int, default=80, help="Número de tokens do WikiText-2")
-    parser.add_argument("--layers", type=int, default=24, help="Número de camadas")
-    parser.add_argument("--window", type=int, default=16, help="Janela densa recente")
+    parser.add_argument("--layers", type=int, default=24, help="Number of layers")
+    parser.add_argument("--window", type=int, default=16, help="Window densa recente")
     parser.add_argument("--sinks", type=int, default=4, help="Sinks de atenção")
     parser.add_argument("--past", type=int, default=8, help="Orçamento fixo de tokens passados")
     args = parser.parse_args()
 
     print("=" * 85)
-    print("EXPERIMENTO 3: ISOLAMENTO DO CRITÉRIO DE GATING (PRECISÃO E MEMÓRIA IDÊNTICAS)")
-    print(f"Modelo: Qwen2.5-0.5B ({args.layers} camadas) | Dataset: WikiText-2 | Tokens: {args.tokens}")
-    print(f"Orçamento Fixo: {args.sinks} Sinks + {args.window} Janela + {args.past} Passados = {args.sinks + args.window + args.past} tokens/camada (FP16)")
+    print("EXPERIMENT 3: GATING CRITERION ISOLATION (IDENTICAL PRECISION AND MEMORY)")
+    print(f"Model: Qwen2.5-0.5B ({args.layers} layers) | Dataset: WikiText-2 | Tokens: {args.tokens}")
+    print(f"Fixed Budget: {args.sinks} Sinks + {args.window} Window + {args.past} Past = {args.sinks + args.window + args.past} tokens/layer (FP16)")
     print("=" * 85)
 
     tok = nativa.Tokenizer(TOKENIZER_DEFAULT_PATH)
@@ -219,7 +219,7 @@ def main():
         results.append(res)
 
     print("\n" + "=" * 85)
-    print(f"{'CRITÉRIO DE GATING':<22} | {'PERPLEXIDADE (PPL)':<18} | {'NLL (nats)':<10} | {'TOP-1 ACC':<10} | {'KV MEMÓRIA'}")
+    print(f"{'GATING CRITERION':<22} | {'PERPLEXITY (PPL)':<18} | {'NLL (nats)':<10} | {'TOP-1 ACC':<10} | {'KV MEMORY'}")
     print("=" * 85)
     for r in results:
         print(f"{r['mode'].upper():<22} | {r['ppl']:<18.2f} | {r['nll']:<10.3f} | {r['accuracy']:<6.1f}%    | {r['kv_kb']:<8.1f} KB")

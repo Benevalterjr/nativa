@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Avaliação curta de next-token loss do Qwen usando operações do runtime Nativa.
+"""Short next-token loss evaluation of Qwen using Nativa runtime operations.
 
-O Python só coordena leitura do parquet e o loop de tokens. Tensores, pesos,
-matmuls, RMSNorm, RoPE, SiLU e softmax vêm do runtime em nativa.py.
+Python only coordinates reading the parquet file and the token loop. Tensors, weights,
+matmuls, RMSNorm, RoPE, SiLU, and softmax come from the runtime in nativa.py.
 """
 
 import argparse
@@ -123,7 +123,7 @@ def load_test_tokens(max_tokens):
         if max_tokens and len(token_ids) >= max_tokens:
             break
     if len(token_ids) < 2:
-        raise RuntimeError("O split WikiText não produziu tokens suficientes.")
+        raise RuntimeError("The WikiText split did not produce enough tokens.")
     if max_tokens:
         token_ids = token_ids[:max_tokens]
     return token_ids
@@ -132,19 +132,19 @@ def load_test_tokens(max_tokens):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--max-tokens", type=int, default=16,
-                        help="tokens do split de teste (padrão: 16; 0 usa o split inteiro)")
+                        help="tokens from the test split (default: 16; 0 uses the entire split)")
     args = parser.parse_args()
 
     for path in (MODEL_FILE, TOKENIZER_FILE, CORPUS_FILE):
         if not os.path.exists(path):
-            raise FileNotFoundError(f"Arquivo necessário não encontrado: {path}")
+            raise FileNotFoundError(f"Required file not found: {path}")
     if args.max_tokens < 0:
-        raise ValueError("--max-tokens deve ser >= 0")
+        raise ValueError("--max-tokens must be >= 0")
 
     token_ids = load_test_tokens(args.max_tokens)
-    print("Qwen2.5-0.5B / WikiText-2 raw test / runtime Nativa")
-    print(f"Tokens avaliados: {len(token_ids)} (alvos next-token: {len(token_ids) - 1})")
-    print("Contexto causal completo do trecho; pesos BF16 convertidos por camada sob demanda.")
+    print("Qwen2.5-0.5B / WikiText-2 raw test / Nativa runtime")
+    print(f"Evaluated tokens: {len(token_ids)} (next-token targets: {len(token_ids) - 1})")
+    print("Full causal context of the slice; BF16 weights converted per layer on demand.")
 
     started = time.perf_counter()
     embeddings = tensor_from_file("model.embed_tokens.weight")
@@ -152,11 +152,11 @@ def main():
 
     for layer in range(24):
         hidden = forward_layer(hidden, layer)
-        print(f"Camada {layer + 1:02d}/24 concluída")
+        print(f"Layer {layer + 1:02d}/24 completed")
 
     final_norm = tensor_from_file("model.norm.weight")
     hidden = rmsnorm_rows(hidden, final_norm)
-    # O modelo usa embeddings tied para o cabeçalho de linguagem (sem lm_head.weight no arquivo).
+    # The model uses tied embeddings for the language head (no lm_head.weight in the file).
     logits = embeddings @ nativa.Tensor(hidden[:-1].T)
 
     nll_sum = 0.0
@@ -170,11 +170,11 @@ def main():
     count = len(token_ids) - 1
     mean_nll = nll_sum / count
     elapsed = time.perf_counter() - started
-    print(f"NLL média (nats/token): {mean_nll:.6f}")
-    print(f"Perplexidade no trecho: {math.exp(mean_nll):.4f}")
+    print(f"Mean NLL (nats/token): {mean_nll:.6f}")
+    print(f"Slice perplexity: {math.exp(mean_nll):.4f}")
     print(f"Top-1 next-token accuracy: {100.0 * correct / count:.2f}%")
-    print(f"Tempo total: {elapsed:.2f}s | {count / elapsed:.2f} tokens-alvo/s")
-    print("Nota: avaliação curta do prefixo do split de teste; não é a perplexidade oficial do corpus inteiro.")
+    print(f"Total time: {elapsed:.2f}s | {count / elapsed:.2f} target-tokens/s")
+    print("Note: short evaluation of the test split prefix; not the official full-corpus perplexity.")
     nativa.close_safetensors_mmap(MODEL_FILE)
 
 

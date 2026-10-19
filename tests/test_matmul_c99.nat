@@ -1,45 +1,45 @@
 # test_matmul_c99.nat
-# Validação de Álgebra Linear AOT C99: GEMM, GEMV, Dot, Reduções e Indexação 2D
+# Validation of AOT C99 Linear Algebra: GEMM, GEMV, Dot, Reductions, and 2D Indexing
 
 fn main():
-    print("=== Teste de Álgebra Linear Nativa (AOT C99) ===")
+    print("=== Native Linear Algebra Test (AOT C99) ===")
     
-    # 1. Matrizes 2D literais
+    # 1. Literal 2D Matrices
     A = [[1.0, 2.0], [3.0, 4.0]]
     B = [[2.0, 0.0], [1.0, 2.0]]
     
-    # 2. Dimensões e Indexação
+    # 2. Dimensions and Indexing
     tam_A = len(A)
     elem_3 = A[1][0]
     row0 = A[0]
     tam_row0 = len(row0)
-    print(f"Dimensao A: {tam_A}, Elem A[1][0]: {elem_3}, Tam Linha: {tam_row0}")
+    print(f"Dimension A: {tam_A}, Elem A[1][0]: {elem_3}, Row Len: {tam_row0}")
     
-    # 3. GEMM (Matriz @ Matriz): C = A @ B
+    # 3. GEMM (Matrix @ Matrix): C = A @ B
     C = A @ B
     print(f"GEMM C = A @ B: [[{C[0][0]}, {C[0][1]}], [{C[1][0]}, {C[1][1]}]]")
     
-    # 4. GEMV (Matriz @ Vetor): y = A @ x
+    # 4. GEMV (Matrix @ Vector): y = A @ x
     x = [1.0, 2.0]
     y = A @ x
     print(f"GEMV y = A @ x: [{y[0]}, {y[1]}]")
     
-    # 5. Produto Escalar (1D @ 1D): d = x @ x
+    # 5. Dot Product (1D @ 1D): d = x @ x
     d = x @ x
     print(f"Dot d = x @ x: {d}")
     
-    # 6. Escalonamento e Aritmética Vetorial
+    # 6. Vector Scaling and Arithmetic
     y_scaled = y * 2.0
-    print(f"Escalonado y * 2: [{y_scaled[0]}, {y_scaled[1]}]")
+    print(f"Scaled y * 2: [{y_scaled[0]}, {y_scaled[1]}]")
     
-    # 7. Reduções e Estatísticas
+    # 7. Reductions and Statistics
     soma_y = sum(y_scaled)
     media_y = mean(y_scaled)
     min_y = min(y_scaled)
     max_y = max(y_scaled)
-    print(f"Estatisticas y: soma={soma_y}, media={media_y}, min={min_y}, max={max_y}")
+    print(f"Statistics y: sum={soma_y}, mean={media_y}, min={min_y}, max={max_y}")
     
-    # 8. Matriz Ternária Add-Only GEMV
+    # 8. Add-Only Ternary Matrix GEMV
     W_t = [[1.0, 0.0], [-1.0, 1.0]]
     y_t = W_t @ x
     print(f"Ternary GEMV y_t: [{y_t[0]}, {y_t[1]}]")

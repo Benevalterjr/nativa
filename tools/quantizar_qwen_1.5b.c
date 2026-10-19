@@ -73,7 +73,7 @@ static void quantize_matrix(const uint8_t* in_base, uint64_t in_offset, int rows
     size_t out_bytes = (size_t)rows * num_blocks * sizeof(BlockQ4);
     BlockQ4* out_buf = (BlockQ4*)malloc(out_bytes);
     if (!out_buf) {
-        fprintf(stderr, "Erro ao alocar memoria para quantizar matriz (%d x %d)\n", rows, cols);
+        fprintf(stderr, "Error allocating memory to quantize matrix (%d x %d)\n", rows, cols);
         exit(1);
     }
 
@@ -107,27 +107,27 @@ int main(void) {
 
     printf("====================================================================\n");
     printf("  NATIVA QUANTIZADOR INT4 (Q4_0) — QWEN2.5-1.5B-INSTRUCT\n");
-    printf("  Entrada : %s (3.08 GB BF16)\n", in_model_path);
-    printf("  Saida   : %s (~828 MB INT4)\n", out_model_path);
+    printf("  Input   : %s (3.08 GB BF16)\n", in_model_path);
+    printf("  Output  : %s (~828 MB INT4)\n", out_model_path);
     printf("====================================================================\n");
 
-    // 1. Abrir e mapear modelo de entrada com Win32
+    // 1. Open and map input model with Win32
     HANDLE hFile = CreateFileA(in_model_path, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
     if (hFile == INVALID_HANDLE_VALUE) {
-        printf("[ERRO] Nao foi possivel abrir %s (Codigo: %lu)\n", in_model_path, GetLastError());
+        printf("[ERROR] Could not open %s (Code: %lu)\n", in_model_path, GetLastError());
         return 1;
     }
 
     HANDLE hMapping = CreateFileMappingA(hFile, NULL, PAGE_READONLY, 0, 0, NULL);
     if (!hMapping) {
-        printf("[ERRO] Nao foi possivel criar mapeamento de arquivo\n");
+        printf("[ERROR] Could not create file mapping\n");
         CloseHandle(hFile);
         return 1;
     }
 
     const uint8_t* model_bytes = (const uint8_t*)MapViewOfFile(hMapping, FILE_MAP_READ, 0, 0, 0);
     if (!model_bytes) {
-        printf("[ERRO] Nao foi possivel mapear o arquivo na memoria\n");
+        printf("[ERROR] Could not map file to memory\n");
         CloseHandle(hMapping);
         CloseHandle(hFile);
         return 1;
@@ -135,7 +135,7 @@ int main(void) {
 
     FILE* out_file = fopen(out_model_path, "wb");
     if (!out_file) {
-        printf("[ERRO] Nao foi possivel criar arquivo de saida %s\n", out_model_path);
+        printf("[ERROR] Could not create output file %s\n", out_model_path);
         UnmapViewOfFile(model_bytes);
         CloseHandle(hMapping);
         CloseHandle(hFile);
@@ -150,15 +150,15 @@ int main(void) {
     memset(&q4_offsets, 0, sizeof(q4_offsets));
 
     // 2. Quantizar embed_tokens (151936 x 1536)
-    printf("[1/3] Quantizando embedding tokens & lm_head (151,936 x 1,536)...\n");
+    printf("[1/3] Quantizing embedding tokens & lm_head (151,936 x 1,536)...\n");
     quantize_matrix(model_bytes, g_qwen15_offsets.embed_tokens, QWEN15_VOCAB_SIZE, QWEN15_DIM, out_file, &q4_offsets.embed_tokens);
-    printf("      -> Embed tokens gravados no offset: %llu bytes (~125 MB)\n", q4_offsets.embed_tokens);
+    printf("      -> Embed tokens written to offset: %llu bytes (~125 MB)\n", q4_offsets.embed_tokens);
 
     // 3. Copiar model.norm (1536 BF16)
     copy_raw_bf16(model_bytes, g_qwen15_offsets.norm, QWEN15_DIM, out_file, &q4_offsets.norm);
 
-    // 4. Quantizar 28 camadas do Transformer
-    printf("[2/3] Quantizando as 28 camadas do Transformer em INT4...\n");
+    // 4. Quantize 28 Transformer layers
+    printf("[2/3] Quantizing the 28 Transformer layers to INT4...\n");
     for (int l = 0; l < QWEN15_NUM_LAYERS; l++) {
         const Qwen15LayerOffsets* in_l = &g_qwen15_offsets.layers[l];
         Qwen15LayerOffsets* out_l = &q4_offsets.layers[l];
@@ -184,7 +184,7 @@ int main(void) {
         quantize_matrix(model_bytes, in_l->wdown, QWEN15_DIM, QWEN15_INTERMEDIATE_DIM, out_file, &out_l->wdown);
 
         if ((l + 1) % 4 == 0 || l == QWEN15_NUM_LAYERS - 1) {
-            printf("      -> Camadas %2d/28 quantizadas...\n", l + 1);
+            printf("      -> Layers %2d/28 quantized...\n", l + 1);
         }
     }
 
@@ -198,10 +198,10 @@ int main(void) {
     QueryPerformanceCounter(&t1);
     double total_sec = (double)(t1.QuadPart - t0.QuadPart) / (double)freq.QuadPart;
 
-    printf("[3/3] Exportando header C %s...\n", out_header_path);
+    printf("[3/3] Exporting C header %s...\n", out_header_path);
     FILE* h_file = fopen(out_header_path, "w");
     if (!h_file) {
-        printf("[ERRO] Nao foi possivel escrever header %s\n", out_header_path);
+        printf("[ERROR] Could not write header %s\n", out_header_path);
         return 1;
     }
 
@@ -236,7 +236,7 @@ int main(void) {
     fprintf(h_file, "    .layers = {\n");
     for (int l = 0; l < QWEN15_NUM_LAYERS; l++) {
         const Qwen15LayerOffsets* lo = &q4_offsets.layers[l];
-        fprintf(h_file, "        // Camada %d\n", l);
+        fprintf(h_file, "        // Layer %d\n", l);
         fprintf(h_file, "        {\n");
         fprintf(h_file, "            .norm1 = %lluULL,\n", lo->norm1);
         fprintf(h_file, "            .norm2 = %lluULL,\n", lo->norm2);
@@ -256,9 +256,9 @@ int main(void) {
     fclose(h_file);
 
     printf("\n====================================================================\n");
-    printf("[SUCESSO] QUANTIZACAO CONCLUIDA COM EXITO!\n");
-    printf("  Tamanho final : %llu bytes (%.2f MB)\n", total_out_size, (double)total_out_size / (1024.0 * 1024.0));
-    printf("  Tempo total   : %.2f segundos\n", total_sec);
+    printf("[SUCCESS] QUANTIZATION COMPLETED SUCCESSFULLY!\n");
+    printf("  Final size   : %llu bytes (%.2f MB)\n", total_out_size, (double)total_out_size / (1024.0 * 1024.0));
+    printf("  Total time   : %.2f seconds\n", total_sec);
     printf("====================================================================\n");
 
     return 0;

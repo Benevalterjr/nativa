@@ -1,12 +1,12 @@
 // ============================================================================
 // NATIVA QWEN2/QWEN3 INT4 C99 ENGINE (ZERO-DEPENDENCY RUNTIME)
 // ============================================================================
-// Motor de inferência nativo de alto desempenho:
-//   - Lê modelos Qwen2 e Qwen3 no formato autodescritivo .natq4
-//   - Aloca memória e tensores dinamicamente conforme o cabeçalho do modelo
-//   - Detecção automática de CPU via CPUID e auto-ajuste de OpenMP
-//   - Kernel SIMD SSSE3/SSE4.1/AVX com produtos escalares fundidos
-//   - Suporta vocabulários compatíveis e dimensões dentro dos limites do formato
+// High-performance native inference engine:
+//   - Reads Qwen2 and Qwen3 models in self-describing .natq4 format
+//   - Dynamically allocates memory and tensors according to model header
+//   - Automatic CPU detection via CPUID and OpenMP auto-tuning
+//   - SIMD kernel SSSE3/SSE4.1/AVX with fused dot products
+//   - Supports compatible vocabularies and dimensions within format limits
 // ============================================================================
 
 #define _CRT_SECURE_NO_WARNINGS 1
@@ -48,13 +48,13 @@ typedef struct {
 
 #pragma pack(push, 1)
 typedef struct {
-    uint16_t scale[4]; // 8 bytes: escalas BF16 para as 4 linhas contiguas
-    uint8_t  qs[64];   // 64 bytes: nibbles das 4 linhas
+    uint16_t scale[4]; // 8 bytes: BF16 scales for 4 contiguous rows
+    uint8_t  qs[64];   // 64 bytes: nibbles for the 4 rows
 } BlockQ4x4;
 #pragma pack(pop)
 
 // ----------------------------------------------------------------------------
-// VOCABULÁRIO NATIVO DINÂMICO
+// DYNAMIC NATIVE VOCABULARY
 // ----------------------------------------------------------------------------
 typedef struct {
     uint16_t len;
@@ -187,7 +187,7 @@ static inline double timer_now(void) {
 #endif
 
 // ----------------------------------------------------------------------------
-// MEMORY ARENA DINÂMICA
+// DYNAMIC MEMORY ARENA
 // ----------------------------------------------------------------------------
 typedef struct {
     float* k_cache; // [layers * max_seq_len * kv_dim]
@@ -262,19 +262,19 @@ static bool matrix_range_is_valid(uint64_t offset, uint32_t rows, uint32_t cols,
 
 static bool validate_model_header(const NativaModelHeader* hdr, uint64_t file_size) {
     if (memcmp(hdr->magic, NATQ4_MAGIC, sizeof(hdr->magic)) != 0) {
-        fprintf(stderr, "[ERRO] Assinatura NATQ4X4 inválida.\n");
+        fprintf(stderr, "[ERROR] Invalid NATQ4X4 signature.\n");
         return false;
     }
     if (hdr->version < 1 || hdr->version > NATQ4_VERSION) {
-        fprintf(stderr, "[ERRO] Versão NATQ4 não suportada: %u.\n", hdr->version);
+        fprintf(stderr, "[ERROR] Unsupported NATQ4 version: %u.\n", hdr->version);
         return false;
     }
     if ((hdr->arch != NAT_ARCH_QWEN2 && hdr->arch != NAT_ARCH_QWEN3) || hdr->act_type != NAT_ACT_SWIGLU) {
-        fprintf(stderr, "[ERRO] O motor atual aceita apenas Qwen2/Qwen3 com SwiGLU.\n");
+        fprintf(stderr, "[ERROR] Current engine only supports Qwen2/Qwen3 with SwiGLU.\n");
         return false;
     }
     if (hdr->arch == NAT_ARCH_QWEN3 && hdr->version < 3) {
-        fprintf(stderr, "[ERRO] Qwen3 requer o formato NATQ4 versão 3 (normas Q/K).\n");
+        fprintf(stderr, "[ERROR] Qwen3 requires NATQ4 format version 3 (Q/K norms).\n");
         return false;
     }
     if (hdr->data_start_off != NATQ4_HEADER_SIZE || hdr->num_layers == 0 ||
@@ -292,7 +292,7 @@ static bool validate_model_header(const NativaModelHeader* hdr, uint64_t file_si
         hdr->max_seq_len < 2 || hdr->max_seq_len > 32768 ||
         !isfinite(hdr->rope_theta) || hdr->rope_theta <= 0.0f ||
         !isfinite(hdr->rms_norm_eps) || hdr->rms_norm_eps <= 0.0f) {
-        fprintf(stderr, "[ERRO] Hiperparâmetros inválidos ou incompatíveis com Q4x4.\n");
+        fprintf(stderr, "[ERROR] Invalid or incompatible Q4x4 hyperparameters.\n");
         return false;
     }
 
@@ -301,12 +301,12 @@ static bool validate_model_header(const NativaModelHeader* hdr, uint64_t file_si
     const uint32_t kv_dim = hdr->num_kv_heads * hdr->head_dim;
     if (!matrix_range_is_valid(hdr->embed_tokens_off, hdr->vocab_size, hdr->dim, file_size, hdr->data_start_off) ||
         !range_is_valid(hdr->norm_off, norm_bytes, file_size, hdr->data_start_off)) {
-        fprintf(stderr, "[ERRO] Embedding ou norma final apontam para fora do arquivo.\n");
+        fprintf(stderr, "[ERROR] Embedding or final norm point outside the file.\n");
         return false;
     }
     if (!hdr->tie_embeddings &&
         !matrix_range_is_valid(hdr->lm_head_off, hdr->vocab_size, hdr->dim, file_size, hdr->data_start_off)) {
-        fprintf(stderr, "[ERRO] LM head aponta para fora do arquivo.\n");
+        fprintf(stderr, "[ERROR] LM head points outside the file.\n");
         return false;
     }
 
@@ -321,20 +321,20 @@ static bool validate_model_header(const NativaModelHeader* hdr, uint64_t file_si
             !matrix_range_is_valid(lo->wgate, hdr->intermediate_dim, hdr->dim, file_size, hdr->data_start_off) ||
             !matrix_range_is_valid(lo->wup, hdr->intermediate_dim, hdr->dim, file_size, hdr->data_start_off) ||
             !matrix_range_is_valid(lo->wdown, hdr->dim, hdr->intermediate_dim, file_size, hdr->data_start_off)) {
-            fprintf(stderr, "[ERRO] Offsets de pesos inválidos na camada %u.\n", l);
+            fprintf(stderr, "[ERROR] Invalid weight offsets in layer %u.\n", l);
             return false;
         }
         if (hdr->has_attn_bias &&
             (!range_is_valid(lo->bq, norm_bytes, file_size, hdr->data_start_off) ||
              !range_is_valid(lo->bk, (uint64_t)kv_dim * sizeof(uint16_t), file_size, hdr->data_start_off) ||
              !range_is_valid(lo->bv, (uint64_t)kv_dim * sizeof(uint16_t), file_size, hdr->data_start_off))) {
-            fprintf(stderr, "[ERRO] Offsets de bias inválidos na camada %u.\n", l);
+            fprintf(stderr, "[ERROR] Invalid bias offsets in layer %u.\n", l);
             return false;
         }
         if (hdr->arch == NAT_ARCH_QWEN3 &&
             (!range_is_valid(hdr->qk_norms[l].q_norm, (uint64_t)hdr->head_dim * sizeof(uint16_t), file_size, hdr->data_start_off) ||
              !range_is_valid(hdr->qk_norms[l].k_norm, (uint64_t)hdr->head_dim * sizeof(uint16_t), file_size, hdr->data_start_off))) {
-            fprintf(stderr, "[ERRO] Offsets de RMSNorm Q/K inválidos na camada %u.\n", l);
+            fprintf(stderr, "[ERROR] Invalid Q/K RMSNorm offsets in layer %u.\n", l);
             return false;
         }
     }
@@ -614,7 +614,7 @@ static void forward_token_universal(const NativaModelHeader* hdr, const uint8_t*
         _mm_storeu_ps(&g_arena.x[b * 32 + 28], _mm_mul_ps(f7, svec));
     }
 
-    // 2. Loop através das camadas
+    // 2. Loop through layers
     for (uint32_t l = 0; l < hdr->num_layers; l++) {
         const NativaLayerOffsets* lo = &hdr->layers[l];
         const uint16_t* norm1_w = (const uint16_t*)(model_bytes + lo->norm1);
@@ -761,7 +761,7 @@ static void forward_token_universal(const NativaModelHeader* hdr, const uint8_t*
 }
 
 // ----------------------------------------------------------------------------
-// (Funções de amostragem TokenScore, sample_argmax, sample_topk em nativa_sampling.h)
+// (Sampling functions TokenScore, sample_argmax, sample_topk in nativa_sampling.h)
 // ----------------------------------------------------------------------------
 
 // ----------------------------------------------------------------------------
@@ -790,7 +790,7 @@ int main(int argc, char** argv) {
     int bench_tokens = 25;
 
     if (is_bundle) {
-        printf("[*] [NATIVA BUNDLE] Executavel autocontido detectado!\n");
+        printf("[*] [NATIVA BUNDLE] Self-contained executable detected!\n");
         model_path = self_exe;
         model_offset = bundle_trailer.model_offset;
         model_file_size = bundle_trailer.model_size;
@@ -828,7 +828,7 @@ int main(int argc, char** argv) {
             arg_idx = 2;
         }
         if (argc <= arg_idx) {
-            printf("Uso: nativa_engine [--] <modelo.natq4> [--chat] [--bench <N>] [--threads <N>] [--eval-tokens <arq>] [--vocab <vocab.bin>]\n");
+            printf("Usage: nativa_engine [--] <model.natq4> [--chat] [--bench <N>] [--threads <N>] [--eval-tokens <file>] [--vocab <vocab.bin>]\n");
             return 1;
         }
 
@@ -859,7 +859,7 @@ int main(int argc, char** argv) {
         }
     }
 
-    // 1. Detectar CPU e aplicar auto-ajuste
+    // 1. Detect CPU and apply auto-tuning
     CPUInfo cpu;
     cpu_detect(&cpu);
     cpu_print_info(&cpu);
@@ -870,17 +870,17 @@ int main(int argc, char** argv) {
     }
     g_cpu_has_ssse3 = cpu.ssse3;
     if (!g_cpu_has_ssse3) {
-        printf("  [NATIVA UNIVERSAL] Processador sem SSSE3 detectado. Modo escalar C99 ativo!\n");
+        printf("  [NATIVA UNIVERSAL] Processor without SSSE3 detected. C99 scalar mode active!\n");
     }
 
-    // 2. Carregar vocabulario
+    // 2. Load vocabulary
     if (is_bundle) {
         if (!load_vocab_from_offset(self_exe, bundle_trailer.vocab_offset)) {
-            fprintf(stderr, "[AVISO] Vocabulario embutido nao carregado (apenas token_ids serao usados)\n");
+            fprintf(stderr, "[WARNING] Embedded vocabulary not loaded (only token_ids will be used)\n");
         }
     } else {
         if (!load_vocab(vocab_path)) {
-            fprintf(stderr, "[AVISO] Vocabulario %s nao carregado (apenas token_ids serao usados)\n", vocab_path);
+            fprintf(stderr, "[WARNING] Vocabulary %s not loaded (only token_ids will be used)\n", vocab_path);
         }
     }
 
@@ -890,14 +890,14 @@ int main(int argc, char** argv) {
 #ifdef _WIN32
     HANDLE hFile = CreateFileA(model_path, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
     if (hFile == INVALID_HANDLE_VALUE) {
-        fprintf(stderr, "[ERRO] Nao foi possivel abrir %s (Codigo: %lu)\n", model_path, GetLastError());
+        fprintf(stderr, "[ERROR] Could not open %s (Code: %lu)\n", model_path, GetLastError());
         return 1;
     }
 
     if (!is_bundle) {
         LARGE_INTEGER model_size;
         if (!GetFileSizeEx(hFile, &model_size) || model_size.QuadPart < NATQ4_HEADER_SIZE) {
-            fprintf(stderr, "[ERRO] Arquivo NATQ4 menor que o cabeçalho obrigatório de %u bytes.\n", NATQ4_HEADER_SIZE);
+            fprintf(stderr, "[ERROR] NATQ4 file smaller than required header of %u bytes.\n", NATQ4_HEADER_SIZE);
             CloseHandle(hFile);
             return 1;
         }
@@ -906,7 +906,7 @@ int main(int argc, char** argv) {
 
     HANDLE hMapping = CreateFileMappingA(hFile, NULL, PAGE_READONLY, 0, 0, NULL);
     if (!hMapping) {
-        fprintf(stderr, "[ERRO] Falha ao criar mapeamento de arquivo\n");
+        fprintf(stderr, "[ERROR] Failed to create file mapping\n");
         CloseHandle(hFile);
         return 1;
     }
@@ -915,7 +915,7 @@ int main(int argc, char** argv) {
     DWORD off_low  = (DWORD)(model_offset & 0xFFFFFFFF);
     model_bytes = (const uint8_t*)MapViewOfFile(hMapping, FILE_MAP_READ, off_high, off_low, (SIZE_T)model_file_size);
     if (!model_bytes) {
-        fprintf(stderr, "[ERRO] Falha ao mapear arquivo na memoria\n");
+        fprintf(stderr, "[ERROR] Failed to map file to memory\n");
         CloseHandle(hMapping);
         CloseHandle(hFile);
         return 1;
@@ -929,14 +929,14 @@ int main(int argc, char** argv) {
 #else
     int fd = open(model_path, O_RDONLY);
     if (fd < 0) {
-        fprintf(stderr, "[ERRO] Nao foi possivel abrir %s\n", model_path);
+        fprintf(stderr, "[ERROR] Could not open %s\n", model_path);
         return 1;
     }
 
     if (!is_bundle) {
         struct stat st;
         if (fstat(fd, &st) != 0 || (uint64_t)st.st_size < NATQ4_HEADER_SIZE) {
-            fprintf(stderr, "[ERRO] Arquivo NATQ4 menor que o cabeçalho obrigatório de %u bytes.\n", NATQ4_HEADER_SIZE);
+            fprintf(stderr, "[ERROR] NATQ4 file smaller than required header of %u bytes.\n", NATQ4_HEADER_SIZE);
             close(fd);
             return 1;
         }
@@ -945,7 +945,7 @@ int main(int argc, char** argv) {
 
     model_bytes = (const uint8_t*)mmap(NULL, (size_t)model_file_size, PROT_READ, MAP_SHARED, fd, (off_t)model_offset);
     if (model_bytes == MAP_FAILED || !model_bytes) {
-        fprintf(stderr, "[ERRO] Falha ao mapear arquivo na memoria\n");
+        fprintf(stderr, "[ERROR] Failed to map file to memory\n");
         close(fd);
         return 1;
     }
@@ -956,7 +956,7 @@ int main(int argc, char** argv) {
     } while (0)
 #endif
 
-    // 4. Validar cabeçalho do modelo
+    // 4. Validate model header
     const NativaModelHeader* hdr = (const NativaModelHeader*)model_bytes;
     if (!validate_model_header(hdr, model_file_size)) {
         UNMAP_AND_CLOSE();
@@ -965,24 +965,24 @@ int main(int argc, char** argv) {
 
     if (g_vocab && (g_vocab_size > hdr->vocab_size ||
         (hdr->version >= 3 && g_vocab_size != hdr->tokenizer_vocab_size))) {
-        fprintf(stderr, "[ERRO] O vocabulário carregado cobre %u IDs; o modelo requer %u IDs ativos e tem %u linhas.\n",
+        fprintf(stderr, "[ERROR] Loaded vocabulary covers %u IDs; model requires %u active IDs and has %u rows.\n",
                 g_vocab_size, hdr->version >= 3 ? hdr->tokenizer_vocab_size : g_vocab_size, hdr->vocab_size);
         UNMAP_AND_CLOSE();
         return 1;
     }
 
-    printf("[*] Modelo .natq4 carregado com sucesso:\n");
-    printf("    -> Dimensao      : %u | Intermediaria: %u\n", hdr->dim, hdr->intermediate_dim);
-    printf("    -> Camadas       : %u | Cabecas: %u Q / %u KV (Head Dim: %u)\n",
+    printf("[*] Model .natq4 loaded successfully:\n");
+    printf("    -> Dimension     : %u | Intermediate: %u\n", hdr->dim, hdr->intermediate_dim);
+    printf("    -> Layers        : %u | Heads: %u Q / %u KV (Head Dim: %u)\n",
            hdr->num_layers, hdr->num_heads, hdr->num_kv_heads, hdr->head_dim);
     const int sampling_vocab_size = (int)(hdr->version >= 3 ? hdr->tokenizer_vocab_size :
         (g_vocab ? g_vocab_size : hdr->vocab_size));
-    printf("    -> Vocabulário   : %d IDs ativos / %u linhas | Contexto Max: %u\n",
+    printf("    -> Vocabulary    : %d active IDs / %u rows | Max Context: %u\n",
            sampling_vocab_size, hdr->vocab_size, hdr->max_seq_len);
 
-    // 5. Alocar arena dinamica
+    // 5. Allocate dynamic arena
     if (!arena_allocate(hdr)) {
-        fprintf(stderr, "[ERRO] Falha ao alocar arena dinamica de memoria!\n");
+        fprintf(stderr, "[ERROR] Failed to allocate dynamic memory arena!\n");
         UNMAP_AND_CLOSE();
         return 1;
     }
@@ -994,7 +994,7 @@ int main(int argc, char** argv) {
         int cur_seq_pos = 0;
         char* line_buf = (char*)malloc(131072);
         if (!line_buf) {
-            fprintf(stderr, "[ERRO] Falha ao alocar buffer de linha!\n");
+            fprintf(stderr, "[ERROR] Failed to allocate line buffer!\n");
             UNMAP_AND_CLOSE();
             return 1;
         }
@@ -1015,7 +1015,7 @@ int main(int argc, char** argv) {
                 }
                 FILE* tf = fopen(fpath, "r");
                 if (!tf) {
-                    printf("\n[PPL_ERROR falha ao abrir arquivo: %s]\n", fpath);
+                    printf("\n[PPL_ERROR failed to open file: %s]\n", fpath);
                     fflush(stdout);
                     continue;
                 }
@@ -1108,7 +1108,7 @@ int main(int argc, char** argv) {
     } else if (eval_tokens_path) {
         FILE* tf = fopen(eval_tokens_path, "r");
         if (!tf) {
-            fprintf(stderr, "[ERRO] Nao foi possivel abrir arquivo de tokens: %s\n", eval_tokens_path);
+            fprintf(stderr, "[ERROR] Could not open tokens file: %s\n", eval_tokens_path);
             UNMAP_AND_CLOSE();
             return 1;
         }
@@ -1116,7 +1116,7 @@ int main(int argc, char** argv) {
         int max_cap = 65536;
         int* token_list = (int*)malloc(max_cap * sizeof(int));
         if (!token_list) {
-            fprintf(stderr, "[ERRO] Falha ao alocar memoria para lista de tokens.\n");
+            fprintf(stderr, "[ERROR] Failed to allocate memory for token list.\n");
             fclose(tf);
             UNMAP_AND_CLOSE();
             return 1;
@@ -1135,7 +1135,7 @@ int main(int argc, char** argv) {
         fclose(tf);
 
         if (total_tokens < 2) {
-            fprintf(stderr, "[ERRO] Arquivo de tokens precisa de pelo menos 2 tokens para calcular PPL.\n");
+            fprintf(stderr, "[ERROR] Tokens file requires at least 2 tokens to compute PPL.\n");
             free(token_list);
             UNMAP_AND_CLOSE();
             return 1;
@@ -1143,7 +1143,7 @@ int main(int argc, char** argv) {
 
         int max_seq = (int)hdr->max_seq_len;
         if (total_tokens > max_seq) {
-            printf("[AVISO] Truncando tokens para o limite de contexto do modelo (%d tokens).\n", max_seq);
+            printf("[WARNING] Truncating tokens to model context limit (%d tokens).\n", max_seq);
             total_tokens = max_seq;
         }
 
@@ -1152,7 +1152,7 @@ int main(int argc, char** argv) {
         printf("====================================================================\n");
         printf("  Tokens no split   : %d\n", total_tokens);
         printf("  Pares avaliados   : %d\n", total_tokens - 1);
-        printf("  Vocabulario ativo : %d\n", sampling_vocab_size);
+        printf("  Active vocabulary : %d\n", sampling_vocab_size);
         printf("--------------------------------------------------------------------\n");
 
         double t_ppl0 = timer_now();
@@ -1208,12 +1208,12 @@ int main(int argc, char** argv) {
         double acc_val = (evaluated > 0) ? (100.0 * correct / evaluated) : 0.0;
         double ppl_speed = (ppl_sec > 0.0) ? (evaluated / ppl_sec) : 0.0;
 
-        printf("  [RESULTADO OFICIAL DE PERPLEXIDADE]:\n");
-        printf("    Tokens avaliados : %d\n", evaluated);
-        printf("    NLL Medio        : %.4f nats/token\n", mean_nll);
+        printf("  [OFFICIAL PERPLEXITY RESULT]:\n");
+        printf("    Evaluated tokens : %d\n", evaluated);
+        printf("    Mean NLL         : %.4f nats/token\n", mean_nll);
         printf("    Perplexidade PPL : \x1b[1;32m%.4f\x1b[0m\n", ppl_val);
-        printf("    Acuracia Top-1   : %.2f%%\n", acc_val);
-        printf("    Tempo total      : %.3f s\n", ppl_sec);
+        printf("    Top-1 Accuracy   : %.2f%%\n", acc_val);
+        printf("    Total time       : %.3f s\n", ppl_sec);
         printf("    Throughput       : %.2f tokens/s\n", ppl_speed);
         printf("====================================================================\n");
         printf("[PPL_DONE tokens=%d nll=%.4f ppl=%.4f acc=%.2f time=%.3f speed=%.2f]\n",
@@ -1231,7 +1231,7 @@ int main(int argc, char** argv) {
         for (int p = 0; p < prompt_len - 1; p++) {
             forward_token_universal(hdr, model_bytes, default_prompt[p], p);
         }
-        printf("    -> Prefill concluido em %.3f s!\n\n", timer_now() - t0);
+        printf("    -> Prefill completed in %.3f s!\n\n", timer_now() - t0);
 
         printf("[*] Gerando %d tokens no motor universal:\n----------------------------------------------------\n", bench_tokens);
         int cur = default_prompt[prompt_len - 1];
@@ -1259,10 +1259,10 @@ int main(int argc, char** argv) {
         double tok_s = (gen_sec > 0.0) ? (gen / gen_sec) : 0.0;
 
         printf("\n----------------------------------------------------\n");
-        printf("[RESULTADO MOTOR UNIVERSAL .NATQ4]:\n");
-        printf("  Tokens gerados : %d\n", gen);
-        printf("  Tempo total    : %.3f s\n", gen_sec);
-        printf("  Velocidade     : \x1b[1;32m%.2f tokens/segundo\x1b[0m\n", tok_s);
+        printf("[UNIVERSAL .NATQ4 ENGINE RESULT]:\n");
+        printf("  Tokens generated : %d\n", gen);
+        printf("  Total time     : %.3f s\n", gen_sec);
+        printf("  Speed          : \x1b[1;32m%.2f tokens/second\x1b[0m\n", tok_s);
         if (bench_mode) printf("  BENCH_HASH=%08x\n", seq_hash);
         printf("====================================================================\n");
     }

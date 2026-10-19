@@ -1,11 +1,11 @@
 # models/qwen2.5_completo.nat
-# Execucao do Modelo Oficial Completo Qwen2.5-0.5B (Alibaba Cloud) em Nativa v0.4
-# 24 Camadas Transformer Decoder-Only com SwiGLU, RMSNorm e GQA Attention
+# Execution of the Complete Official Qwen2.5-0.5B Model (Alibaba Cloud) in Nativa v0.4
+# 24 Decoder-Only Transformer Layers with SwiGLU, RMSNorm, and GQA Attention
 
 fn main():
     print("==========================================================================")
-    print("  NATIVA v0.4: INFERENCIA DO MODELO OFICIAL COMPLETO QWEN2.5-0.5B")
-    print("  24 Camadas Decoder-Only | 490 Milhoes de Parametros | Alibaba Cloud")
+    print("  NATIVA v0.4: INFERENCE OF THE COMPLETE OFFICIAL QWEN2.5-0.5B MODEL")
+    print("  24 Decoder-Only Layers | 490 Million Parameters | Alibaba Cloud")
     print("==========================================================================")
 
     arquivo = "data/qwen2.5_0.5b.safetensors"
@@ -13,13 +13,13 @@ fn main():
         if exists_file("qwen2.5_0.5b.safetensors"):
             arquivo = "qwen2.5_0.5b.safetensors"
         else:
-            print("[AVISO] Arquivo de pesos nao encontrado:")
+            print("[WARNING] Weights file not found:")
             print(f"        {arquivo}")
-            print("Para baixar o modelo Qwen2.5-0.5B, execute o utilitario:")
+            print("To download the Qwen2.5-0.5B model, run the utility:")
             print("  python tools/baixar_qwen.py")
             return
 
-    # Hiperparametros oficiais do Qwen2.5-0.5B
+    # Official Qwen2.5-0.5B hyperparameters
     d_model      = 896
     num_layers   = 24
     num_heads    = 14
@@ -28,25 +28,25 @@ fn main():
     d_ff         = 4864
     vocab_size   = 151936
 
-    print(f"[*] Hiperparametros: d_model={d_model} | layers={num_layers} | q_heads={num_heads} | kv_heads={num_kv_heads} | dim_head={dim_head} | d_ff={d_ff} | vocab={vocab_size}")
-    print(f"[*] Carregando tensores de entrada e saida...")
+    print(f"[*] Hyperparameters: d_model={d_model} | layers={num_layers} | q_heads={num_heads} | kv_heads={num_kv_heads} | dim_head={dim_head} | d_ff={d_ff} | vocab={vocab_size}")
+    print(f"[*] Loading input and output tensors...")
 
     t0 = clock()
     emb_table  = load_safetensors(arquivo, "model.embed_tokens.weight")
     final_norm = load_safetensors(arquivo, "model.norm.weight")
     t_emb = clock() - t0
-    print(f"    - Embeddings e Final Norm carregados em {t_emb:.2f}s! Shape: {shape(emb_table)}")
+    print(f"    - Embeddings and Final Norm loaded in {t_emb:.2f}s! Shape: {shape(emb_table)}")
 
-    # Token de entrada real
+    # Real input token
     token_id = 9924
-    print(f"\n[*] Executando Forward Pass das 24 Camadas para o token ID = {token_id}...")
+    print(f"\n[*] Running Forward Pass of all 24 Layers for token ID = {token_id}...")
 
     t_fwd_start = clock()
 
     # 1. Embedding Lookup
     x = emb_table[token_id]
 
-    # 2. Iteracao sequencial através de TODAS as 24 camadas reais do Qwen2.5
+    # 2. Sequential iteration through ALL 24 real layers of Qwen2.5
     for l in 0..num_layers:
         t_l_start = clock()
 
@@ -54,7 +54,7 @@ fn main():
         norm1 = load_safetensors(arquivo, f"model.layers.{l}.input_layernorm.weight")
         xn = rmsnorm(x, norm1)
 
-        # Projecoes de Atencao Q, K, V e biases oficiais do Qwen
+        # Official Qwen Q, K, V Attention projections and biases
         W_q = load_safetensors(arquivo, f"model.layers.{l}.self_attn.q_proj.weight")
         b_q = load_safetensors(arquivo, f"model.layers.{l}.self_attn.q_proj.bias")
         W_k = load_safetensors(arquivo, f"model.layers.{l}.self_attn.k_proj.weight")
@@ -67,15 +67,15 @@ fn main():
         k = (W_k @ xn) + b_k
         v = (W_v @ xn) + b_v
 
-        # Single token self-attention: softmax(q.k / sqrt(d)) = [1.0] para seq_len=1
+        # Single token self-attention: softmax(q.k / sqrt(d)) = [1.0] for seq_len=1
         _qk = (q[0] * k[0]) * 0.0
 
-        # GQA: expansao das 2 KV heads para alimentar as 14 Query heads
+        # GQA: expansion of the 2 KV heads to feed the 14 Query heads
         v0 = v[0..64] + _qk
         v1 = v[64..128] + _qk
         v_rep = concat([v0, v0, v0, v0, v0, v0, v0, v1, v1, v1, v1, v1, v1, v1])
 
-        # Projecao de saida da atencao
+        # Attention output projection
         attn_out = W_o @ v_rep
         x = x + attn_out
 
@@ -92,21 +92,21 @@ fn main():
         h    = silu(gate) * up
         mlp_out = W_down @ h
 
-        # Conexao Residual da Camada
+        # Layer Residual Connection
         x = x + mlp_out
         t_l = clock() - t_l_start
 
         if l % 4 == 0 or l == num_layers - 1:
-            print(f"    - Camada {l + 1:2d}/{num_layers}: executada em {t_l * 1000.0:.1f} ms | Shape de saida: {shape(x)}")
+            print(f"    - Layer {l + 1:2d}/{num_layers}: executed in {t_l * 1000.0:.1f} ms | Output shape: {shape(x)}")
 
     # 3. Final RMSNorm
     x_final = rmsnorm(x, final_norm)
 
     t_fwd = clock() - t_fwd_start
-    print(f"\n[OK] Forward Pass Completo de TODAS as {num_layers} camadas executado em {t_fwd:.2f}s!")
-    print(f"     Latencia media por camada: {t_fwd * 1000.0 / to_f64(num_layers):.1f} ms")
-    print(f"     Shape final do vetor de ativacao: {shape(x_final)}")
+    print(f"\n[OK] Complete Forward Pass of ALL {num_layers} layers executed in {t_fwd:.2f}s!")
+    print(f"     Average latency per layer: {t_fwd * 1000.0 / to_f64(num_layers):.1f} ms")
+    print(f"     Final activation vector shape: {shape(x_final)}")
 
     print("\n==========================================================================")
-    print("  QWEN2.5-0.5B COMPLETO (24 CAMADAS) EXECUTADO COM SUCESSO NO NATIVA!")
+    print("  COMPLETE QWEN2.5-0.5B (24 LAYERS) SUCCESSFULLY EXECUTED IN NATIVA!")
     print("==========================================================================")

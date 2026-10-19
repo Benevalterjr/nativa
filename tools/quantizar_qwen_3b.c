@@ -72,7 +72,7 @@ static inline void quantize_block_32(const uint16_t* in_bf16, uint16_t* out_scal
 static bool quantize_matrix_q4x4(const uint8_t* in_ptr, int rows, int cols, FILE* out_file, uint64_t expected_offset) {
     uint64_t cur_off = (uint64_t)_ftelli64(out_file);
     if (cur_off != expected_offset) {
-        fprintf(stderr, "[ERRO OFFSET] Esperado %llu, atual %llu ao quantizar matriz (%d x %d)\n",
+        fprintf(stderr, "[OFFSET ERROR] Expected %llu, actual %llu when quantizing matrix (%d x %d)\n",
                 expected_offset, cur_off, rows, cols);
         return false;
     }
@@ -83,7 +83,7 @@ static bool quantize_matrix_q4x4(const uint8_t* in_ptr, int rows, int cols, FILE
 
     BlockQ4x4* out_buf = (BlockQ4x4*)malloc(out_bytes);
     if (!out_buf) {
-        fprintf(stderr, "Erro ao alocar memoria para quantizar matriz (%d x %d)\n", rows, cols);
+        fprintf(stderr, "Error allocating memory to quantize matrix (%d x %d)\n", rows, cols);
         return false;
     }
 
@@ -108,7 +108,7 @@ static bool quantize_matrix_q4x4(const uint8_t* in_ptr, int rows, int cols, FILE
 static bool copy_raw_bf16(const uint8_t* in_ptr, size_t num_elements, FILE* out_file, uint64_t expected_offset) {
     uint64_t cur_off = (uint64_t)_ftelli64(out_file);
     if (cur_off != expected_offset) {
-        fprintf(stderr, "[ERRO OFFSET] Esperado %llu, atual %llu ao copiar BF16 (%zu elementos)\n",
+        fprintf(stderr, "[OFFSET ERROR] Expected %llu, actual %llu when copying BF16 (%zu elements)\n",
                 expected_offset, cur_off, num_elements);
         return false;
     }
@@ -129,19 +129,19 @@ static bool map_shard(const char* path, MappedShard* shard) {
     shard->base = NULL;
     shard->hFile = CreateFileA(path, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
     if (shard->hFile == INVALID_HANDLE_VALUE) {
-        printf("[ERRO] Nao foi possivel abrir shard %s (Erro: %lu)\n", path, GetLastError());
+        printf("[ERROR] Could not open shard %s (Error: %lu)\n", path, GetLastError());
         return false;
     }
     shard->hMapping = CreateFileMappingA(shard->hFile, NULL, PAGE_READONLY, 0, 0, NULL);
     if (!shard->hMapping) {
-        printf("[ERRO] Nao foi possivel criar mapeamento para %s\n", path);
+        printf("[ERROR] Could not create mapping for %s\n", path);
         CloseHandle(shard->hFile);
         shard->hFile = INVALID_HANDLE_VALUE;
         return false;
     }
     shard->base = (const uint8_t*)MapViewOfFile(shard->hMapping, FILE_MAP_READ, 0, 0, 0);
     if (!shard->base) {
-        printf("[ERRO] Nao foi possivel mapear visualizacao de %s\n", path);
+        printf("[ERROR] Could not map view of %s\n", path);
         CloseHandle(shard->hMapping);
         shard->hMapping = NULL;
         CloseHandle(shard->hFile);
@@ -194,20 +194,20 @@ int main(void) {
 
     printf("====================================================================\n");
     printf("  NATIVA QUANTIZADOR DIRETO Q4x4 - QWEN2.5-3B-INSTRUCT\n");
-    printf("  Shards Entrada : %s + %s\n", shard1_path, shard2_path);
-    printf("  Saida INT4     : %s (~1.62 GB)\n", out_model_path);
+    printf("  Input Shards   : %s + %s\n", shard1_path, shard2_path);
+    printf("  Output INT4    : %s (~1.62 GB)\n", out_model_path);
     printf("====================================================================\n");
 
     int ret = 1;
     FILE* out_file = NULL;
     MappedShard s1 = { INVALID_HANDLE_VALUE, NULL, NULL };
     MappedShard s2 = { INVALID_HANDLE_VALUE, NULL, NULL };
-    printf("[*] Mapeando Shard 1 (3.97 GB)...\n");
+    printf("[*] Mapping Shard 1 (3.97 GB)...\n");
     if (!map_shard(shard1_path, &s1)) {
         goto cleanup;
     }
 
-    printf("[*] Mapeando Shard 2 (2.20 GB)...\n");
+    printf("[*] Mapping Shard 2 (2.20 GB)...\n");
     if (!map_shard(shard2_path, &s2)) {
         goto cleanup;
     }
@@ -216,7 +216,7 @@ int main(void) {
 
     out_file = fopen(out_model_path, "wb");
     if (!out_file) {
-        printf("[ERRO] Nao foi possivel criar %s\n", out_model_path);
+        printf("[ERROR] Could not create %s\n", out_model_path);
         goto cleanup;
     }
 
@@ -227,12 +227,12 @@ int main(void) {
     QueryPerformanceCounter(&t0);
 
     // 1. Quantizar embed_tokens (151936 x 2048) diretamente para BlockQ4x4
-    printf("[1/3] Quantizando embedding tokens & lm_head (151,936 x 2,048)...\n");
+    printf("[1/3] Quantizing embedding tokens & lm_head (151,936 x 2,048)...\n");
     const uint8_t* emb_src = shards[g_raw_model_locs.embed_tokens.shard] + g_raw_model_locs.embed_tokens.offset;
     if (!quantize_matrix_q4x4(emb_src, QWEN3B_VOCAB_SIZE, QWEN3B_DIM, out_file, g_qwen3b_offsets.embed_tokens)) {
         goto cleanup;
     }
-    printf("      -> Embed tokens gravados no offset: %llu bytes (~167 MB)\n", g_qwen3b_offsets.embed_tokens);
+    printf("      -> Embed tokens written to offset: %llu bytes (~167 MB)\n", g_qwen3b_offsets.embed_tokens);
 
     // 2. Copiar model.norm (2048 BF16)
     const uint8_t* norm_src = shards[g_raw_model_locs.norm.shard] + g_raw_model_locs.norm.offset;
@@ -240,15 +240,15 @@ int main(void) {
         goto cleanup;
     }
 
-    // 3. Processar as 36 camadas do Transformer
-    printf("[2/3] Quantizando as 36 camadas do Transformer diretamente em Q4x4...\n");
+    // 3. Process the 36 Transformer layers
+    printf("[2/3] Quantizing the 36 Transformer layers directly to Q4x4...\n");
     for (int l = 0; l < QWEN3B_NUM_LAYERS; l++) {
         if (!quantize_layer(&g_raw_model_locs.layers[l], &g_qwen3b_offsets.layers[l], shards, out_file)) {
             goto cleanup;
         }
 
         if ((l + 1) % 6 == 0 || l == QWEN3B_NUM_LAYERS - 1) {
-            printf("      -> Camadas %2d/36 quantizadas...\n", l + 1);
+            printf("      -> Layers %2d/36 quantized...\n", l + 1);
         }
     }
 
@@ -258,9 +258,9 @@ int main(void) {
     double total_sec = (double)(t1.QuadPart - t0.QuadPart) / (double)freq.QuadPart;
 
     printf("\n====================================================================\n");
-    printf("[SUCESSO] QUANTIZACAO DIRETA Q4x4 CONCLUIDA COM EXITO!\n");
-    printf("  Tamanho final : %llu bytes (%.2f MB)\n", total_out_size, (double)total_out_size / (1024.0 * 1024.0));
-    printf("  Tempo total   : %.2f segundos\n", total_sec);
+    printf("[SUCCESS] DIRECT Q4x4 QUANTIZATION COMPLETED SUCCESSFULLY!\n");
+    printf("  Final size   : %llu bytes (%.2f MB)\n", total_out_size, (double)total_out_size / (1024.0 * 1024.0));
+    printf("  Total time   : %.2f seconds\n", total_sec);
     printf("====================================================================\n");
 
     ret = 0;

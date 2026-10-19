@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """tools/pack_natq4.py
-Empacota modelos quantizados Q4x4 no formato autodescritivo universal .natq4 do Nativa.
-Escreve o cabeçalho de 16 KB no início do arquivo e anexa os pesos.
+Packages Q4x4 quantized models into Nativa's universal self-describing .natq4 format.
+Writes the 16 KB header at the beginning of the file and appends the weights.
 """
 
 import os
@@ -16,25 +16,25 @@ def pack_qwen_3b_to_natq4(raw_bin_path: str, out_natq4_path: str):
 
     hdr_c_path = os.path.join("tools", "qwen_offsets_3b_q4.h")
     if not os.path.exists(hdr_c_path):
-        print(f"[ERRO] Header {hdr_c_path} nao encontrado!")
+        print(f"[ERROR] Header {hdr_c_path} not found!")
         return False
 
     text = open(hdr_c_path, "r", encoding="utf-8").read()
 
-    # Extrai offsets
+    # Extract offsets
     m_emb = re.search(r"\.embed_tokens\s*=\s*(\d+)ULL", text)
     m_norm = re.search(r"\.norm\s*=\s*(\d+)ULL", text)
     embed_off = int(m_emb.group(1)) if m_emb else 0
     norm_off = int(m_norm.group(1)) if m_norm else 0
 
     layers = []
-    for block in re.findall(r"// Camada \d+\s*\{(.*?)\}", text, re.S):
+    for block in re.findall(r"// (?:Camada|Layer) \d+\s*\{(.*?)\}", text, re.S):
         d = dict((k, int(v)) for k, v in re.findall(r"\.(\w+)\s*=\s*(\d+)ULL", block))
         layers.append(d)
 
-    print(f"[*] Lido modelo 3B: {len(layers)} camadas, embed={embed_off}, norm={norm_off}")
+    print(f"[*] Read 3B model: {len(layers)} layers, embed={embed_off}, norm={norm_off}")
 
-    # Monta o header C struct NativaModelHeader (16384 bytes)
+    # Build C struct NativaModelHeader (16384 bytes)
     # Magic: "NATQ4X4\0" (8B)
     magic = b"NATQ4X4\x00"
     version = 2
@@ -86,7 +86,7 @@ def pack_qwen_3b_to_natq4(raw_bin_path: str, out_natq4_path: str):
         data_start,
     )
 
-    # Offset onde comeca o array layers: 8 + 13*4 + 2*4 + 4*8 = 100 bytes
+    # Offset where the layers array starts: 8 + 13*4 + 2*4 + 4*8 = 100 bytes
     layer_array_start = 100
     for l_idx, l in enumerate(layers):
         layer_offset = layer_array_start + l_idx * 96
@@ -108,11 +108,11 @@ def pack_qwen_3b_to_natq4(raw_bin_path: str, out_natq4_path: str):
             l["wdown"] + data_start,
         )
 
-    # Campos EOS da versão 2 ficam depois do array fixo de 128 camadas.
-    # Qwen2.5 usa im_end como EOS e endoftext como parada adicional.
+    # Version 2 EOS fields are placed after the fixed array of 128 layers.
+    # Qwen2.5 uses im_end as EOS and endoftext as an additional stop token.
     struct.pack_into("<2I", hdr_bytes, 100 + 128 * 96, 151645, 151643)
 
-    print(f"[*] Criando {out_natq4_path} com header autodescritivo de 16 KB...")
+    print(f"[*] Creating {out_natq4_path} with 16 KB self-describing header...")
     chunk_size = 8 * 1024 * 1024
     with open(out_natq4_path, "wb") as out_f:
         out_f.write(hdr_bytes)
@@ -124,7 +124,7 @@ def pack_qwen_3b_to_natq4(raw_bin_path: str, out_natq4_path: str):
                 out_f.write(buf)
 
     total_size = os.path.getsize(out_natq4_path)
-    print(f"[OK] Modelo universal criado com sucesso: {out_natq4_path} ({total_size / (1024*1024):.2f} MB)")
+    print(f"[OK] Universal model created successfully: {out_natq4_path} ({total_size / (1024*1024):.2f} MB)")
     return True
 
 
@@ -134,4 +134,4 @@ if __name__ == "__main__":
     if os.path.exists(raw_path):
         pack_qwen_3b_to_natq4(raw_path, natq4_path)
     else:
-        print(f"[ERRO] {raw_path} nao existe!")
+        print(f"[ERROR] {raw_path} does not exist!")

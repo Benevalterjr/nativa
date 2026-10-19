@@ -16,8 +16,8 @@ def main():
     tokenizer = AutoTokenizer.from_pretrained(model_id)
     model = AutoModelForCausalLM.from_pretrained(model_id, torch_dtype=torch.float32)
 
-    # Canal-hibrido: proteger as primeiras/ultimas projecoes e quantizar gate/up com 10% outliers
-    # Vamos testar quantizacao nos MLPs protegendo os top 10% pesos de maior impacto
+    # Channel-hybrid: protect first/last projections and quantize gate/up with 10% outliers
+    # Test quantization on MLPs protecting the top 10% highest-impact weights
     for name, module in model.named_modules():
         if isinstance(module, nn.Linear):
             if "down_proj" in name or "gate_proj" in name:
@@ -41,11 +41,11 @@ def main():
                 w_rec = (w_trits * gamma) + sparse.view(M, K)
                 module.weight.data.copy_(w_rec)
 
-    prompt = "A inteligência artificial é"
+    prompt = "Artificial intelligence is"
     inputs = tokenizer(prompt, return_tensors="pt")
     with torch.no_grad():
         out = model.generate(inputs["input_ids"], max_new_tokens=20, do_sample=False, pad_token_id=tokenizer.eos_token_id)
-    print("Resultado 10% outliers nos MLPs:", tokenizer.decode(out[0].tolist()))
+    print("Result with 10% outliers in MLPs:", tokenizer.decode(out[0].tolist()))
 
 if __name__ == "__main__":
     main()

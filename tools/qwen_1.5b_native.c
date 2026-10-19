@@ -1,10 +1,10 @@
 // ============================================================================
 // NATIVA NATIVE C RUNNER - QWEN2.5-1.5B-INSTRUCT IN PURE C99
 // ============================================================================
-// Motor de inferência nativo de alta performance para Qwen2.5-1.5B (28 Camadas):
-//   - Zero-Copy mmap do modelo oficial safetensors (3.08 GB)
+// High-performance native inference engine for Qwen2.5-1.5B (28 Layers):
+//   - Zero-Copy mmap of official safetensors model (3.08 GB)
 //   - SIMD AVX/SSE para cálculo de BFloat16 sob demanda
-//   - OpenMP multi-core em todas as 28 camadas
+//   - OpenMP multi-core across all 28 layers
 //   - Suporte a modo benchmark e modo interativo (--interactive)
 // ============================================================================
 
@@ -25,7 +25,7 @@
 #define MAX_SEQ_LEN 1024
 
 // ----------------------------------------------------------------------------
-// VOCABULÁRIO NATIVO
+// NATIVE VOCABULARY
 // ----------------------------------------------------------------------------
 typedef struct {
     uint16_t len;
@@ -272,7 +272,7 @@ static void forward_token(const uint8_t* model_bytes, int token_id, int pos) {
         g_x[i] = bf16_to_fp32(embed_row[i]);
     }
 
-    // 2. Loop através das 28 camadas
+    // 2. Loop through 28 layers
     for (int l = 0; l < QWEN15_NUM_LAYERS; l++) {
         const Qwen15LayerOffsets* lo = &g_qwen15_offsets.layers[l];
         const uint16_t* norm1_w = (const uint16_t*)(model_bytes + lo->norm1);
@@ -410,35 +410,35 @@ int main(int argc, char** argv) {
         }
     }
 
-    // 1. Carrega Vocabulário Binário
-    printf("[*] Carregando vocabulario (%s)...\n", vocab_path);
+    // 1. Load Binary Vocabulary
+    printf("[*] Loading vocabulary (%s)...\n", vocab_path);
     if (!load_vocab(vocab_path)) {
-        fprintf(stderr, "[ERRO] Nao foi possivel carregar o vocabulario: %s\n", vocab_path);
+        fprintf(stderr, "[ERROR] Could not load vocabulary: %s\n", vocab_path);
         return 1;
     }
-    printf("    -> %u tokens carregados no vocabulario.\n", g_vocab_size);
+    printf("    -> %u tokens loaded into vocabulary.\n", g_vocab_size);
 
-    // 2. Win32 Zero-Copy mmap do modelo safetensors
-    printf("[*] Mapeando pesos do modelo 1.5B via Win32 mmap (%s)...\n", model_path);
+    // 2. Win32 Zero-Copy mmap of safetensors model
+    printf("[*] Mapping 1.5B model weights via Win32 mmap (%s)...\n", model_path);
     HANDLE hFile = CreateFileA(model_path, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
     if (hFile == INVALID_HANDLE_VALUE) {
-        fprintf(stderr, "[ERRO] Falha ao abrir o arquivo do modelo: %s\n", model_path);
+        fprintf(stderr, "[ERROR] Failed to open model file: %s\n", model_path);
         return 1;
     }
     HANDLE hMapping = CreateFileMappingA(hFile, NULL, PAGE_READONLY, 0, 0, NULL);
     if (!hMapping) {
-        fprintf(stderr, "[ERRO] CreateFileMapping falhou.\n");
+        fprintf(stderr, "[ERROR] CreateFileMapping failed.\n");
         CloseHandle(hFile);
         return 1;
     }
     const uint8_t* model_bytes = (const uint8_t*)MapViewOfFile(hMapping, FILE_MAP_READ, 0, 0, 0);
     if (!model_bytes) {
-        fprintf(stderr, "[ERRO] MapViewOfFile falhou.\n");
+        fprintf(stderr, "[ERROR] MapViewOfFile failed.\n");
         CloseHandle(hMapping);
         CloseHandle(hFile);
         return 1;
     }
-    printf("    -> Modelo 1.5B mapeado em memoria virtual com sucesso (Zero-Copy).\n");
+    printf("    -> 1.5B Model mapped into virtual memory successfully (Zero-Copy).\n");
 
     // -------------------------------------------------------------
     // MODO INTERATIVO (CHAT STREAMING MULTI-TURN EM C)
@@ -552,16 +552,16 @@ int main(int argc, char** argv) {
     int next_token = sample_argmax(g_logits, QWEN15_VOCAB_SIZE);
     double t_prefill = timer_now() - t_prefill_start;
 
-    printf("    -> Prefill concluido em %.2f ms (%.1f tokens/s).\n", t_prefill * 1000.0, (double)prompt_len / t_prefill);
-    printf("    -> Primeiro token gerado: [ID %d] ", next_token);
+    printf("    -> Prefill completed in %.2f ms (%.1f tokens/s).\n", t_prefill * 1000.0, (double)prompt_len / t_prefill);
+    printf("    -> First generated token: [ID %d] ", next_token);
     print_token(next_token);
     printf("\n");
 
     printf("\n[*] Gerando %d tokens no Qwen2.5-1.5B nativo C99...\n", num_tokens_generate);
     if (custom_prompt) {
-        printf("--- Resposta Gerada ---\n");
+        printf("--- Generated Response ---\n");
     } else {
-        printf("--- Texto Gerado ---\nArtificial Intelligence is transforming");
+        printf("--- Generated Text ---\nArtificial Intelligence is transforming");
     }
     print_token(next_token);
 
@@ -590,11 +590,11 @@ int main(int argc, char** argv) {
 
     printf("\n--------------------\n\n");
     printf("======================================================================\n");
-    printf("  RESULTADO DO MOTOR NATIVO C99 - QWEN2.5-1.5B-INSTRUCT\n");
+    printf("  NATIVE C99 ENGINE RESULT - QWEN2.5-1.5B-INSTRUCT\n");
     printf("======================================================================\n");
     printf("• Tokens gerados no decode: %d\n", generated_count);
-    printf("• Tempo total de Decode:    %.3f s\n", t_decode_total);
-    printf("• Tempo medio por token:    %.2f ms\n", avg_step_time * 1000.0);
+    printf("• Total Decode time:    %.3f s\n", t_decode_total);
+    printf("• Average time per token:    %.2f ms\n", avg_step_time * 1000.0);
     printf("• Velocidade NATIVA em C:   %.2f TOKENS/SEGUNDO!\n", tokens_per_sec);
     printf("======================================================================\n");
 

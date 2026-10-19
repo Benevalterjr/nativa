@@ -3,4 +3,4 @@ fn main():
     n = len(x)
     raiz = sqrt(n)
     escala = 1.0 / sqrt(len(x))
-    print(f"Tamanho: {n}, Raiz: {raiz}, Escala: {escala}")
+    print(f"Length: {n}, Sqrt: {raiz}, Scale: {escala}")

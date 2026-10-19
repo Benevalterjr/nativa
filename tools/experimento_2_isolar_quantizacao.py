@@ -1,15 +1,15 @@
 #!/usr/bin/env python3
 """
-tools/experimento_2_isolar_quantizacao.py — Experimento 2: Isolar a Quantização
-Mantém a política de cache FIXA (Full KV Cache: 100% de retenção de tokens)
-e varia estritamente a precisão de quantização de K e V:
-1. FP32 (Base IEEE 754)
-2. FP16 (Meia precisão)
-3. INT8 (Quantização linear simétrica por escala)
+tools/experimento_2_isolar_quantizacao.py — Experiment 2: Isolate Quantization
+Keeps the cache policy FIXED (Full KV Cache: 100% token retention)
+and strictly varies the K and V quantization precision:
+1. FP32 (IEEE 754 baseline)
+2. FP16 (Half precision)
+3. INT8 (Symmetric linear quantization per scale)
 4. TurboQuant 4-bit (RHT + Lloyd-Max Gaussian)
 5. TurboQuant 2-bit (RHT + Lloyd-Max Gaussian)
 
-Mede: PPL real, NLL, Top-1 Acc, Memória teórica do KV Cache e RAM real de pico (psutil).
+Measures: Real PPL, NLL, Top-1 Acc, theoretical KV Cache memory, and real peak RAM (psutil).
 """
 
 import os
@@ -39,7 +39,7 @@ from tools.experimento_real_cortex_hipocampo import (
 
 
 def quantize_int8(x: np.ndarray) -> Tuple[np.ndarray, float]:
-    """Quantização simétrica INT8 com fator de escala."""
+    """Symmetric INT8 quantization with scale factor."""
     max_val = float(np.max(np.abs(x)))
     if max_val < 1e-12:
         return np.zeros_like(x, dtype=np.int8), 1.0
@@ -64,13 +64,13 @@ class QuantizedKVEntry:
     v_int8: Optional[np.ndarray] = None
     scale_k: float = 1.0
     scale_v: float = 1.0
-    # TurboQuant (4b e 2b)
+    # TurboQuant (4b and 2b)
     comp_k: Optional[List[dict]] = None
     comp_v: Optional[List[dict]] = None
 
 
 class QuantizedKVCache:
-    """KV Cache com precisão configurável e política 100% Full Cache."""
+    """KV Cache with configurable precision and 100% Full Cache policy."""
     def __init__(self, precision: str):
         self.precision = precision
         self.entries: List[QuantizedKVEntry] = []
@@ -144,7 +144,7 @@ def evaluate_precision(
     tokens: List[int],
     model: QwenModelLoaded
 ) -> Dict[str, Any]:
-    print(f"\n---> Avaliando Precisão de KV: {precision.upper()}...")
+    print(f"\n---> Evaluating KV Precision: {precision.upper()}...")
     caches = [QuantizedKVCache(precision=precision) for _ in range(model.num_layers)]
     
     n_tokens = len(tokens)
@@ -218,7 +218,7 @@ def evaluate_precision(
         if (i + 1) % 25 == 0 or (i + 1) == (n_tokens - 1):
             curr_ppl = math.exp(np.mean(nll_list))
             mem_kb = sum(c.memory_bytes() for c in caches) / 1024.0
-            print(f"    Passo {i + 1:2d}/{n_tokens - 1} | PPL parcial: {curr_ppl:.2f} | KV: {mem_kb:.1f} KB | RAM Processo: {rss_mb:.1f} MB")
+            print(f"    Step {i + 1:2d}/{n_tokens - 1} | Partial PPL: {curr_ppl:.2f} | KV: {mem_kb:.1f} KB | Process RAM: {rss_mb:.1f} MB")
 
     t_end = time.perf_counter()
     mean_nll = float(np.mean(nll_list))
@@ -238,14 +238,14 @@ def evaluate_precision(
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Experimento 2: Isolar Quantização de KV Cache")
-    parser.add_argument("--tokens", type=int, default=80, help="Número de tokens do WikiText-2")
-    parser.add_argument("--layers", type=int, default=24, help="Número de camadas")
+    parser = argparse.ArgumentParser(description="Experiment 2: Isolate KV Cache Quantization")
+    parser.add_argument("--tokens", type=int, default=80, help="Number of WikiText-2 tokens")
+    parser.add_argument("--layers", type=int, default=24, help="Number of layers")
     args = parser.parse_args()
 
     print("=" * 85)
-    print("EXPERIMENTO 2: ISOLAMENTO DA QUANTIZAÇÃO NO KV CACHE (POLÍTICA 100% RETENÇÃO)")
-    print(f"Modelo: Qwen2.5-0.5B ({args.layers} camadas) | Dataset: WikiText-2 | Tokens: {args.tokens}")
+    print("EXPERIMENT 2: ISOLATING KV CACHE QUANTIZATION (100% RETENTION POLICY)")
+    print(f"Model: Qwen2.5-0.5B ({args.layers} layers) | Dataset: WikiText-2 | Tokens: {args.tokens}")
     print("=" * 85)
 
     tok = nativa.Tokenizer(TOKENIZER_DEFAULT_PATH)
@@ -264,7 +264,7 @@ def main():
         results.append(res)
 
     print("\n" + "=" * 95)
-    print(f"{'PRECISÃO KV':<16} | {'PPL':<14} | {'NLL (nats)':<10} | {'TOP-1 ACC':<10} | {'KV CACHE':<12} | {'RAM PICO REAL':<14} | {'COMPRESSÃO'}")
+    print(f"{'KV PRECISION':<16} | {'PPL':<14} | {'NLL (nats)':<10} | {'TOP-1 ACC':<10} | {'KV CACHE':<12} | {'REAL PEAK RAM':<14} | {'COMPRESSION'}")
     print("=" * 95)
 
     base_kv = results[0]["kv_kb"]

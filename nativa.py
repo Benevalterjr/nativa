@@ -1,22 +1,22 @@
 #!/usr/bin/env python3
 """
-nativa.py — Linguagem Nativa (v0.4 - AI, Data, Spectral & Ternary Edition)
-Frontend DSL, analisador semântico estático, interpretador de prototipagem (Python/NumPy)
-e transpilador AOT para C99 nativo (GCC/Clang/MSVC).
+nativa.py — Nativa Language (v0.4 - AI, Data, Spectral & Ternary Edition)
+DSL frontend, static semantic analyzer, prototyping interpreter (Python/NumPy),
+and AOT transpiler to native C99 (GCC/Clang/MSVC).
 
-Arquitetura do Projeto:
-    1. Frontend DSL: Lexer, parser e analisador semântico estático em Python puro.
-    2. Runtime de Prototipagem (--run): Interpretador dinâmico acelerado com NumPy
-       e kernels de baixo nível (BitNet b1.58, RMSNorm, SiLU, Softmax) via ctypes/AOT.
-    3. Compilador Nativo AOT (--build): Transpilador para C99 estático, compilado diretamente
-       via GCC, Clang ou MSVC para binário executável (.exe / ELF) sem dependência externa.
+Project Architecture:
+    1. DSL Frontend: Pure Python lexer, parser, and static semantic analyzer.
+    2. Prototyping Runtime (--run): Dynamic interpreter accelerated with NumPy
+       and low-level kernels (BitNet b1.58, RMSNorm, SiLU, Softmax) via ctypes/AOT.
+    3. Native AOT Compiler (--build): Transpiler to static C99, compiled directly
+       via GCC, Clang, or MSVC to an executable binary (.exe / ELF) with zero external dependencies.
 
-Uso:
-    nativa run programa.nat            # executa via interpretador de prototipagem
-    nativa build programa.nat          # compila para binário executável nativo C99
-    nativa build programa.nat --run    # compila para binário C99 e executa nativamente
-    nativa programa.nat                # validação sintática e análise semântica
-    nativa test                        # roda a suíte de testes de regressão (100 testes)
+Usage:
+    nativa run program.nat             # run via prototyping interpreter
+    nativa build program.nat           # compile to native C99 executable binary
+    nativa build program.nat --run     # compile to C99 binary and run natively
+    nativa program.nat                 # syntax validation and semantic analysis
+    nativa test                        # run the regression test suite (100 tests)
 """
 
 from __future__ import annotations
@@ -53,7 +53,7 @@ if sys.platform == "win32":
         pass
 
 # ----------------------------------------------------------------------------
-# Erros
+# Errors
 # ----------------------------------------------------------------------------
 
 class NatError(Exception):
@@ -63,18 +63,18 @@ class NatError(Exception):
         self.line = line
         self.col = col
 
-    def pretty(self, source: str, filename: str = "<entrada>") -> str:
+    def pretty(self, source: str, filename: str = "<input>") -> str:
         lines = source.replace("\r\n", "\n").replace("\r", "\n").split("\n")
         text = lines[self.line - 1] if 1 <= self.line <= len(lines) else ""
         caret = " " * max(self.col - 1, 0) + "^"
-        return (f"{filename}:{self.line}:{self.col}: erro: {self.message}\n"
+        return (f"{filename}:{self.line}:{self.col}: error: {self.message}\n"
                 f"    {text}\n    {caret}")
 
 
 class NatRuntimeError(RuntimeError, NatError):
-    """Erro de runtime com rastreamento preciso de linha e coluna."""
+    """Runtime error with accurate line and column tracking."""
     def __init__(self, message: str, line: int = 0, col: int = 0):
-        RuntimeError.__init__(self, f"[linha {line}:{col}] {message}" if line else message)
+        RuntimeError.__init__(self, f"[line {line}:{col}] {message}" if line else message)
         self.message = message
         self.line = line
         self.col = col
@@ -82,7 +82,7 @@ class NatRuntimeError(RuntimeError, NatError):
 
 
 # ----------------------------------------------------------------------------
-# Tokens e lexer
+# Tokens and lexer
 # ----------------------------------------------------------------------------
 
 @dataclass
@@ -118,7 +118,7 @@ def unescape(s: str, line: int, col: int) -> str:
         if c == "\\" and i + 1 < len(s):
             e = s[i + 1]
             if e not in ESCAPES:
-                raise NatError(f"sequência de escape inválida '\\{e}'", line, col)
+                raise NatError(f"invalid escape sequence '\\{e}'", line, col)
             out.append(ESCAPES[e])
             i += 2
         else:
@@ -151,7 +151,7 @@ def tokenize(source: str, first_line: int = 1) -> list[Token]:
             while j < n and src[j] == " ":
                 j += 1
             if j < n and src[j] == "\t":
-                err("tabs não são permitidos na indentação; use espaços", j)
+                err("tabs are not allowed in indentation; use spaces", j)
             if j >= n:
                 i = j
                 break
@@ -174,7 +174,7 @@ def tokenize(source: str, first_line: int = 1) -> list[Token]:
                     indents.pop()
                     add("DEDENT", width, j)
                 if width != indents[-1]:
-                    err("indentação inconsistente com nenhum bloco anterior", j)
+                    err("inconsistent indentation does not match any outer block", j)
             i = j
             at_line_start = False
             continue
@@ -201,7 +201,7 @@ def tokenize(source: str, first_line: int = 1) -> list[Token]:
             line_start = i
             continue
         if c == "\t":
-            err("tabs só são permitidos dentro de strings e comentários")
+            err("tabs are only allowed inside strings and comments")
 
         if c.isdigit():
             j = i
@@ -238,12 +238,12 @@ def tokenize(source: str, first_line: int = 1) -> list[Token]:
                 k = j + 1
                 while k < n and src[k] != q:
                     if src[k] == "\n":
-                        err("f-string não terminada", start)
+                        err("unterminated f-string", start)
                     if src[k] == "\\":
                         k += 1
                     k += 1
                 if k >= n:
-                    err("f-string não terminada", start)
+                    err("unterminated f-string", start)
                 add("FSTRING", src[j + 1:k], start)
                 i = k + 1
                 continue
@@ -255,12 +255,12 @@ def tokenize(source: str, first_line: int = 1) -> list[Token]:
             k = i + 1
             while k < n and src[k] != c:
                 if src[k] == "\n":
-                    err("string não terminada")
+                    err("unterminated string")
                 if src[k] == "\\":
                     k += 1
                 k += 1
             if k >= n:
-                err("string não terminada")
+                err("unterminated string")
             value = unescape(src[i + 1:k], line, i - line_start + 1)
             add("STRING", value, i)
             i = k + 1
@@ -271,13 +271,13 @@ def tokenize(source: str, first_line: int = 1) -> list[Token]:
             if len(op) == size and op in table:
                 break
         else:
-            err(f"caractere inesperado {c!r}")
+            err(f"unexpected character {c!r}")
 
         if op in ("(", "[", "{"):
             brackets.append((op, line, i - line_start + 1))
         elif op in CLOSERS:
             if not brackets or brackets[-1][0] != CLOSERS[op]:
-                err(f"'{op}' sem abertura correspondente")
+                err(f"'{op}' without matching opening bracket")
             brackets.pop()
 
         add("OP", op, i)
@@ -285,7 +285,7 @@ def tokenize(source: str, first_line: int = 1) -> list[Token]:
 
     if brackets:
         ch, l, c_ = brackets[-1]
-        raise NatError(f"'{ch}' não foi fechado", l, c_)
+        raise NatError(f"'{ch}' was not closed", l, c_)
 
     if not at_line_start:
         add("NEWLINE", None, n)
@@ -305,7 +305,7 @@ class Node:
     line: int = field(default=0, compare=False, repr=False)
     col: int = field(default=0, compare=False, repr=False)
 
-# --- tipos ---
+# --- types ---
 @dataclass
 class TypeName(Node):
     name: str
@@ -328,7 +328,7 @@ class TypeTuple(Node):
 
 TypeExpr = Union[TypeName, TypeList, TypeTensor, TypeResult, TypeTuple]
 
-# --- expressões ---
+# --- expressions ---
 @dataclass
 class Int(Node):
     value: int
@@ -422,7 +422,7 @@ class TryUnwrap(Node):
 Expr = Union[Int, Float, Str, FString, Bool, Name, ListLit, ListComp, Lambda, TupleLit, DictLit, Unary, Binary,
              Range, Call, Index, Attr, TryUnwrap]
 
-# --- comandos ---
+# --- statements ---
 @dataclass
 class Assign(Node):
     target: Expr     # Name | Index | Attr
@@ -483,7 +483,7 @@ class Pass(Node):
 class ExprStmt(Node):
     expr: Expr
 
-# --- nível superior ---
+# --- top level ---
 @dataclass
 class Param(Node):
     name: str
@@ -503,7 +503,7 @@ class Function(Node):
 
 @dataclass
 class Import(Node):
-    module: str                  # 'math' ou 'a.b'
+    module: str                  # 'math' or 'a.b'
 
 @dataclass
 class Program(Node):
@@ -518,12 +518,12 @@ ASSIGN_OPS = {"=", "+=", "-=", "*=", "/=", "%=", "**=", "//=", "@="}
 CMP_OPS = {"==", "!=", "<", "<=", ">", ">="}
 
 def describe(t: Token) -> str:
-    special = {"NEWLINE": "fim de linha", "INDENT": "indentação inesperada",
-               "DEDENT": "fim do bloco", "EOF": "fim do arquivo"}
+    special = {"NEWLINE": "end of line", "INDENT": "unexpected indentation",
+               "DEDENT": "end of block", "EOF": "end of file"}
     if t.kind in special:
         return special[t.kind]
     if t.kind == "FSTRING":
-        return "uma f-string"
+        return "an f-string"
     return f"'{t.value}'"
 
 
@@ -555,18 +555,18 @@ class Parser:
 
     def expect_op(self, v: str, ctx: str = "") -> Token:
         if not self.is_op(v):
-            self.error(f"esperado '{v}'{ctx}, encontrado {describe(self.peek())}")
+            self.error(f"expected '{v}'{ctx}, found {describe(self.peek())}")
         return self.advance()
 
     def expect_kw(self, v: str) -> Token:
         if not self.is_kw(v):
-            self.error(f"esperado '{v}', encontrado {describe(self.peek())}")
+            self.error(f"expected '{v}', found {describe(self.peek())}")
         return self.advance()
 
     def expect_name(self, what: str) -> Token:
         t = self.peek()
         if t.kind != "NAME":
-            self.error(f"esperado {what}, encontrado {describe(t)}")
+            self.error(f"expected {what}, found {describe(t)}")
         return self.advance()
 
     def expect_newline(self):
@@ -574,7 +574,7 @@ class Parser:
         if t.kind == "NEWLINE":
             self.advance()
         elif t.kind != "EOF":
-            self.error(f"esperado fim de linha, encontrado {describe(t)}")
+            self.error(f"expected end of line, found {describe(t)}")
 
     def parse_program(self) -> Program:
         items = []
@@ -583,7 +583,7 @@ class Parser:
             if t.kind == "NEWLINE":
                 self.advance()
             elif t.kind == "INDENT":
-                self.error("indentação inesperada")
+                self.error("unexpected indentation")
             elif self.is_kw("import"):
                 items.append(self.parse_import())
             elif self.is_kw("const"):
@@ -593,19 +593,19 @@ class Parser:
             elif self.is_kw("fn"):
                 items.append(self.parse_function())
             else:
-                self.error("no nível superior só são aceitos 'import', 'const', 'struct' "
-                           f"e 'fn'; encontrado {describe(t)}")
+                self.error("only 'import', 'const', 'struct', and 'fn' are allowed "
+                           f"at top level; found {describe(t)}")
         return Program(items, line=1, col=1)
 
     def parse_struct(self) -> StructDecl:
         kw = self.expect_kw("struct")
-        name = self.expect_name("nome da struct").value
-        self.expect_op(":", " após o nome da struct")
+        name = self.expect_name("struct name").value
+        self.expect_op(":", " after struct name")
         fields = []
         if self.peek().kind == "NEWLINE":
             self.advance()
             if self.peek().kind != "INDENT":
-                self.error("esperado um bloco indentado na definição da struct")
+                self.error("expected an indented block in struct definition")
             self.advance()
             while self.peek().kind not in ("DEDENT", "EOF"):
                 if self.peek().kind == "NEWLINE":
@@ -615,8 +615,8 @@ class Parser:
                     self.advance()
                     self.expect_newline()
                     continue
-                ft = self.expect_name("nome do campo da struct")
-                self.expect_op(":", " (campos da struct precisam de tipo)")
+                ft = self.expect_name("struct field name")
+                self.expect_op(":", " (struct fields require a type)")
                 fields.append(Param(ft.value, self.parse_type(), line=ft.line, col=ft.col))
                 if self.is_op(","):
                     self.advance()
@@ -629,50 +629,50 @@ class Parser:
                 if self.is_kw("pass"):
                     self.advance()
                     break
-                ft = self.expect_name("nome do campo da struct")
-                self.expect_op(":", " (campos da struct precisam de tipo)")
+                ft = self.expect_name("struct field name")
+                self.expect_op(":", " (struct fields require a type)")
                 fields.append(Param(ft.value, self.parse_type(), line=ft.line, col=ft.col))
                 if self.is_op(","):
                     self.advance()
                 elif self.peek().kind not in ("NEWLINE", "EOF"):
-                    self.error(f"esperado ',' ou fim de linha na struct, encontrado {describe(self.peek())}")
+                    self.error(f"expected ',' or end of line in struct, found {describe(self.peek())}")
             self.expect_newline()
         return StructDecl(name, fields, line=kw.line, col=kw.col)
 
     def parse_import(self) -> Import:
         kw = self.expect_kw("import")
-        parts = [self.expect_name("nome do módulo").value]
+        parts = [self.expect_name("module name").value]
         while self.is_op("."):
             self.advance()
-            parts.append(self.expect_name("nome do módulo").value)
+            parts.append(self.expect_name("module name").value)
         self.expect_newline()
         return Import(".".join(parts), line=kw.line, col=kw.col)
 
     def parse_const(self) -> ConstDecl:
         kw = self.expect_kw("const")
-        name = self.expect_name("nome da constante").value
+        name = self.expect_name("constant name").value
         ty = None
         if self.is_op(":"):
             self.advance()
             ty = self.parse_type()
-        self.expect_op("=", " na declaração da constante")
+        self.expect_op("=", " in constant declaration")
         value = self.parse_expr()
         self.expect_newline()
         return ConstDecl(name, ty, value, line=kw.line, col=kw.col)
 
     def parse_function(self) -> Function:
         kw = self.expect_kw("fn")
-        name = self.expect_name("nome da função").value
-        self.expect_op("(", " após o nome da função")
+        name = self.expect_name("function name").value
+        self.expect_op("(", " after function name")
         params = []
         while not self.is_op(")"):
-            nt = self.expect_name("nome do parâmetro")
-            self.expect_op(":", " (parâmetros precisam de tipo)")
+            nt = self.expect_name("parameter name")
+            self.expect_op(":", " (parameters require a type)")
             params.append(Param(nt.value, self.parse_type(), line=nt.line, col=nt.col))
             if self.is_op(","):
                 self.advance()
             elif not self.is_op(")"):
-                self.error(f"esperado ',' ou ')', encontrado {describe(self.peek())}")
+                self.error(f"expected ',' or ')', found {describe(self.peek())}")
         self.expect_op(")")
         ret = None
         if self.is_op("->"):
@@ -688,18 +688,18 @@ class Parser:
             if t.value in ("tensor", "Tensor") and self.is_op("["):
                 self.advance()
                 elem = self.parse_type()
-                self.expect_op("]", " ao fechar o tipo tensor")
+                self.expect_op("]", " when closing tensor type")
                 return TypeTensor(elem, line=t.line, col=t.col)
             if t.value in ("Result", "NatResult") and self.is_op("["):
                 self.advance()
                 elem = self.parse_type()
-                self.expect_op("]", " ao fechar o tipo Result")
+                self.expect_op("]", " when closing Result type")
                 return TypeResult(elem, line=t.line, col=t.col)
             return TypeName(t.value, line=t.line, col=t.col)
         if self.is_op("["):
             self.advance()
             elem = self.parse_type()
-            self.expect_op("]", " ao fechar o tipo lista")
+            self.expect_op("]", " when closing list type")
             return TypeList(elem, line=t.line, col=t.col)
         if self.is_op("("):
             self.advance()
@@ -709,17 +709,17 @@ class Parser:
                 if self.is_op(","):
                     self.advance()
                 elif not self.is_op(")"):
-                    self.error(f"esperado ',' ou ')' no tipo tupla, encontrado {describe(self.peek())}")
-            self.expect_op(")", " ao fechar o tipo tupla")
+                    self.error(f"expected ',' or ')' in tuple type, found {describe(self.peek())}")
+            self.expect_op(")", " when closing tuple type")
             return TypeTuple(elems, line=t.line, col=t.col)
-        self.error(f"esperado um tipo, encontrado {describe(t)}")
+        self.error(f"expected a type, found {describe(t)}")
 
     def parse_block(self) -> list:
-        self.expect_op(":", " no fim do cabeçalho")
+        self.expect_op(":", " at end of header")
         if self.peek().kind == "NEWLINE":
             self.advance()
             if self.peek().kind != "INDENT":
-                self.error("esperado um bloco indentado")
+                self.error("expected an indented block")
             self.advance()
             body = []
             while self.peek().kind not in ("DEDENT", "EOF"):
@@ -734,7 +734,7 @@ class Parser:
     def parse_statement(self):
         t = self.peek()
         if t.kind == "INDENT":
-            self.error("indentação inesperada")
+            self.error("unexpected indentation")
         if t.kind == "KW":
             if t.value == "if":
                 return self.parse_if()
@@ -743,9 +743,9 @@ class Parser:
             if t.value == "for":
                 return self.parse_for()
             if t.value in ("elif", "else"):
-                self.error(f"'{t.value}' sem 'if' correspondente")
+                self.error(f"'{t.value}' without matching 'if'")
             if t.value in ("fn", "import", "struct"):
-                self.error(f"'{t.value}' só é permitido no nível superior")
+                self.error(f"'{t.value}' is only allowed at top level")
         stmt = self.parse_simple_statement()
         self.expect_newline()
         return stmt
@@ -769,7 +769,7 @@ class Parser:
 
     def parse_for(self) -> For:
         kw = self.expect_kw("for")
-        var = self.expect_name("nome da variável do laço").value
+        var = self.expect_name("loop variable name").value
         self.expect_kw("in")
         it = self.parse_expr()
         return For(var, it, self.parse_block(), line=kw.line, col=kw.col)
@@ -815,29 +815,29 @@ class Parser:
                 targets.append(self.parse_expr())
             for tgt in targets:
                 if not isinstance(tgt, (Name, Index, Attr)):
-                    self.error("o lado esquerdo do desempacotamento precisa ser um nome, "
-                               "um índice ou um atributo", t)
-            self.expect_op("=", " no desempacotamento de tupla")
+                    self.error("the left-hand side of unpacking must be a name, "
+                               "an index, or an attribute", t)
+            self.expect_op("=", " in tuple unpacking")
             return TupleAssign(targets, self.parse_tuple_or_expr(), line=t.line, col=t.col)
         if isinstance(expr, TupleLit) and self.is_op("="):
             for tgt in expr.items:
                 if not isinstance(tgt, (Name, Index, Attr)):
-                    self.error("o lado esquerdo do desempacotamento precisa ser um nome, "
-                               "um índice ou um atributo", t)
+                    self.error("the left-hand side of unpacking must be a name, "
+                               "an index, or an attribute", t)
             self.advance()
             return TupleAssign(expr.items, self.parse_tuple_or_expr(), line=t.line, col=t.col)
         if self.is_op(":"):
             if not isinstance(expr, Name):
-                self.error("só é possível anotar o tipo de um nome simples")
+                self.error("type annotations are only allowed on simple variable names")
             self.advance()
             ty = self.parse_type()
-            self.expect_op("=", " na declaração com tipo")
+            self.expect_op("=", " in typed declaration")
             return VarDecl(expr.id, ty, self.parse_tuple_or_expr(), line=t.line, col=t.col)
         nt = self.peek()
         if nt.kind == "OP" and nt.value in ASSIGN_OPS:
             if not isinstance(expr, (Name, Index, Attr)):
-                self.error("o lado esquerdo da atribuição precisa ser um nome, "
-                           "um índice ou um atributo", t)
+                self.error("the left-hand side of an assignment must be a name, "
+                           "an index, or an attribute", t)
             self.advance()
             val_expr = self.parse_tuple_or_expr() if nt.value == "=" else self.parse_expr()
             return Assign(expr, nt.value, val_expr, line=t.line, col=t.col)
@@ -845,12 +845,12 @@ class Parser:
 
     def parse_const_inline(self) -> ConstDecl:
         kw = self.expect_kw("const")
-        name = self.expect_name("nome da constante").value
+        name = self.expect_name("constant name").value
         ty = None
         if self.is_op(":"):
             self.advance()
             ty = self.parse_type()
-        self.expect_op("=", " na declaração da constante")
+        self.expect_op("=", " in constant declaration")
         return ConstDecl(name, ty, self.parse_expr(), line=kw.line, col=kw.col)
 
     def parse_expr(self) -> Expr:
@@ -859,7 +859,7 @@ class Parser:
             op = self.advance()
             right = self.parse_or()
             if self.is_op("..") or self.is_op("..="):
-                self.error("intervalos não podem ser encadeados")
+                self.error("ranges cannot be chained")
             return Range(left, right, op.value == "..=", line=op.line, col=op.col)
         return left
 
@@ -891,8 +891,8 @@ class Parser:
             left = Binary(t.value, left, self.parse_arith(), line=t.line, col=t.col)
             n = self.peek()
             if n.kind == "OP" and n.value in CMP_OPS:
-                self.error("comparações não podem ser encadeadas; "
-                           "use 'and' (ex.: a < b and b < c)")
+                self.error("comparisons cannot be chained; "
+                           "use 'and' (e.g., a < b and b < c)")
         return left
 
     def parse_arith(self) -> Expr:
@@ -934,18 +934,18 @@ class Parser:
                     if self.is_op(","):
                         self.advance()
                     elif not self.is_op(")"):
-                        self.error("esperado ',' ou ')' na lista de argumentos, "
-                                   f"encontrado {describe(self.peek())}")
+                        self.error("expected ',' or ')' in argument list, "
+                                   f"found {describe(self.peek())}")
                 self.expect_op(")")
                 e = Call(e, args, line=t.line, col=t.col)
             elif self.is_op("["):
                 self.advance()
                 idx = self.parse_expr()
-                self.expect_op("]", " ao fechar o índice")
+                self.expect_op("]", " when closing index")
                 e = Index(e, idx, line=t.line, col=t.col)
             elif self.is_op("."):
                 self.advance()
-                e = Attr(e, self.expect_name("nome do atributo").value, line=t.line, col=t.col)
+                e = Attr(e, self.expect_name("attribute name").value, line=t.line, col=t.col)
             elif self.is_op("?"):
                 self.advance()
                 e = TryUnwrap(e, line=t.line, col=t.col)
@@ -975,7 +975,7 @@ class Parser:
             if self.is_op("("):
                 self.advance()
                 while not self.is_op(")"):
-                    pt = self.expect_name("nome de parâmetro da lambda")
+                    pt = self.expect_name("lambda parameter name")
                     pty = None
                     if self.is_op(":"):
                         self.advance()
@@ -984,23 +984,23 @@ class Parser:
                     if self.is_op(","):
                         self.advance()
                     elif not self.is_op(")"):
-                        self.error(f"esperado ',' ou ')' nos parâmetros da lambda, encontrado {describe(self.peek())}")
+                        self.error(f"expected ',' or ')' in lambda parameters, found {describe(self.peek())}")
                 self.expect_op(")")
             elif kw.value == "lambda":
                 while not self.is_op(":") and not self.is_op("->"):
-                    pt = self.expect_name("nome de parâmetro da lambda")
+                    pt = self.expect_name("lambda parameter name")
                     params.append(Param(pt.value, None, line=pt.line, col=pt.col))
                     if self.is_op(","):
                         self.advance()
                     elif not self.is_op(":") and not self.is_op("->"):
-                        self.error(f"esperado ',' ou ':' nos parâmetros da lambda, encontrado {describe(self.peek())}")
+                        self.error(f"expected ',' or ':' in lambda parameters, found {describe(self.peek())}")
             else:
-                self.error(f"esperado '(' após 'fn' na expressão lambda, encontrado {describe(self.peek())}")
+                self.error(f"expected '(' after 'fn' in lambda expression, found {describe(self.peek())}")
             ret = None
             if self.is_op("->"):
                 self.advance()
                 ret = self.parse_type()
-            self.expect_op(":", " no corpo da lambda")
+            self.expect_op(":", " in lambda body")
             body = self.parse_expr()
             return Lambda(params, ret, body, line=kw.line, col=kw.col)
         if t.kind == "NAME":
@@ -1019,9 +1019,9 @@ class Parser:
                     if self.is_op(")"):
                         break
                     items.append(self.parse_expr())
-                self.expect_op(")", " ao fechar a tupla")
+                self.expect_op(")", " when closing tuple")
                 return TupleLit(items, line=t.line, col=t.col)
-            self.expect_op(")", " ao fechar os parênteses")
+            self.expect_op(")", " when closing parentheses")
             return e
         if self.is_op("["):
             self.advance()
@@ -1031,7 +1031,7 @@ class Parser:
             first = self.parse_expr()
             if self.is_kw("for"):
                 self.advance()
-                var = self.expect_name("nome da variável da compreensão de lista").value
+                var = self.expect_name("list comprehension variable name").value
                 self.expect_kw("in")
                 it = self.parse_expr()
                 cond = None
@@ -1044,15 +1044,15 @@ class Parser:
             if self.is_op(","):
                 self.advance()
             elif not self.is_op("]"):
-                self.error("esperado ',' ou ']' na lista, "
-                           f"encontrado {describe(self.peek())}")
+                self.error("expected ',' or ']' in list, "
+                           f"found {describe(self.peek())}")
             while not self.is_op("]"):
                 items.append(self.parse_expr())
                 if self.is_op(","):
                     self.advance()
                 elif not self.is_op("]"):
-                    self.error("esperado ',' ou ']' na lista, "
-                               f"encontrado {describe(self.peek())}")
+                    self.error("expected ',' or ']' in list, "
+                               f"found {describe(self.peek())}")
             self.expect_op("]")
             return ListLit(items, line=t.line, col=t.col)
         if self.is_op("{"):
@@ -1060,17 +1060,17 @@ class Parser:
             pairs = []
             while not self.is_op("}"):
                 k_expr = self.parse_expr()
-                self.expect_op(":", " entre chave e valor do dicionário")
+                self.expect_op(":", " between dictionary key and value")
                 v_expr = self.parse_expr()
                 pairs.append((k_expr, v_expr))
                 if self.is_op(","):
                     self.advance()
                 elif not self.is_op("}"):
-                    self.error("esperado ',' ou '}' no dicionário, "
-                               f"encontrado {describe(self.peek())}")
+                    self.error("expected ',' or '}' in dictionary, "
+                               f"found {describe(self.peek())}")
             self.expect_op("}")
             return DictLit(pairs, line=t.line, col=t.col)
-        self.error(f"esperada uma expressão, encontrado {describe(t)}")
+        self.error(f"expected an expression, found {describe(t)}")
 
     def parse_fstring(self, tok: Token) -> FString:
         raw, n = tok.value, len(tok.value)
@@ -1116,8 +1116,8 @@ class Parser:
                         colon = j
                     j += 1
                 else:
-                    self.error("'{' sem '}' correspondente na f-string "
-                               "(use '{{' para um '{' literal)", tok)
+                    self.error("'{' without matching '}' in f-string "
+                               "(use '{{' for a literal '{')", tok)
 
                 expr_text = raw[i + 1:colon if colon is not None else j]
                 spec = raw[colon + 1:j] if colon is not None else None
@@ -1129,8 +1129,8 @@ class Parser:
                     buf.append("}")
                     i += 2
                 else:
-                    self.error("'}' solto na f-string "
-                               "(use '}}' para um '}' literal)", tok)
+                    self.error("unmatched '}' in f-string "
+                               "(use '}}' for a literal '}')", tok)
             else:
                 buf.append(c)
                 i += 1
@@ -1140,19 +1140,19 @@ class Parser:
     def _sub_expr(self, text: str, tok: Token) -> Expr:
         text = text.strip()
         if not text:
-            self.error("expressão vazia dentro de '{}' na f-string", tok)
+            self.error("empty expression inside '{}' in f-string", tok)
         try:
             sub = Parser(tokenize(text, first_line=tok.line))
             e = sub.parse_expr()
             if sub.peek().kind not in ("NEWLINE", "EOF"):
-                sub.error(f"trecho inesperado {describe(sub.peek())}")
+                sub.error(f"unexpected token {describe(sub.peek())}")
             return e
         except NatError as ex:
-            raise NatError(f"na f-string: {ex.message}", tok.line, tok.col) from None
+            raise NatError(f"in f-string: {ex.message}", tok.line, tok.col) from None
 
 
 # ----------------------------------------------------------------------------
-# API pública
+# Public API
 # ----------------------------------------------------------------------------
 
 def parse(source: str) -> Program:
@@ -1163,12 +1163,12 @@ def parse_expression(source: str) -> Expr:
     p = Parser(tokenize(source.strip()))
     e = p.parse_expr()
     if p.peek().kind not in ("NEWLINE", "EOF"):
-        p.error(f"trecho inesperado {describe(p.peek())}")
+        p.error(f"unexpected token {describe(p.peek())}")
     return e
 
 
 # ----------------------------------------------------------------------------
-# Impressão da AST
+# AST pretty-printing
 # ----------------------------------------------------------------------------
 
 def _compact(x: Any) -> str:
@@ -1195,7 +1195,7 @@ def dump(x: Any, ind: int = 0, width: int = 96) -> str:
 
 
 # ============================================================================
-# ANALISADOR SEMÂNTICO
+# SEMANTIC ANALYZER
 # ============================================================================
 
 @dataclass(frozen=True)
@@ -1216,7 +1216,7 @@ class TensorT:
     def __repr__(self) -> str:
         return f"tensor[{self.elem}]"
 
-# Tipos numéricos expandidos (incluindo t2 / ternary para 1.58-bit AI)
+# Expanded numeric types (including t2 / ternary for 1.58-bit AI)
 I8, U8, I16, U16, I32, U32, I64, U64 = (Prim(n) for n in ("i8", "u8", "i16", "u16", "i32", "u32", "i64", "u64"))
 F16, BF16, F32, F64 = (Prim(n) for n in ("f16", "bf16", "f32", "f64"))
 C64 = Prim("c64")
@@ -1322,7 +1322,7 @@ def _len_validator(analyzer: Any, ats: list[Any], args: list[Any], node: Any) ->
     if ats:
         t = ats[0]
         if not (isinstance(t, (ListT, TensorT, TupleT, DictT)) or t in (STR, ANY)):
-            analyzer.report(f"argumento 1 de 'len': esperado lista, tensor, tupla, dict ou str, recebeu {t}", args[0])
+            analyzer.report(f"argument 1 of 'len': expected list, tensor, tuple, dict, or str, got {t}", args[0])
 
 
 BUILTINS: dict[str, FuncSig] = {
@@ -1340,7 +1340,7 @@ BUILTINS: dict[str, FuncSig] = {
     "to_i64":           FuncSig([ANY], I64, builtin=True, min_args=1, max_args=1),
     "to_f64":           FuncSig([ANY], F64, builtin=True, min_args=1, max_args=1),
     "dot":              FuncSig([ListT(F64), ListT(F64)], F64, builtin=True, min_args=2, max_args=2),
-    # Builtins adicionados para IA e manipulação de tensores
+    # Builtins added for AI and tensor manipulation
     "tanh":             FuncSig([F64], F64, builtin=True, min_args=1, max_args=1),
     "relu":             FuncSig([ANY], ANY, builtin=True, min_args=1, max_args=1, ret_builder=lambda ats: ats[0] if ats else ANY),
     "sigmoid":          FuncSig([ANY], ANY, builtin=True, min_args=1, max_args=1, ret_builder=lambda ats: ats[0] if ats else ANY),
@@ -1357,7 +1357,7 @@ BUILTINS: dict[str, FuncSig] = {
     "transpose":        FuncSig([ANY], ANY, builtin=True, min_args=1, max_args=1),
     "tensor":           FuncSig([ANY], TensorT(ANY), builtin=True, min_args=1, max_args=4, ret_builder=_tensor_ret),
     "device":           FuncSig([ANY], STR, builtin=True, min_args=1, max_args=1),
-    # Primitivas para computação ternária
+    # Ternary computing primitives
     "quantize_ternary": FuncSig([ANY], TensorT(T2), builtin=True, min_args=1, max_args=2, ret_builder=_quant_ret),
     "pack_ternary":     FuncSig([ANY], ListT(I64), builtin=True, min_args=1, max_args=1),
     "unpack_ternary":   FuncSig([ANY, I64], ListT(I64), builtin=True, min_args=2, max_args=2),
@@ -1375,18 +1375,18 @@ BUILTINS: dict[str, FuncSig] = {
     "load_safetensors": FuncSig([STR, STR], ANY, builtin=True, min_args=2, max_args=2),
     "safetensors_keys": FuncSig([STR], ListT(STR), builtin=True, min_args=1, max_args=1),
     "save_safetensors": FuncSig([STR, STR, ANY], VOID, builtin=True, min_args=3, max_args=3),
-    # BitNet b1.58 Canônico (AbsMean Scaling & Dense Base-3 Packing 5 trits/byte)
+    # Canonical BitNet b1.58 (AbsMean Scaling & Dense Base-3 Packing 5 trits/byte)
     "quantize_bitnet":       FuncSig([ANY], TensorT(T2), builtin=True, min_args=1, max_args=1, ret_builder=_quant_ret),
     "tensor_absmean":        FuncSig([ANY], F64, builtin=True, min_args=1, max_args=1),
     "pack_ternary_5trits":   FuncSig([ANY], ListT(I64), builtin=True, min_args=1, max_args=1),
     "unpack_ternary_5trits": FuncSig([ANY, I64], ListT(I64), builtin=True, min_args=2, max_args=2),
-    # Validação de Fidelidade Numérica & Vec-LUT Kernel
+    # Numerical Fidelity Validation & Vec-LUT Kernel
     "mae":                   FuncSig([ANY, ANY], F64, builtin=True, min_args=2, max_args=2),
     "relative_error":        FuncSig([ANY, ANY], F64, builtin=True, min_args=2, max_args=2),
     "pearson_corr":          FuncSig([ANY, ANY], F64, builtin=True, min_args=2, max_args=2),
     "cosine_sim":            FuncSig([ANY, ANY], F64, builtin=True, min_args=2, max_args=2),
     "gemv_vec_lut":          FuncSig([ANY, ANY, I64, I64], ANY, builtin=True, min_args=4, max_args=5),
-    # Primitivas de Modelo (Attention, Tokenizador, KV Cache)
+    # Model Primitives (Attention, Tokenizer, KV Cache)
     "softmax":               FuncSig([ANY], ANY, builtin=True, min_args=1, max_args=2, ret_builder=lambda ats: ats[0] if ats else ANY),
     "causal_mask":           FuncSig([I64], ANY, builtin=True, min_args=1, max_args=1),
     "sdpa":                  FuncSig([ANY, ANY, ANY], TensorT(F32), builtin=True, min_args=3, max_args=5),
@@ -1410,19 +1410,19 @@ BUILTINS: dict[str, FuncSig] = {
     "error_message":         FuncSig([ANY], STR, builtin=True, min_args=1, max_args=1),
     "fill":                  FuncSig([I64, ANY], ListT(ANY), builtin=True, min_args=2, max_args=2, ret_builder=lambda ats: ListT(ats[1] if len(ats) > 1 else ANY)),
     "seed":                  FuncSig([I64], VOID, builtin=True, min_args=1, max_args=1),
-    # Autodiff e Otimizadores (Treinamento Nativo)
+    # Autodiff and Optimizers (Native Training)
     "requires_grad":         FuncSig([ANY], ANY, builtin=True, min_args=1, max_args=2, ret_builder=lambda ats: ats[0] if ats else ANY),
     "backward":              FuncSig([ANY], VOID, builtin=True, min_args=1, max_args=1),
     "zero_grad":             FuncSig([ANY], VOID, builtin=True, min_args=1, max_args=1),
     "cross_entropy":         FuncSig([ANY, ANY], ANY, builtin=True, min_args=2, max_args=2),
     "sgd":                   FuncSig([ANY, F64], VOID, builtin=True, min_args=2, max_args=2),
     "adam":                  FuncSig([ANY], VOID, builtin=True, min_args=1, max_args=5),
-    # Primitivas Espectrais e Números Complexos (Fase 1: Fourier)
+    # Spectral Primitives and Complex Numbers (Phase 1: Fourier)
     "Complex":               FuncSig([F64], COMPLEX, builtin=True, min_args=1, max_args=2),
     "rfft":                  FuncSig([ANY], ANY, builtin=True, min_args=1, max_args=2),
     "irfft":                 FuncSig([ANY], ANY, builtin=True, min_args=1, max_args=2),
     "power_spectrum":        FuncSig([ANY], ANY, builtin=True, min_args=1, max_args=1),
-    # Funções de Alta Ordem (Lambda / Programação Funcional)
+    # Higher-Order Functions (Lambda / Functional Programming)
     "map":                   FuncSig([ANY, ANY], ListT(ANY), builtin=True, min_args=2, max_args=2, ret_builder=lambda ats: ListT(ats[0].ret if (isinstance(ats[0], FuncSig) and ats[0].ret != ANY) else (ats[1].elem if (len(ats) > 1 and isinstance(ats[1], (ListT, TensorT))) else ANY))),
     "filter":                FuncSig([ANY, ANY], ListT(ANY), builtin=True, min_args=2, max_args=2, ret_builder=lambda ats: ListT(ats[1].elem if (len(ats) > 1 and isinstance(ats[1], (ListT, TensorT))) else ANY)),
 }
@@ -1444,7 +1444,7 @@ class Symbol:
 
 @dataclass
 class Diagnostic:
-    level: str                  # "erro" | "aviso"
+    level: str                  # "error" | "warning"
     msg: str
     line: int
 
@@ -1496,7 +1496,7 @@ def assignable(src, dst) -> bool:
     if isinstance(src, ListT) and isinstance(dst, ListT):
         if is_float(src.elem) and is_float(dst.elem):
             return True
-        return same(src, dst)   # Listas inteiras não promovem para float
+        return same(src, dst)   # Integer lists do not promote to float lists
     if isinstance(src, ResultT) and isinstance(dst, ResultT):
         return assignable(src.elem, dst.elem)
     if isinstance(src, TupleT) and isinstance(dst, TupleT):
@@ -1558,16 +1558,16 @@ class SemanticAnalyzer:
         self.cur_ret = None
         self.loop_depth = 0
 
-    def report(self, msg: str, node, level: str = "erro"):
+    def report(self, msg: str, node, level: str = "error"):
         self.diagnostics.append(Diagnostic(level, msg, getattr(node, "line", 0)))
 
     @property
     def errors(self):
-        return [d for d in self.diagnostics if d.level == "erro"]
+        return [d for d in self.diagnostics if d.level == "error"]
 
     @property
     def warnings(self):
-        return [d for d in self.diagnostics if d.level == "aviso"]
+        return [d for d in self.diagnostics if d.level == "warning"]
 
     def enter_scope(self):
         self.scopes.append({})
@@ -1577,25 +1577,25 @@ class SemanticAnalyzer:
         visible = [n for s in self.scopes for n in s] + list(scope)
         for sym in scope.values():
             if sym.implicit and not sym.used:
-                msg = f"a variável '{sym.name}' recebe valor mas nunca é usada"
+                msg = f"variable '{sym.name}' is assigned a value but never used"
                 near = difflib.get_close_matches(
                     sym.name, [n for n in visible if n != sym.name], n=1, cutoff=0.75)
                 if near:
-                    msg += f" (erro de digitação de '{near[0]}'?)"
-                self.diagnostics.append(Diagnostic("aviso", msg, sym.line))
+                    msg += f" (possible typo for '{near[0]}'?)"
+                self.diagnostics.append(Diagnostic("warning", msg, sym.line))
 
     def define(self, name: str, node, type_, *, const=False, implicit=False) -> bool:
         if name in self.modules:
-            self.report(f"'{name}' já é o nome de um módulo; escolha outro nome", node)
+            self.report(f"'{name}' is already a module name; choose another name", node)
             return False
         if name in self.functions:
-            self.report(f"'{name}' já é o nome de uma função; escolha outro nome", node)
+            self.report(f"'{name}' is already a function name; choose another name", node)
             return False
         if name != "_":
             for scope in self.scopes:
                 if name in scope:
-                    self.report(f"'{name}' já foi declarado na linha {scope[name].line} "
-                                "(shadowing é proibido)", node)
+                    self.report(f"'{name}' was already declared on line {scope[name].line} "
+                                "(shadowing is not allowed)", node)
                     return False
         self.scopes[-1][name] = Symbol(name, type_, const, implicit, getattr(node, "line", 0))
         return True
@@ -1609,7 +1609,7 @@ class SemanticAnalyzer:
     def undefined_msg(self, name: str) -> str:
         names = [n for s in self.scopes for n in s] + list(self.functions)
         near = difflib.get_close_matches(name, names, n=1, cutoff=0.7)
-        return f"nome '{name}' não definido" + (f" (você quis dizer '{near[0]}'?)" if near else "")
+        return f"name '{name}' is not defined" + (f" (did you mean '{near[0]}'?)" if near else "")
 
     def resolve_type(self, t):
         if isinstance(t, TypeName):
@@ -1617,7 +1617,7 @@ class SemanticAnalyzer:
                 return self.structs[t.name]
             r = PRIM_TYPES.get(t.name)
             if r is None:
-                self.report(f"tipo desconhecido '{t.name}'", t)
+                self.report(f"unknown type '{t.name}'", t)
                 return ANY
             return r
         if isinstance(t, TypeTensor):
@@ -1643,7 +1643,7 @@ class SemanticAnalyzer:
                             sub_sem = SemanticAnalyzer()
                             sub_sem.analyze(mod_prog)
                             for d in sub_sem.errors:
-                                self.report(f"no módulo '{it.module}': {d.msg}", it)
+                                self.report(f"in module '{it.module}': {d.msg}", it)
                             mod_funcs = {
                                 k: v for k, v in sub_sem.functions.items() if k not in BUILTINS
                             }
@@ -1663,15 +1663,15 @@ class SemanticAnalyzer:
                                 if fname not in self.functions:
                                     self.functions[fname] = fsig
                         except Exception as ex:
-                            self.report(f"erro ao importar módulo '{it.module}': {ex}", it)
+                            self.report(f"error importing module '{it.module}': {ex}", it)
                     else:
-                        self.report(f"módulo desconhecido '{it.module}'", it)
+                        self.report(f"unknown module '{it.module}'", it)
 
-        # Primeiro passo para StructDecl (permite referência em campos e funções)
+        # First pass for StructDecl (allows references in fields and functions)
         for it in program.items:
             if isinstance(it, StructDecl):
                 if it.name in self.structs or it.name in PRIM_TYPES or it.name in self.functions:
-                    self.report(f"struct '{it.name}' já foi definida ou colide com nome existente", it)
+                    self.report(f"struct '{it.name}' is already defined or collides with an existing name", it)
                     continue
                 self.structs[it.name] = StructT(it.name, ())
 
@@ -1681,7 +1681,7 @@ class SemanticAnalyzer:
                 resolved_fields = []
                 for f in it.fields:
                     if f.name in seen_fields:
-                        self.report(f"campo duplicado '{f.name}' na struct '{it.name}'", f)
+                        self.report(f"duplicate field '{f.name}' in struct '{it.name}'", f)
                         continue
                     seen_fields.add(f.name)
                     resolved_fields.append((f.name, self.resolve_type(f.type)))
@@ -1693,9 +1693,9 @@ class SemanticAnalyzer:
         for it in program.items:
             if isinstance(it, Function):
                 if it.name in self.functions:
-                    why = ("é uma função embutida" if self.functions[it.name].builtin
-                           else "já foi definida")
-                    self.report(f"a função '{it.name}' {why}", it)
+                    why = ("is a built-in function" if self.functions[it.name].builtin
+                           else "is already defined")
+                    self.report(f"function '{it.name}' {why}", it)
                     continue
                 params = [self.resolve_type(p.type) for p in it.params]
                 ret = self.resolve_type(it.ret) if it.ret else VOID
@@ -1717,21 +1717,21 @@ class SemanticAnalyzer:
     def visit(self, node):
         m = getattr(self, "visit_" + type(node).__name__, None)
         if m is None:
-            self.report(f"construção não suportada pelo analisador: {type(node).__name__}", node)
+            self.report(f"construct not supported by the analyzer: {type(node).__name__}", node)
             return ANY
         return m(node)
 
     def expr(self, node):
         t = self.visit(node)
         if t == VOID:
-            self.report("esta expressão não produz valor", node)
+            self.report("this expression does not produce a value", node)
             return ANY
         return t
 
     def cond(self, node):
         t = self.expr(node)
         if t != BOOL and t != ANY:
-            self.report(f"a condição deve ser bool, mas é {t}", node)
+            self.report(f"condition must be bool, got {t}", node)
 
     def always_returns(self, stmts) -> bool:
         for s in stmts:
@@ -1750,8 +1750,8 @@ class SemanticAnalyzer:
         for s in node.body:
             self.visit(s)
         if sig.ret != VOID and not self.always_returns(node.body):
-            self.report(f"a função '{node.name}' declara retorno {sig.ret}, mas nem todos "
-                        "os caminhos retornam um valor", node)
+            self.report(f"function '{node.name}' declares return type {sig.ret}, but not all "
+                        "paths return a value", node)
         self.exit_scope()
         self.cur_ret = None
 
@@ -1759,14 +1759,14 @@ class SemanticAnalyzer:
         vt = self.expr(node.value)
         dt = self.resolve_type(node.type) if node.type else vt
         if node.type and not assignable(vt, dt):
-            self.report(f"constante '{node.name}' declarada como {dt}, mas o valor é {vt}", node)
+            self.report(f"constant '{node.name}' declared as {dt}, but value is {vt}", node)
         self.define(node.name, node, dt, const=True)
 
     def visit_VarDecl(self, node: VarDecl):
         vt = self.expr(node.value)
         dt = self.resolve_type(node.type)
         if not assignable(vt, dt):
-            self.report(f"'{node.name}' declarado como {dt}, mas o valor é {vt}", node)
+            self.report(f"'{node.name}' declared as {dt}, but value is {vt}", node)
         self.define(node.name, node, dt)
 
     def _assign_target_type(self, tgt: Expr, vt: Any, op: str, node: Node):
@@ -1775,44 +1775,44 @@ class SemanticAnalyzer:
             sym = self.lookup(name)
             if sym is None:
                 if op != "=":
-                    self.report(f"'{name}' usado com '{op}' antes de ser declarado", node)
+                    self.report(f"'{name}' used with '{op}' before being declared", node)
                 else:
                     self.define(name, node, vt, implicit=True)
                 return
             if sym.is_const:
-                self.report(f"'{name}' é uma constante e não pode ser reatribuída", node)
+                self.report(f"'{name}' is a constant and cannot be reassigned", node)
             elif op == "=":
                 if not assignable(vt, sym.type):
-                    self.report(f"'{name}' é {sym.type} e não pode receber {vt}", node)
+                    self.report(f"'{name}' is {sym.type} and cannot be assigned {vt}", node)
             else:
                 rt = self.binop(op[:-1], sym.type, vt, node)
                 if not assignable(rt, sym.type):
-                    self.report(f"'{name}' é {sym.type}, mas '{op}' produz {rt}", node)
+                    self.report(f"'{name}' is {sym.type}, but '{op}' produces {rt}", node)
             return
         if isinstance(tgt, Index):
             elem = self.expr(tgt)
             rt = vt if op == "=" else self.binop(op[:-1], elem, vt, node)
             if not assignable(rt, elem):
-                self.report(f"um elemento {elem} não pode receber {rt}", node)
+                self.report(f"an element of type {elem} cannot be assigned {rt}", node)
             return
         if isinstance(tgt, Attr):
             ot = self.expr(tgt.obj)
             if isinstance(ot, StructT):
                 fdict = ot.field_dict()
                 if tgt.name not in fdict:
-                    self.report(f"struct '{ot.name}' não possui o campo '{tgt.name}'", node)
+                    self.report(f"struct '{ot.name}' has no field '{tgt.name}'", node)
                     return
                 ft = fdict[tgt.name]
                 rt = vt if op == "=" else self.binop(op[:-1], ft, vt, node)
                 if not assignable(rt, ft):
-                    self.report(f"o campo '{tgt.name}' é {ft} e não pode receber {rt}", node)
+                    self.report(f"field '{tgt.name}' is {ft} and cannot be assigned {rt}", node)
                 return
             if isinstance(ot, TensorT) and tgt.name in ("requires_grad", "grad", "data", "scale"):
                 return
             if ot != ANY:
-                self.report(f"não é possível atribuir ao atributo '{tgt.name}' de {ot}", node)
+                self.report(f"cannot assign to attribute '{tgt.name}' of {ot}", node)
             return
-        self.report("alvo de atribuição inválido", node)
+        self.report("invalid assignment target", node)
 
     def visit_Assign(self, node: Assign):
         vt = self.expr(node.value)
@@ -1824,7 +1824,7 @@ class SemanticAnalyzer:
         if isinstance(vt, TupleT):
             if len(vt.elems) != n_tgts:
                 self.report(
-                    f"desempacotamento espera {n_tgts} valores, mas a tupla possui {len(vt.elems)}",
+                    f"unpacking expects {n_tgts} values, but tuple has {len(vt.elems)}",
                     node,
                 )
                 elem_types = [ANY] * n_tgts
@@ -1835,7 +1835,7 @@ class SemanticAnalyzer:
         elif vt == ANY:
             elem_types = [ANY] * n_tgts
         else:
-            self.report(f"não é possível desempacotar um valor do tipo {vt}", node)
+            self.report(f"cannot unpack a value of type {vt}", node)
             elem_types = [ANY] * n_tgts
 
         for tgt, et in zip(node.targets, elem_types):
@@ -1866,7 +1866,7 @@ class SemanticAnalyzer:
         else:
             et = ANY
         if it != ANY and not isinstance(it, (ListT, TensorT)):
-            self.report(f"não é possível iterar sobre {it}", node.iter)
+            self.report(f"cannot iterate over {it}", node.iter)
         self.loop_depth += 1
         self.enter_scope()
         self.define(node.var, node, et)
@@ -1879,21 +1879,21 @@ class SemanticAnalyzer:
         want = self.cur_ret
         if node.value is None:
             if want != VOID:
-                self.report(f"esta função deve retornar {want}", node)
+                self.report(f"this function must return {want}", node)
             return
         vt = self.expr(node.value)
         if want == VOID:
-            self.report("uma função sem '-> tipo' não pode retornar valor", node)
+            self.report("a function without '-> type' cannot return a value", node)
         elif not assignable(vt, want):
-            self.report(f"retorno esperado {want}, recebeu {vt}", node)
+            self.report(f"expected return type {want}, got {vt}", node)
 
     def visit_Break(self, node):
         if self.loop_depth == 0:
-            self.report("'break' fora de um laço", node)
+            self.report("'break' outside of a loop", node)
 
     def visit_Continue(self, node):
         if self.loop_depth == 0:
-            self.report("'continue' fora de um laço", node)
+            self.report("'continue' outside of a loop", node)
 
     def visit_Pass(self, node):
         pass
@@ -1912,9 +1912,9 @@ class SemanticAnalyzer:
             sym.used = True
             return sym.type
         if node.id in self.modules:
-            self.report(f"'{node.id}' é um módulo; acesse um membro (ex.: {node.id}.sqrt)", node)
+            self.report(f"'{node.id}' is a module; access a member (e.g., {node.id}.sqrt)", node)
         elif node.id in self.functions:
-            self.report(f"'{node.id}' é uma função; chame-a com parênteses", node)
+            self.report(f"'{node.id}' is a function; call it with parentheses", node)
         else:
             self.report(self.undefined_msg(node.id), node)
         return ANY
@@ -1923,27 +1923,27 @@ class SemanticAnalyzer:
         o = node.obj
         if isinstance(o, Name) and not self.lookup(o.id) and (o.id in KNOWN_MODULES or o.id in self.user_modules):
             if o.id not in self.modules:
-                self.report(f"módulo '{o.id}' não importado (use 'import {o.id}')", node)
+                self.report(f"module '{o.id}' is not imported (use 'import {o.id}')", node)
             elif o.id in self.user_modules:
                 umod = self.user_modules[o.id]
                 if node.name in umod["consts"]:
                     return umod["consts"][node.name]
                 if node.name in umod["functions"]:
-                    self.report(f"'{o.id}.{node.name}' é uma função; chame-a com parênteses", node)
+                    self.report(f"'{o.id}.{node.name}' is a function; call it with parentheses", node)
                 else:
-                    self.report(f"o módulo '{o.id}' não tem '{node.name}'", node)
+                    self.report(f"module '{o.id}' has no member '{node.name}'", node)
             elif node.name in MATH_CONSTS:
                 return MATH_CONSTS[node.name]
             elif node.name in MATH_FUNCS:
-                self.report(f"'{o.id}.{node.name}' é uma função; chame-a com parênteses", node)
+                self.report(f"'{o.id}.{node.name}' is a function; call it with parentheses", node)
             else:
-                self.report(f"o módulo '{o.id}' não tem '{node.name}'", node)
+                self.report(f"module '{o.id}' has no member '{node.name}'", node)
             return ANY
         ot = self.expr(o)
         if isinstance(ot, StructT):
             fdict = ot.field_dict()
             if node.name not in fdict:
-                self.report(f"struct '{ot.name}' não possui o campo '{node.name}'", node)
+                self.report(f"struct '{ot.name}' has no field '{node.name}'", node)
                 return ANY
             return fdict[node.name]
         if isinstance(ot, TensorT):
@@ -1982,7 +1982,7 @@ class SemanticAnalyzer:
             u = self.expr(it)
             n = unify(t, u)
             if n is None:
-                self.report(f"elementos da lista com tipos incompatíveis: {t} e {u}", it)
+                self.report(f"list elements have incompatible types: {t} and {u}", it)
             else:
                 t = n
         return ListT(t)
@@ -1991,7 +1991,7 @@ class SemanticAnalyzer:
         it = self.expr(node.iter)
         et = it.elem if isinstance(it, (ListT, TensorT)) else ANY
         if it != ANY and not isinstance(it, (ListT, TensorT)):
-            self.report(f"não é possível iterar sobre {it}", node.iter)
+            self.report(f"cannot iterate over {it}", node.iter)
         self.enter_scope()
         self.define(node.var, node, et)
         if node.cond is not None:
@@ -2012,7 +2012,7 @@ class SemanticAnalyzer:
         if node.ret is not None:
             rt = self.resolve_type(node.ret)
             if not assignable(body_t, rt):
-                self.report(f"retorno esperado {rt}, recebeu {body_t}", node.body)
+                self.report(f"expected return type {rt}, got {body_t}", node.body)
         else:
             rt = body_t
         return FuncSig(pts, rt, min_args=len(pts), max_args=len(pts))
@@ -2022,7 +2022,7 @@ class SemanticAnalyzer:
             if b is not None:
                 t = self.expr(b)
                 if t != I64 and t != ANY and not (is_num(t) and is_int(t)):
-                    self.report(f"os limites de um intervalo devem ser i64, mas é {t}", b)
+                    self.report(f"range bounds must be i64, got {t}", b)
         return ListT(I64)
 
     def visit_Index(self, node: Index):
@@ -2034,23 +2034,23 @@ class SemanticAnalyzer:
             if ot == STR:
                 return STR
             if ot != ANY:
-                self.report(f"um valor {ot} não pode ser fatiado", node)
+                self.report(f"a value of type {ot} cannot be sliced", node)
             return ANY
         it = self.expr(node.index)
         if isinstance(ot, DictT):
             if ot.key != ANY and not assignable(it, ot.key):
-                self.report(f"a chave do dicionário deve ser {ot.key}, mas é {it}", node.index)
+                self.report(f"dictionary key must be {ot.key}, got {it}", node.index)
             return ot.val
         if isinstance(ot, TensorT) and isinstance(it, (ListT, TensorT)) and (it.elem == ANY or (is_num(it.elem) and is_int(it.elem))):
             return ot
         if it != I64 and it != ANY and not (is_num(it) and is_int(it)):
-            self.report(f"o índice deve ser i64, mas é {it}", node.index)
+            self.report(f"index must be i64, got {it}", node.index)
         if isinstance(ot, TupleT):
             if isinstance(node.index, Int):
                 idx_v = node.index.value
                 if -len(ot.elems) <= idx_v < len(ot.elems):
                     return ot.elems[idx_v]
-                self.report(f"índice {idx_v} fora dos limites da tupla {ot}", node)
+                self.report(f"index {idx_v} out of bounds for tuple {ot}", node)
             return ANY
         if isinstance(ot, ListT):
             return ot.elem
@@ -2059,7 +2059,7 @@ class SemanticAnalyzer:
         if ot == STR:
             return STR
         if ot != ANY:
-            self.report(f"um valor {ot} não pode ser indexado", node)
+            self.report(f"a value of type {ot} cannot be indexed", node)
         return ANY
 
     def visit_TryUnwrap(self, node: TryUnwrap):
@@ -2067,18 +2067,18 @@ class SemanticAnalyzer:
         if isinstance(t, ResultT):
             return t.elem
         if t != ANY:
-            self.report(f"o operador '?' exige um Result[T], mas recebeu {t}", node)
+            self.report(f"the '?' operator requires a Result[T], got {t}", node)
         return ANY
 
     def visit_Unary(self, node: Unary):
         t = self.expr(node.operand)
         if node.op == "not":
             if t != BOOL and t != ANY:
-                self.report(f"'not' exige bool, mas recebeu {t}", node)
+                self.report(f"'not' requires bool, got {t}", node)
             return BOOL
         ok = t == ANY or is_num(t) or (isinstance(t, (ListT, TensorT)) and base_num(t) is not None)
         if not ok:
-            self.report(f"o operador '{node.op}' não é definido para {t}", node)
+            self.report(f"operator '{node.op}' is not defined for {t}", node)
             return ANY
         return t
 
@@ -2091,18 +2091,18 @@ class SemanticAnalyzer:
         if op in ("and", "or"):
             for t in (l, r):
                 if t != BOOL and t != ANY:
-                    self.report(f"'{op}' exige bool, mas recebeu {t}", node)
+                    self.report(f"'{op}' requires bool, got {t}", node)
             return BOOL
         if op in ("==", "!="):
             if l in (COMPLEX, C64) and r in (COMPLEX, C64):
                 return BOOL
             if not (same(l, r) or (is_num(l) and is_num(r))):
-                self.report(f"não é possível comparar {l} com {r}", node)
+                self.report(f"cannot compare {l} with {r}", node)
             return BOOL
         if op in ("<", "<=", ">", ">="):
             ok = (l == ANY or r == ANY or (is_num(l) and is_num(r)) or (l == STR and r == STR))
             if not ok:
-                self.report(f"não é possível comparar {l} com {r}", node)
+                self.report(f"cannot compare {l} with {r}", node)
             return BOOL
         return self.arith(op, l, r, node)
 
@@ -2124,7 +2124,7 @@ class SemanticAnalyzer:
             elem = r.elem if l.elem == ANY else (l.elem if r.elem == ANY else (l.elem if l.elem == r.elem else ANY))
             return ListT(elem)
 
-        # Multiplicação matricial com operador @ (suporta ternários e contínuos)
+        # Matrix multiplication with @ operator (supports ternary and continuous)
         if op == "@":
             nl = base_num(l)
             nr = base_num(r)
@@ -2138,7 +2138,7 @@ class SemanticAnalyzer:
                     dr += 1
                     c = c.elem
 
-                # Tipo resultante do elemento
+                # Resulting element type
                 if F64 in (nl, nr):
                     res_elem = F64
                 elif F32 in (nl, nr):
@@ -2162,7 +2162,7 @@ class SemanticAnalyzer:
                 elif dl == 2 and dr == 2:
                     return wrap(wrap(res_elem))
                 return wrap(wrap(res_elem))
-            self.report(f"o operador '@' não é definido para {l} e {r}", node)
+            self.report(f"operator '@' is not defined for {l} and {r}", node)
             return ANY
 
         ll, rl = isinstance(l, (ListT, TensorT)), isinstance(r, (ListT, TensorT))
@@ -2175,7 +2175,7 @@ class SemanticAnalyzer:
                 return wrap(self.arith(op, l.elem, r, node))
             return wrap(self.arith(op, l, r.elem, node))
 
-        self.report(f"o operador '{op}' não é definido para {l} e {r}", node)
+        self.report(f"operator '{op}' is not defined for {l} and {r}", node)
         return ANY
 
     def visit_Call(self, node: Call):
@@ -2189,7 +2189,7 @@ class SemanticAnalyzer:
                 elif sym.type == ANY:
                     sig, label = None, f.id
                 else:
-                    self.report(f"'{f.id}' é uma variável, não uma função", f)
+                    self.report(f"'{f.id}' is a variable, not a function", f)
             elif f.id in self.functions:
                 sig, label = self.functions[f.id], f.id
             else:
@@ -2199,59 +2199,59 @@ class SemanticAnalyzer:
         elif isinstance(f, Attr) and isinstance(f.obj, Name) and not self.lookup(f.obj.id):
             mod = f.obj.id
             if mod not in KNOWN_MODULES and mod not in self.user_modules:
-                self.report(f"'{mod}' não é um módulo", f)
+                self.report(f"'{mod}' is not a module", f)
             elif mod not in self.modules:
-                self.report(f"módulo '{mod}' não importado (use 'import {mod}')", f)
+                self.report(f"module '{mod}' is not imported (use 'import {mod}')", f)
             elif mod in self.user_modules:
                 umod = self.user_modules[mod]
                 if f.name in umod["functions"]:
                     sig, label = umod["functions"][f.name], f"{mod}.{f.name}"
                 else:
-                    self.report(f"o módulo '{mod}' não tem '{f.name}'", f)
+                    self.report(f"module '{mod}' has no member '{f.name}'", f)
             elif f.name in MATH_FUNCS:
                 sig, label = BUILTINS[f.name], f"{mod}.{f.name}"
             else:
-                self.report(f"o módulo '{mod}' não tem '{f.name}'", f)
+                self.report(f"module '{mod}' has no member '{f.name}'", f)
         elif isinstance(f, Attr):
             self.expr(f.obj)
             for a in node.args:
                 self.expr(a)
             return ANY
         else:
-            self.report("só é possível chamar funções pelo nome", f)
+            self.report("functions can only be called by name", f)
 
         ats = [self.expr(a) for a in node.args]
         if sig is None:
             return ANY
 
-        # Verificação uniforme e genérica de aridade
+        # Uniform and generic arity check
         min_a = sig.min_args if sig.min_args is not None else (0 if sig.variadic else len(sig.params))
         max_a = sig.max_args if sig.max_args is not None else (None if sig.variadic else len(sig.params))
 
         if len(ats) < min_a or (max_a is not None and len(ats) > max_a):
             if min_a == max_a:
-                self.report(f"'{label}' espera {min_a} argumento(s), mas recebeu {len(ats)}", node)
+                self.report(f"'{label}' expects {min_a} argument(s), got {len(ats)}", node)
             elif max_a is None:
-                self.report(f"'{label}' espera pelo menos {min_a} argumento(s), mas recebeu {len(ats)}", node)
+                self.report(f"'{label}' expects at least {min_a} argument(s), got {len(ats)}", node)
             else:
-                self.report(f"'{label}' espera entre {min_a} e {max_a} argumentos, mas recebeu {len(ats)}", node)
+                self.report(f"'{label}' expects between {min_a} and {max_a} arguments, got {len(ats)}", node)
 
-        # Validação customizada se declarada na assinatura
+        # Custom validation if declared in the signature
         if sig.arg_validator:
             sig.arg_validator(self, ats, node.args, node)
 
-        # Verificação dos tipos dos argumentos passados
+        # Argument type check
         if sig.variadic:
             if sig.params and sig.params[0] != ANY:
                 for i, (a, t) in enumerate(zip(node.args, ats)):
                     if not assignable(t, sig.params[0]):
-                        self.report(f"argumento {i + 1} de '{label}': esperado {sig.params[0]}, recebeu {t}", a)
+                        self.report(f"argument {i + 1} of '{label}': expected {sig.params[0]}, got {t}", a)
         else:
             for i, (a, t, p) in enumerate(zip(node.args, ats, sig.params)):
                 if p != ANY and not assignable(t, p):
-                    self.report(f"argumento {i + 1} de '{label}': esperado {p}, recebeu {t}", a)
+                    self.report(f"argument {i + 1} of '{label}': expected {p}, got {t}", a)
 
-        # Resolução do tipo de retorno (polimórfico dinâmico ou estático)
+        # Return type resolution (dynamic polymorphic or static)
         if sig.ret_builder:
             return sig.ret_builder(ats)
         return sig.ret
@@ -2262,7 +2262,7 @@ def analyze(program: Program) -> list[Diagnostic]:
 
 
 # ============================================================================
-# MOTOR DE EXECUÇÃO / RUNTIME (NumPy SIMD + Ternary Add-Only Backend)
+# EXECUTION ENGINE / RUNTIME (NumPy SIMD + Ternary Add-Only Backend)
 # ============================================================================
 
 class ReturnSignal(Exception):
@@ -2270,14 +2270,14 @@ class ReturnSignal(Exception):
         self.value = value
 
 class ErrPropagate(Exception):
-    """Sinal disparado por '?' quando o Result é Err.
-    Capturado por call_function: se a função declara retorno Result, o Err é devolvido
-    ao chamador (propagação estilo Rust); caso contrário vira panic controlado."""
+    """Signal raised by '?' when a Result is Err.
+    Caught by call_function: if the function declares a Result return type, the Err is returned
+    to the caller (Rust-style propagation); otherwise it turns into a controlled panic."""
     def __init__(self, result: Any):
         self.result = result
 
 def is_result_type_expr(t: Any) -> bool:
-    """True se a anotação de tipo da AST for Result / Result[T] / NatResult."""
+    """True if the AST type annotation is Result / Result[T] / NatResult."""
     if isinstance(t, TypeResult):
         return True
     return isinstance(t, TypeName) and t.name in ("Result", "NatResult")
@@ -2320,10 +2320,10 @@ class MathModule:
 CURRENT_DEVICE = "cpu"
 
 def device_fn(dev: Any = None) -> str:
-    """Consulta ou define o dispositivo de execução do runtime Nativa.
-    Nota arquitetural (v0.4): O pipeline de execução opera nativamente no backend CPU
-    acelerado por OpenMP/AOT C99. As marcações 'cuda' e 'opencl' operam como metadados
-    de posicionamento de grafo para compatibilidade futura com backends GPU.
+    """Queries or sets the execution device of the Nativa runtime.
+    Architectural note (v0.4): The execution pipeline operates natively on the CPU backend
+    accelerated by OpenMP/AOT C99. The 'cuda' and 'opencl' tags operate as graph placement
+    metadata for future compatibility with GPU backends.
     """
     global CURRENT_DEVICE
     if dev is not None:
@@ -2332,9 +2332,9 @@ def device_fn(dev: Any = None) -> str:
         if dev_str in valid:
             if dev_str in ("cuda", "opencl") and CURRENT_DEVICE != dev_str:
                 sys.stderr.write(
-                    f"[Nativa v0.4 Aviso]: Dispositivo '{dev_str}' registrado como metadado de grafo. "
-                    f"O runtime v0.4 executa tensores no backend CPU otimizado (C99 AOT / OpenMP). "
-                    f"Aceleração nativa via hardware '{dev_str}' está reservada para as próximas versões.\n"
+                    f"[Nativa v0.4 Warning]: Device '{dev_str}' registered as graph metadata. "
+                    f"The v0.4 runtime executes tensors on the optimized CPU backend (C99 AOT / OpenMP). "
+                    f"Native hardware acceleration via '{dev_str}' is reserved for future versions.\n"
                 )
             CURRENT_DEVICE = dev_str
         return dev_str
@@ -2342,8 +2342,8 @@ def device_fn(dev: Any = None) -> str:
 
 
 NATIVA_RT_HEADER_C = r"""/* ========================================================================= */
-/* Runtime C99 Unificado da Linguagem Nativa (nativa_rt.h)                   */
-/* Compartilhado entre AOTKernelEngine (ctypes DLL) e CTranspiler (nativa)   */
+/* Unified C99 Runtime for the Nativa Language (nativa_rt.h)                 */
+/* Shared between AOTKernelEngine (ctypes DLL) and CTranspiler (nativa)      */
 /* ========================================================================= */
 #ifndef NATIVA_RT_H
 #define NATIVA_RT_H
@@ -2383,7 +2383,7 @@ NATIVA_RT_HEADER_C = r"""/* ====================================================
 #endif
 
 /* ------------------------------------------------------------------------- */
-/* 1. Kernels AOT Float32 / BitNet b1.58 (usados via FFI e C99)              */
+/* 1. Float32 / BitNet b1.58 AOT Kernels (used via FFI and C99)              */
 /* ------------------------------------------------------------------------- */
 
 NAT_API void nat_c_gemv_ternary(const int8_t* W, const float* x, float* y, int64_t M, int64_t K) {
@@ -2563,7 +2563,7 @@ NAT_API void nat_c_softmax(const float* x, float* out, int64_t N) {
 }
 
 /* ------------------------------------------------------------------------- */
-/* 2. Complexos e Transformada Rápida de Fourier Cooley-Tukey O(N log N)     */
+/* 2. Complex Numbers and O(N log N) Cooley-Tukey Fast Fourier Transform     */
 /* ------------------------------------------------------------------------- */
 
 typedef struct {
@@ -2590,7 +2590,7 @@ static inline double nat_complex_power(NatComplex c) {
     return c.real * c.real + c.imag * c.imag;
 }
 
-/* Algoritmo Radix-2 Cooley-Tukey in-place O(N log N) para potências de 2 */
+/* In-place O(N log N) Radix-2 Cooley-Tukey algorithm for powers of 2 */
 static inline void nat_fft_cooley_tukey(NatComplex* a, int64_t N, bool inverse) {
     for (int64_t i = 1, j = 0; i < N; i++) {
         int64_t bit = N >> 1;
@@ -2719,7 +2719,7 @@ static inline void nat_power_spectrum_signal(const double* x, double* out_ps, in
 }
 
 /* ------------------------------------------------------------------------- */
-/* 3. Quantização Ternária, BitNet b1.58 e Primitivas Matemáticas F64        */
+/* 3. Ternary Quantization, BitNet b1.58 and F64 Math Primitives             */
 /* ------------------------------------------------------------------------- */
 
 static inline int8_t* nat_quantize_ternary(const double* v, int64_t length, double threshold) {
@@ -3087,7 +3087,7 @@ static inline void nat_random_ternary(int8_t* out, int64_t length, uint64_t seed
 }
 
 /* ------------------------------------------------------------------------- */
-/* 4. KVCache Contíguo em C99 para Inferência Autoregressiva de LLMs         */
+/* 4. Contiguous C99 KVCache for Autoregressive LLM Inference                */
 /* ------------------------------------------------------------------------- */
 
 typedef struct {
@@ -3136,7 +3136,7 @@ static inline void nat_kvcache_clear(NatKVCache* c) {
 }
 
 /* ------------------------------------------------------------------------- */
-/* 5. Impressão Formatada, Sistema Result[T] e I/O Seguro em C99             */
+/* 5. Formatted Printing, Result[T] System and Safe C99 I/O                  */
 /* ------------------------------------------------------------------------- */
 
 static inline void nat_print_vec_f64(const double* v, int64_t n) {
@@ -3178,21 +3178,21 @@ static inline bool nat_is_ok(NatResult r) { return r.is_ok; }
 static inline bool nat_is_err(NatResult r) { return !r.is_ok; }
 static inline const char* nat_unwrap_str(NatResult r) {
     if (!r.is_ok) {
-        fprintf(stderr, "Erro de execucao: tentativa de unwrap em Result com erro: %s\n", r.err ? r.err : "desconhecido");
+        fprintf(stderr, "Runtime error: attempted to unwrap a Result containing an error: %s\n", r.err ? r.err : "unknown");
         exit(1);
     }
     return r.val_str ? r.val_str : "";
 }
 static inline int64_t nat_unwrap_i64(NatResult r) {
     if (!r.is_ok) {
-        fprintf(stderr, "Erro de execucao: tentativa de unwrap em Result com erro: %s\n", r.err ? r.err : "desconhecido");
+        fprintf(stderr, "Runtime error: attempted to unwrap a Result containing an error: %s\n", r.err ? r.err : "unknown");
         exit(1);
     }
     return r.val_i64;
 }
 static inline double nat_unwrap_f64(NatResult r) {
     if (!r.is_ok) {
-        fprintf(stderr, "Erro de execucao: tentativa de unwrap em Result com erro: %s\n", r.err ? r.err : "desconhecido");
+        fprintf(stderr, "Runtime error: attempted to unwrap a Result containing an error: %s\n", r.err ? r.err : "unknown");
         exit(1);
     }
     return r.val_f64;
@@ -3216,12 +3216,12 @@ static inline bool nat_exists_file(const char* path) {
 }
 static inline NatResult nat_read_file_safe(const char* path) {
     FILE* f = fopen(path, "rb");
-    if (!f) return nat_err("arquivo nao encontrado ou inacessivel");
+    if (!f) return nat_err("file not found or inaccessible");
     fseek(f, 0, SEEK_END);
     long sz = ftell(f);
     fseek(f, 0, SEEK_SET);
     char* buf = (char*)malloc(sz + 1);
-    if (!buf) { fclose(f); return nat_err("falha de alocacao de memoria para leitura"); }
+    if (!buf) { fclose(f); return nat_err("memory allocation failed for reading"); }
     size_t rd = fread(buf, 1, sz, f);
     buf[rd] = '\0';
     fclose(f);
@@ -3239,7 +3239,7 @@ AOT_C_SOURCE = "#define NATIVA_BUILD_DLL\n" + NATIVA_RT_HEADER_C
 
 
 def ensure_nativa_rt_header() -> str:
-    """Garante que o cabeçalho C99 unificado 'nativa_rt.h' esteja sincronizado em disco."""
+    """Ensures the unified C99 header 'nativa_rt.h' is synchronized on disk."""
     base_dir = os.path.dirname(os.path.abspath(__file__))
     rt_path = os.path.join(base_dir, "nativa_rt.h")
     try:
@@ -3336,7 +3336,7 @@ class AOTKernelEngine:
                 except Exception:
                     pass
             elif not compiled_ok:
-                sys.stderr.write("[Nativa v0.4 Aviso]: Recompilação AOT C99 falhou. O cache não foi atualizado.\n")
+                sys.stderr.write("[Nativa v0.4 Warning]: C99 AOT recompilation failed. The cache was not updated.\n")
 
         if os.path.exists(dll_path):
             try:
@@ -3437,8 +3437,8 @@ def _matmul_backward_arrays(g: np.ndarray, a_data: np.ndarray, b_data: np.ndarra
 
 
 class Tensor:
-    """Estrutura densa de dados de primeira classe no runtime do Nativa.
-    Mantém memória contígua com metadados de shape, dtype, escala, device e grafo de Autodiff.
+    """First-class dense data structure in the Nativa runtime.
+    Maintains contiguous memory with shape, dtype, scale, device, and Autodiff graph metadata.
     """
     def __init__(self, data: Any, dtype: str = "f32", device: Optional[str] = None, requires_grad: bool = False):
         self.device = device if device is not None else CURRENT_DEVICE
@@ -3976,7 +3976,7 @@ def tensor_absmean_fn(x: Any) -> float:
 
 
 def quantize_bitnet_fn(x: Any) -> Any:
-    """Quantizador canônico do BitNet b1.58: Clip(Round(W / (gamma + eps)), -1, 1)."""
+    """Canonical BitNet b1.58 quantizer: Clip(Round(W / (gamma + eps)), -1, 1)."""
     if isinstance(x, Tensor):
         return x.quantize_bitnet()
     arr = np.asarray(x, dtype=float)
@@ -3990,7 +3990,7 @@ def quantize_bitnet_fn(x: Any) -> Any:
 
 
 def pack_ternary_5trits_fn(x: Any) -> Any:
-    """Empacotamento denso de base-3: 5 trits por byte (3^5 = 243 <= 256), atingindo 1.60 bits/trit."""
+    """Dense base-3 packing: 5 trits per byte (3^5 = 243 <= 256), achieving 1.60 bits/trit."""
     if isinstance(x, Tensor):
         return x.pack_5trits()
     arr = np.asarray(x, dtype=np.int8)
@@ -4027,7 +4027,7 @@ def pack_ternary_5trits_fn(x: Any) -> Any:
 
 
 def unpack_ternary_5trits_fn(packed_bytes: Any, length: int) -> Any:
-    """Desempacotamento denso de base-3: extrai trits {0, 1, 2} e mapeia para {-1, 0, +1}."""
+    """Dense base-3 unpacking: extracts trits {0, 1, 2} and maps to {-1, 0, +1}."""
     if isinstance(packed_bytes, Tensor):
         return packed_bytes.unpack_5trits(length)
     if (len(packed_bytes) if hasattr(packed_bytes, "__len__") else 0) == 0 or length == 0:
@@ -4047,14 +4047,14 @@ def unpack_ternary_5trits_fn(packed_bytes: Any, length: int) -> Any:
 
 
 def mae_fn(a: Any, b: Any) -> float:
-    """Erro Absoluto Médio (Mean Absolute Error): 1/N * sum(|a - b|)."""
+    """Mean Absolute Error (MAE): 1/N * sum(|a - b|)."""
     a_arr = np.array(a, dtype=float)
     b_arr = np.array(b, dtype=float)
     return float(np.mean(np.abs(a_arr - b_arr)))
 
 
 def relative_error_fn(a: Any, b: Any) -> float:
-    """Erro Relativo de Norma L2: ||a - b|| / ||a||."""
+    """L2 Norm Relative Error: ||a - b|| / ||a||."""
     a_arr = np.array(a, dtype=float)
     b_arr = np.array(b, dtype=float)
     norm_a = float(np.linalg.norm(a_arr))
@@ -4064,7 +4064,7 @@ def relative_error_fn(a: Any, b: Any) -> float:
 
 
 def pearson_corr_fn(a: Any, b: Any) -> float:
-    """Coeficiente de Correlação Linear de Pearson entre dois tensores."""
+    """Pearson Linear Correlation Coefficient between two tensors."""
     a_arr = np.array(a, dtype=float).ravel()
     b_arr = np.array(b, dtype=float).ravel()
     if len(a_arr) < 2:
@@ -4078,7 +4078,7 @@ def pearson_corr_fn(a: Any, b: Any) -> float:
 
 
 def cosine_sim_fn(a: Any, b: Any) -> float:
-    """Similaridade de Cosseno entre dois vetores: (a . b) / (||a|| * ||b||)."""
+    """Cosine Similarity between two vectors: (a . b) / (||a|| * ||b||)."""
     a_arr = np.array(a, dtype=float).ravel()
     b_arr = np.array(b, dtype=float).ravel()
     norm_a = float(np.linalg.norm(a_arr))
@@ -4147,7 +4147,7 @@ def gemv_vec_lut_fn(W_packed: Any, X: Any, M: int, K: int, gamma: float = 1.0) -
 
 
 def ternary_add_only_matmul(W: Any, X: Any) -> Any:
-    """Multiplicação matricial livre de multiplicações para pesos ternários {-1, 0, 1}."""
+    """Multiplication-free matrix multiplication for ternary weights {-1, 0, 1}."""
     W_arr = W.data if isinstance(W, Tensor) else np.asarray(W)
     X_arr = X.data if isinstance(X, Tensor) else np.asarray(X)
     is_ternary_W = (isinstance(W, Tensor) and W.dtype in ("t2", "ternary")) or getattr(W, "dtype", None) in ("t2", "ternary")
@@ -4491,7 +4491,7 @@ def sdpa_fn(q: Any, k: Any, v: Any, mask: Any = None, scale: Optional[float] = N
 
 
 def concat_fn(tensors: list[Any], axis: int = 0) -> Tensor:
-    """Concatena uma lista de tensores ao longo de um eixo."""
+    """Concatenates a list of tensors along an axis."""
     arrs = [t.data if isinstance(t, Tensor) else np.asarray(t) for t in tensors]
     res = np.concatenate(arrs, axis=axis)
     parents = tuple(t for t in tensors if isinstance(t, Tensor))
@@ -4536,9 +4536,9 @@ def sample_fn(logits: Any, temperature: float = 1.0, top_p: float = 0.9) -> int:
 
 
 class KVCache:
-    """Cache de Chaves e Valores para inferência autoregressiva token-a-token com Memory Arena (estilo llama2.c).
-    Pré-aloca a memória contígua total upfront no início da sessão, eliminando re-alocações dinâmicas,
-    cópias redundantes e fragmentação de memória a cada token gerado.
+    """Key-Value Cache for autoregressive token-by-token inference with Memory Arena (llama2.c style).
+    Pre-allocates total contiguous memory upfront at session start, eliminating dynamic reallocations,
+    redundant copies, and memory fragmentation on each generated token.
     """
     def __init__(self, max_seq_len: int = 2048, dim: int = 4096):
         self.max_seq_len = int(max_seq_len) if max_seq_len > 0 else 2048
@@ -4552,7 +4552,7 @@ class KVCache:
         self.v: Optional[Tensor] = None
 
     def update(self, new_k: Any, new_v: Any) -> tuple[Tensor, Tensor]:
-        """Insere novos tokens na Memory Arena sem re-alocação de memória."""
+        """Inserts new tokens into the Memory Arena without memory reallocation."""
         nk = new_k.data if isinstance(new_k, Tensor) else np.asarray(new_k, dtype=np.float32)
         nv = new_v.data if isinstance(new_v, Tensor) else np.asarray(new_v, dtype=np.float32)
 
@@ -4567,13 +4567,13 @@ class KVCache:
         n_tokens = int(nk.shape[0])
         token_dim = int(nk.shape[-1])
 
-        # Se a dimensão não corresponder e nenhum token foi inserido, redimensiona a arena
+        # If dimension does not match and no tokens inserted, resize arena
         if token_dim != self.dim and self.seq_len == 0:
             self.dim = token_dim
             self._arena_k = np.zeros((self.max_seq_len, self.dim), dtype=np.float32)
             self._arena_v = np.zeros((self.max_seq_len, self.dim), dtype=np.float32)
 
-        # Se ultrapassar a capacidade máxima, expande a arena (dobra capacidade como salvaguarda)
+        # If exceeding maximum capacity, expand arena (double capacity as a safeguard)
         if self.seq_len + n_tokens > self.max_seq_len:
             new_max = max(self.max_seq_len * 2, self.seq_len + n_tokens + 1024)
             new_ak = np.zeros((new_max, self.dim), dtype=np.float32)
@@ -4596,7 +4596,7 @@ class KVCache:
         return self.k, self.v
 
     def clear(self):
-        """Reinicia o ponteiro de sequência sem desalocar a arena de memória."""
+        """Resets sequence pointer without deallocating the memory arena."""
         self.seq_len = 0
         self.k = None
         self.v = None
@@ -4631,7 +4631,7 @@ class KVCache:
 
 
 def _bytes_to_unicode() -> dict[int, str]:
-    """Tabela canônica de mapeamento byte -> caractere unicode (estilo GPT-2 / HuggingFace / Qwen)."""
+    """Canonical byte -> unicode character mapping table (GPT-2 / HuggingFace / Qwen style)."""
     bs = list(range(ord("!"), ord("~") + 1)) + list(range(ord("¡"), ord("¬") + 1)) + list(range(ord("®"), ord("ÿ") + 1))
     cs = bs[:]
     n = 0
@@ -4644,12 +4644,12 @@ def _bytes_to_unicode() -> dict[int, str]:
 
 
 class Tokenizer:
-    """Tokenizador BPE com regras completas de Merge e Byte-Fallback (estilo LLaMA/Mistral/Qwen/GPT).
-    Suporta:
-      1. Vocabulário carregado de arquivos tokenizer.json (HuggingFace/Qwen/LLaMA) ou padrão interno.
-      2. Regras canônicas de BPE Merge com prioridades de ranking.
+    """BPE Tokenizer with complete Merge and Byte-Fallback rules (LLaMA/Mistral/Qwen/GPT style).
+    Supports:
+      1. Vocabulary loaded from tokenizer.json files (HuggingFace/Qwen/LLaMA) or internal default.
+      2. Canonical BPE Merge rules with rank priorities.
       3. Added tokens / special tokens (<|endoftext|>, etc.).
-      4. Byte-level mapping GPT-2/Qwen e fallback robusto para <0xXX>.
+      4. GPT-2/Qwen byte-level mapping and robust fallback for <0xXX>.
     """
     def __init__(self, vocab_file: Optional[str] = None):
         self.vocab: dict[str, int] = {}
@@ -4665,7 +4665,7 @@ class Tokenizer:
 
         if vocab_file is not None:
             if not os.path.exists(vocab_file):
-                raise FileNotFoundError(f"Arquivo de vocabulário do tokenizador não encontrado: '{vocab_file}'")
+                raise FileNotFoundError(f"Tokenizer vocabulary file not found: '{vocab_file}'")
             self.load(vocab_file)
         else:
             self._init_default_vocab()
@@ -4702,7 +4702,7 @@ class Tokenizer:
                 self.inv_vocab[idx] = w
 
     def _bpe_merge(self, word: str) -> list[str]:
-        """Aplica as regras BPE de merges sobre a sequência de caracteres."""
+        """Applies BPE merge rules over the character sequence."""
         if not self.bpe_ranks or len(word) <= 1:
             return [word] if word in self.vocab else list(word)
         parts = list(word)
@@ -4772,7 +4772,7 @@ class Tokenizer:
                                     tokens.append(self.vocab.get(b_tok, self.vocab.get("<unk>", 0)))
             return Tensor(tokens, dtype="i64")
 
-        # Fallback: Greedy Substring Match com Byte-Fallback (Vocabulário padrão sem merges)
+        # Fallback: Greedy Substring Match with Byte-Fallback (Default vocabulary without merges)
         i = 0
         n = len(text)
         while i < n:
@@ -4867,11 +4867,11 @@ class Tokenizer:
                 self.merges.append(pair)
                 self.bpe_ranks[pair] = rank
 
-        # Extrai normalizador (ex: NFC)
+        # Extract normalizer (e.g., NFC)
         if "normalizer" in data and isinstance(data["normalizer"], dict):
             self.normalizer_type = data["normalizer"].get("type")
 
-        # Extrai padrão do pré-tokenizador oficial se declarado no JSON
+        # Extract pattern from official pre-tokenizer if declared in JSON
         if "pre_tokenizer" in data and isinstance(data["pre_tokenizer"], dict):
             pt = data["pre_tokenizer"]
             pat_str = None
@@ -4890,7 +4890,7 @@ class Tokenizer:
                     import regex as _regex_mod
                     self._pre_regex = _regex_mod.compile(pat_str)
                 except Exception:
-                    # Fallback robusto para o módulo padrão 're' do Python (sem nested character classes)
+                    # Robust fallback for Python's standard 're' module (without nested character classes)
                     clean_pat = r"""(?i:'s|'t|'re|'ve|'m|'ll|'d)| ?[^\W\d_]+| ?\d+| ?[^\s\w]+|\s+(?!\S)|\s+"""
                     try:
                         self._pre_regex = re.compile(clean_pat)
@@ -4928,7 +4928,7 @@ _MMAP_CACHE: dict[str, tuple[Any, mmap.mmap, int, dict]] = {}
 
 
 def close_safetensors_mmap(path: Optional[str] = None) -> None:
-    """Fecha mapeamento de memória mmap aberto para o caminho informado ou todos."""
+    """Closes open mmap memory mapping for the given path or all open mappings."""
     if path is None:
         for p in list(_MMAP_CACHE.keys()):
             close_safetensors_mmap(p)
@@ -4952,36 +4952,36 @@ def _get_mmap(path: str) -> tuple[mmap.mmap, int, dict]:
         _, mm, data_start, header = _MMAP_CACHE[resolved]
         return mm, data_start, header
     if not os.path.exists(resolved):
-        raise FileNotFoundError(f"Arquivo safetensors não encontrado: '{resolved}'")
+        raise FileNotFoundError(f"Safetensors file not found: '{resolved}'")
     file_size = os.path.getsize(resolved)
     if file_size < 8:
-        raise ValueError(f"Arquivo safetensors inválido ou truncado: '{resolved}' (tamanho {file_size} bytes < cabeçalho de 8 bytes)")
+        raise ValueError(f"Invalid or truncated safetensors file: '{resolved}' (size {file_size} bytes < 8-byte header)")
 
     fh = open(resolved, "rb")
     try:
         header_size_bytes = fh.read(8)
         if len(header_size_bytes) < 8:
-            raise ValueError(f"Arquivo safetensors truncado ao ler tamanho do cabeçalho: '{resolved}'")
+            raise ValueError(f"Safetensors file truncated while reading header size: '{resolved}'")
         header_size = struct.unpack("<Q", header_size_bytes)[0]
         if header_size <= 0:
-            raise ValueError(f"Arquivo safetensors corrompido: header_size = {header_size} em '{resolved}'")
+            raise ValueError(f"Corrupted safetensors file: header_size = {header_size} in '{resolved}'")
         if header_size > file_size - 8:
             raise ValueError(
-                f"Arquivo safetensors corrompido em '{resolved}': header_size ({header_size} bytes) "
-                f"excede o tamanho total do arquivo ({file_size} bytes)"
+                f"Corrupted safetensors file in '{resolved}': header_size ({header_size} bytes) "
+                f"exceeds total file size ({file_size} bytes)"
             )
         if header_size > 100 * 1024 * 1024:
-            raise ValueError(f"Cabeçalho safetensors excede o limite de segurança de 100MB ({header_size} bytes) em '{resolved}'")
+            raise ValueError(f"Safetensors header exceeds 100MB safety limit ({header_size} bytes) in '{resolved}'")
 
         header_json_bytes = fh.read(header_size)
         if len(header_json_bytes) != header_size:
-            raise ValueError(f"Arquivo safetensors truncado: esperava {header_size} bytes de cabeçalho, leu {len(header_json_bytes)} em '{resolved}'")
+            raise ValueError(f"Truncated safetensors file: expected {header_size} header bytes, read {len(header_json_bytes)} in '{resolved}'")
         try:
             header = json.loads(header_json_bytes.decode("utf-8"))
         except Exception as e:
-            raise ValueError(f"Cabeçalho JSON do safetensors malformado em '{resolved}': {e}")
+            raise ValueError(f"Malformed safetensors JSON header in '{resolved}': {e}")
         if not isinstance(header, dict):
-            raise ValueError(f"Cabeçalho safetensors inválido (esperado objeto JSON) em '{resolved}'")
+            raise ValueError(f"Invalid safetensors header (expected JSON object) in '{resolved}'")
 
         data_start = 8 + header_size
         tensor_intervals: list[tuple[int, int, str]] = []
@@ -4989,49 +4989,49 @@ def _get_mmap(path: str) -> tuple[mmap.mmap, int, dict]:
             if tname == "__metadata__":
                 continue
             if not isinstance(tinfo, dict):
-                raise ValueError(f"Metadados inválidos para tensor '{tname}' em '{resolved}': esperado dicionário")
+                raise ValueError(f"Invalid metadata for tensor '{tname}' in '{resolved}': expected dictionary")
             for req in ("dtype", "shape", "data_offsets"):
                 if req not in tinfo:
-                    raise ValueError(f"Metadados incompletos para tensor '{tname}' em '{resolved}': campo obrigatório '{req}' ausente")
+                    raise ValueError(f"Incomplete metadata for tensor '{tname}' in '{resolved}': missing required field '{req}'")
             offsets = tinfo["data_offsets"]
             if not (isinstance(offsets, list) and len(offsets) == 2 and isinstance(offsets[0], int) and isinstance(offsets[1], int)):
-                raise ValueError(f"Offsets inválidos para o tensor '{tname}' em '{resolved}': {offsets}")
+                raise ValueError(f"Invalid offsets for tensor '{tname}' in '{resolved}': {offsets}")
             if offsets[0] < 0 or offsets[1] < offsets[0]:
-                raise ValueError(f"Intervalo de offsets inválido para o tensor '{tname}' em '{resolved}': {offsets}")
+                raise ValueError(f"Invalid offset range for tensor '{tname}' in '{resolved}': {offsets}")
             if data_start + offsets[1] > file_size:
                 raise ValueError(
-                    f"Arquivo safetensors truncado em '{resolved}': tensor '{tname}' requer offset final "
-                    f"{data_start + offsets[1]}, mas arquivo tem apenas {file_size} bytes"
+                    f"Truncated safetensors file in '{resolved}': tensor '{tname}' requires end offset "
+                    f"{data_start + offsets[1]}, but file only has {file_size} bytes"
                 )
             tensor_intervals.append((offsets[0], offsets[1], tname))
 
-        # Validação canônica SafeTensors: verificação de sobreposição e cobertura contígua
+        # Canonical SafeTensors validation: overlap and contiguous coverage check
         if tensor_intervals:
             tensor_intervals.sort(key=lambda x: (x[0], x[1]))
             if tensor_intervals[0][0] != 0:
                 raise ValueError(
-                    f"Arquivo safetensors inválido em '{resolved}': primeiro tensor inicia no offset {tensor_intervals[0][0]} "
-                    f"(esperado offset 0, bytes não referenciados antes do primeiro tensor)."
+                    f"Invalid safetensors file in '{resolved}': first tensor starts at offset {tensor_intervals[0][0]} "
+                    f"(expected offset 0, unreferenced bytes before first tensor)."
                 )
             for idx in range(len(tensor_intervals) - 1):
                 cur_start, cur_end, cur_name = tensor_intervals[idx]
                 nxt_start, nxt_end, nxt_name = tensor_intervals[idx + 1]
                 if nxt_start < cur_end:
                     raise ValueError(
-                        f"Sobreposição ilegal de tensores em '{resolved}': tensor '{cur_name}' [{cur_start}:{cur_end}] "
-                        f"sobrepõe tensor '{nxt_name}' [{nxt_start}:{nxt_end}]."
+                        f"Illegal tensor overlap in '{resolved}': tensor '{cur_name}' [{cur_start}:{cur_end}] "
+                        f"overlaps tensor '{nxt_name}' [{nxt_start}:{nxt_end}]."
                     )
                 if nxt_start > cur_end:
                     raise ValueError(
-                        f"Lacuna ilegal de bytes em '{resolved}': intervalo [{cur_end}:{nxt_start}] "
-                        f"entre '{cur_name}' e '{nxt_name}' não pertence a nenhum tensor."
+                        f"Illegal byte gap in '{resolved}': range [{cur_end}:{nxt_start}] "
+                        f"between '{cur_name}' and '{nxt_name}' does not belong to any tensor."
                     )
             last_end = tensor_intervals[-1][1]
             total_payload = file_size - data_start
             if last_end < total_payload:
                 raise ValueError(
-                    f"Bytes excedentes não referenciados em '{resolved}': último tensor termina em {last_end}, "
-                    f"mas o payload do arquivo possui {total_payload} bytes ({total_payload - last_end} bytes excedentes no final)."
+                    f"Unreferenced trailing bytes in '{resolved}': last tensor ends at {last_end}, "
+                    f"but file payload has {total_payload} bytes ({total_payload - last_end} excess bytes at end)."
                 )
 
         mm = mmap.mmap(fh.fileno(), 0, access=mmap.ACCESS_READ)
@@ -5061,7 +5061,7 @@ def load_safetensors_fn(path: str, tensor_name: str) -> Any:
     mm, data_start, header = _get_mmap(path)
     if tensor_name not in header:
         available = [k for k in header.keys() if k != "__metadata__"]
-        raise KeyError(f"Tensor '{tensor_name}' não encontrado em {path}. Tensores disponíveis: {available}")
+        raise KeyError(f"Tensor '{tensor_name}' not found in {path}. Available tensors: {available}")
     info = header[tensor_name]
     dtype_str = info.get("dtype", "F32")
     shape = info.get("shape", [])
@@ -5069,9 +5069,9 @@ def load_safetensors_fn(path: str, tensor_name: str) -> Any:
 
     if dtype_str not in DTYPE_MAP and dtype_str != "BF16":
         supported = list(DTYPE_MAP.keys()) + ["BF16"]
-        raise ValueError(f"Tipo de dado '{dtype_str}' não suportado para o tensor '{tensor_name}'. Tipos suportados: {supported}")
+        raise ValueError(f"Unsupported data type '{dtype_str}' for tensor '{tensor_name}'. Supported types: {supported}")
 
-    # Validação rigorosa de dimensões e contagem de bytes
+    # Strict validation of dimensions and byte count
     declared_bytes = end_offset - start_offset
     item_size = 2 if dtype_str in ("F16", "BF16", "I16") else (8 if dtype_str in ("F64", "I64") else (1 if dtype_str in ("I8", "U8", "BOOL") else 4))
 
@@ -5096,8 +5096,8 @@ def load_safetensors_fn(path: str, tensor_name: str) -> Any:
 
     if byte_end > len(mm):
         raise ValueError(
-            f"Leitura fora dos limites no SafeTensors para o tensor '{tensor_name}': "
-            f"offset final {byte_end} excede tamanho mapeado {len(mm)}"
+            f"Out-of-bounds read in SafeTensors for tensor '{tensor_name}': "
+            f"final offset {byte_end} exceeds mapped size {len(mm)}"
         )
 
     if dtype_str == "BF16":
@@ -5148,7 +5148,7 @@ def save_safetensors_fn(path: str, tensor_name: str, data: Any) -> None:
 
 def read_file_fn(path: str) -> str:
     if not os.path.exists(path):
-        raise FileNotFoundError(f"Arquivo não encontrado: '{path}'")
+        raise FileNotFoundError(f"File not found: '{path}'")
     with open(path, "r", encoding="utf-8", newline="") as f:
         return f.read()
 
@@ -5156,7 +5156,7 @@ def read_file_fn(path: str) -> str:
 def read_file_safe_fn(path: str) -> NatResult:
     try:
         if not os.path.exists(path):
-            return NatResult(error=f"Arquivo não encontrado: '{path}'", is_ok=False)
+            return NatResult(error=f"File not found: '{path}'", is_ok=False)
         with open(path, "r", encoding="utf-8", newline="") as f:
             return NatResult(value=f.read(), is_ok=True)
     except Exception as e:
@@ -5321,7 +5321,7 @@ def backward_fn(loss: Any, grad: Any = None) -> None:
     if isinstance(loss, Tensor):
         loss.backward(grad)
     else:
-        raise RuntimeError(f"backward() exige um Tensor, mas recebeu {type(loss).__name__}")
+        raise RuntimeError(f"backward() requires a Tensor, but received {type(loss).__name__}")
 
 
 def zero_grad_fn(params: Any) -> None:
@@ -5587,7 +5587,7 @@ BUILTIN_IMPLS: dict[str, Callable] = {
     "err": lambda m: NatResult(error=str(m), is_ok=False),
     "is_ok": lambda r: getattr(r, "is_ok", True) if isinstance(r, NatResult) else True,
     "is_err": lambda r: not getattr(r, "is_ok", True) if isinstance(r, NatResult) else False,
-    "unwrap": lambda r: (r.value if r.is_ok else (_ for _ in ()).throw(RuntimeError(f"unwrap em Result com erro: {r.error}"))) if isinstance(r, NatResult) else r,
+    "unwrap": lambda r: (r.value if r.is_ok else (_ for _ in ()).throw(RuntimeError(f"unwrap called on Err Result: {r.error}"))) if isinstance(r, NatResult) else r,
     "unwrap_or": lambda r, d: (r.value if r.is_ok else d) if isinstance(r, NatResult) else r,
     "error_message": lambda r: (r.error if (isinstance(r, NatResult) and not r.is_ok) else ""),
     "fill": lambda n, v: [copy.deepcopy(v) if isinstance(v, (dict, list)) else v for _ in range(int(n))],
@@ -5624,7 +5624,7 @@ _bind_builtin_implementations()
 
 
 class NatLambda:
-    """Função anônima (closure léxica) em tempo de execução."""
+    """Anonymous function (lexical closure) at runtime."""
     def __init__(self, node: Lambda, captured_scopes: list[dict[str, Any]], interp: "Interpreter"):
         self.node = node
         self.captured_scopes = captured_scopes
@@ -5633,7 +5633,7 @@ class NatLambda:
     def __call__(self, *args: Any) -> Any:
         if len(args) != len(self.node.params):
             raise self.interp._runtime_error(
-                f"lambda espera {len(self.node.params)} argumento(s), mas recebeu {len(args)}",
+                f"lambda expects {len(self.node.params)} argument(s), but received {len(args)}",
                 self.node,
             )
         base = len(self.interp.scopes)
@@ -5667,7 +5667,7 @@ class NatStructInstance:
         if name in fields_dict:
             return fields_dict[name]
         sname = object.__getattribute__(self, "_struct_name")
-        raise AttributeError(f"Struct '{sname}' não possui o campo '{name}'")
+        raise AttributeError(f"Struct '{sname}' has no field '{name}'")
 
     def __setattr__(self, name: str, value: Any) -> None:
         fields_dict = object.__getattribute__(self, "_fields")
@@ -5675,7 +5675,7 @@ class NatStructInstance:
             fields_dict[name] = value
         else:
             sname = object.__getattribute__(self, "_struct_name")
-            raise RuntimeError(f"Struct '{sname}' não possui o campo '{name}'")
+            raise RuntimeError(f"Struct '{sname}' has no field '{name}'")
 
     def __repr__(self) -> str:
         sname = object.__getattribute__(self, "_struct_name")
@@ -5702,7 +5702,7 @@ class NatUserModule:
         if name in exports:
             return exports[name]
         mname = object.__getattribute__(self, "_mod_name")
-        raise AttributeError(f"Módulo '{mname}' não possui '{name}'")
+        raise AttributeError(f"Module '{mname}' has no attribute '{name}'")
 
 
 class Interpreter:
@@ -5723,7 +5723,7 @@ class Interpreter:
         return NatRuntimeError(message, line=line, col=col)
 
     def init_builtins(self):
-        # Fonte Única de Verdade: popula funções globais diretamente da tabela BUILTINS
+        # Single Source of Truth: populate global functions directly from the BUILTINS table
         self.globals = {name: sig.impl for name, sig in BUILTINS.items()}
         self.globals["Tensor"] = Tensor
         self.globals["math"] = MathModule()
@@ -5734,14 +5734,14 @@ class Interpreter:
         sname = struct_decl.name
         def _ctor(*args):
             if len(args) != len(field_names):
-                raise RuntimeError(f"Struct '{sname}' espera {len(field_names)} argumento(s), recebeu {len(args)}")
+                raise RuntimeError(f"Struct '{sname}' expects {len(field_names)} argument(s), but received {len(args)}")
             return NatStructInstance(sname, dict(zip(field_names, args)))
         return _ctor
 
     def _load_user_module(self, mod_name: str) -> None:
         mod_path = _resolve_local_module_path(mod_name)
         if mod_path is None:
-            raise RuntimeError(f"Módulo não encontrado: '{mod_name}'")
+            raise RuntimeError(f"Module not found: '{mod_name}'")
         with open(mod_path, "r", encoding="utf-8") as mf:
             mod_src = mf.read()
         mod_prog = parse(mod_src)
@@ -5798,9 +5798,9 @@ class Interpreter:
             return ret.value
         except ErrPropagate as prop:
             if is_result_type_expr(fn.ret):
-                return prop.result          # propagação: devolve o Err ao chamador
+                return prop.result          # propagation: return Err to caller
             raise self._runtime_error(
-                f"panic: erro propagado por '?' em '{fn.name}' (que não retorna Result): "
+                f"panic: error propagated by '?' in '{fn.name}' (which does not return Result): "
                 f"{prop.result.error}",
                 fn
             ) from None
@@ -5881,9 +5881,9 @@ class Interpreter:
         except RuntimeError as exc:
             raise self._runtime_error(str(exc), s) from exc
         except ZeroDivisionError as exc:
-            raise self._runtime_error("Divisão por zero", s) from exc
+            raise self._runtime_error("Division by zero", s) from exc
         except IndexError as exc:
-            raise self._runtime_error(f"Índice fora dos limites: {exc}", s) from exc
+            raise self._runtime_error(f"Index out of bounds: {exc}", s) from exc
         finally:
             self.cur_node = prev_node
 
@@ -5895,12 +5895,12 @@ class Interpreter:
             for sc, c_sc in zip(reversed(self.scopes[base:]), reversed(self.const_scopes[base:])):
                 if name in sc:
                     if name in c_sc:
-                        raise self._runtime_error(f"Não é permitido reatribuir a constante '{name}'", tgt)
+                        raise self._runtime_error(f"Cannot reassign constant '{name}'", tgt)
                     target_scope = sc
                     break
             else:
                 if name in self.const_globals:
-                    raise self._runtime_error(f"Não é permitido reatribuir a constante '{name}'", tgt)
+                    raise self._runtime_error(f"Cannot reassign constant '{name}'", tgt)
 
             if target_scope is None:
                 target_scope = self.scopes[-1]
@@ -5909,7 +5909,7 @@ class Interpreter:
                 target_scope[name] = val
             else:
                 if name not in target_scope:
-                    raise self._runtime_error(f"Variável não definida: {name}", tgt)
+                    raise self._runtime_error(f"Undefined variable: {name}", tgt)
                 base_op = op[:-1]
                 target_scope[name] = self.eval_binary_op(base_op, target_scope[name], val)
         elif isinstance(tgt, Index):
@@ -5934,7 +5934,7 @@ class Interpreter:
             except RuntimeError as re:
                 raise self._runtime_error(str(re), tgt) from re
         else:
-            raise self._runtime_error(f"Alvo de atribuição inválido: {tgt}", tgt)
+            raise self._runtime_error(f"Invalid assignment target: {tgt}", tgt)
 
     def eval_assign(self, node: Assign):
         val = self.eval_expr(node.value)
@@ -5945,10 +5945,10 @@ class Interpreter:
         try:
             items = list(val)
         except TypeError:
-            raise self._runtime_error(f"Valor não é iterável para desempacotamento: {val!r}", node) from None
+            raise self._runtime_error(f"Value is not iterable for unpacking: {val!r}", node) from None
         if len(items) != len(node.targets):
             raise self._runtime_error(
-                f"Desempacotamento espera {len(node.targets)} valores, mas recebeu {len(items)}",
+                f"Unpacking expects {len(node.targets)} values, but received {len(items)}",
                 node
             )
         for tgt, item_val in zip(node.targets, items):
@@ -5976,7 +5976,7 @@ class Interpreter:
                         return sc[e.id]
                 if e.id in self.globals:
                     return self.globals[e.id]
-                raise self._runtime_error(f"Variável não definida: {e.id}", e)
+                raise self._runtime_error(f"Undefined variable: {e.id}", e)
             if isinstance(e, TupleLit):
                 return tuple(self.eval_expr(it) for it in e.items)
             if isinstance(e, DictLit):
@@ -6049,15 +6049,15 @@ class Interpreter:
                     else:
                         out.append(p)
                 return "".join(out)
-            raise self._runtime_error(f"Expressão desconhecida: {e}", e)
+            raise self._runtime_error(f"Unknown expression: {e}", e)
         except (ReturnSignal, BreakSignal, ContinueSignal, ErrPropagate, NatRuntimeError):
             raise
         except RuntimeError as exc:
             raise self._runtime_error(str(exc), e) from exc
         except ZeroDivisionError as exc:
-            raise self._runtime_error("Divisão por zero", e) from exc
+            raise self._runtime_error("Division by zero", e) from exc
         except IndexError as exc:
-            raise self._runtime_error(f"Índice fora dos limites: {exc}", e) from exc
+            raise self._runtime_error(f"Index out of bounds: {exc}", e) from exc
         finally:
             self.cur_node = prev_node
 
@@ -6070,7 +6070,7 @@ class Interpreter:
             return -operand
         if op == "+":
             return operand
-        raise self._runtime_error(f"Operador unário desconhecido: {op}")
+        raise self._runtime_error(f"Unknown unary operator: {op}")
 
     def eval_binary_op(self, op: str, left: Any, right: Any) -> Any:
         if op == "==": return left == right
@@ -6103,7 +6103,7 @@ class Interpreter:
             elif op == "//": res = l_np // r_np
             elif op == "%": res = l_np % r_np
             elif op == "**": res = l_np ** r_np
-            else: raise self._runtime_error(f"Operador desconhecido: {op}")
+            else: raise self._runtime_error(f"Unknown operator: {op}")
 
             if isinstance(left, np.ndarray) or isinstance(right, np.ndarray):
                 return res
@@ -6118,15 +6118,15 @@ class Interpreter:
         if op == "//": return left // right
         if op == "%": return left % right
         if op == "**": return left ** right
-        raise self._runtime_error(f"Operador não suportado: {op}")
+        raise self._runtime_error(f"Unsupported operator: {op}")
 
 
 # ============================================================================
-# EXEMPLOS EMBUTIDOS
+# BUILT-IN EXAMPLES
 # ============================================================================
 
 EXEMPLOS = {
-'exemplo': r'''# Arquivo: exemplo.nat
+'exemplo': r'''# File: exemplo.nat
 fn soma(valores: [i64]) -> i64:
     total = 0
     for valor in valores:
@@ -6136,11 +6136,11 @@ fn soma(valores: [i64]) -> i64:
 fn main():
     numeros = [10, 20, 30, 40, 50]
     resultado = soma(numeros)
-    print(f"Resultado: {resultado}")
+    print(f"Result: {resultado}")
 ''',
 
 'riemann': r'''# riemann.nat
-# Protótipo experimental: soma principal da fórmula de Riemann-Siegel.
+# Experimental prototype: Riemann-Siegel formula main sum.
 const PI = 3.14159265358979323846
 
 fn theta(t: f64) -> f64:
@@ -6212,11 +6212,11 @@ fn main():
             erro = targets[i] - pred
             w += lr * erro * entradas[i]
 
-    print(f"Pesos finais: {w}")
+    print(f"Final weights: {w}")
     for i in 0..4:
         soma = entradas[i] @ w
         pred = 1.0 / (1.0 + math.exp(-soma))
-        print(f"Entrada {entradas[i]} -> Pred: {pred:.3f} (Alvo: {targets[i]})")
+        print(f"Input {entradas[i]} -> Pred: {pred:.3f} (Target: {targets[i]})")
 ''',
 
 'ia_tensor': r'''import math
@@ -6226,11 +6226,11 @@ fn main():
     A = [[1.0, 2.0], [3.0, 4.0]]
     B = [[2.0, 0.0], [1.0, 2.0]]
     C = A @ B
-    print(f"Multiplicacao Matricial C = A @ B: {C}")
+    print(f"Matrix Multiplication C = A @ B: {C}")
 
     s = sum(C)
     m = mean(C)
-    print(f"Soma dos elementos: {s}, Media: {m}")
+    print(f"Element sum: {s}, Mean: {m}")
 
     ativ = relu(C - 5.0)
     sig = sigmoid(C * 0.1)
@@ -6239,37 +6239,37 @@ fn main():
 
     v = [10, 20, 30, 40, 50]
     fatia = v[1..4]
-    print(f"Fatia de vetor v[1..4]: {fatia}")
+    print(f"Vector slice v[1..4]: {fatia}")
 ''',
 
-'ternario': r'''# Exemplo de Computacao Ternaria (1.58 bits) e Matrizes Ternarias
+'ternario': r'''# Ternary Computing (1.58 bits) and Ternary Matrices Example
 fn main():
-    # 1. Matriz de Pesos Ternarios {-1, 0, +1} inspirada em BitNet
+    # 1. Ternary Weights Matrix {-1, 0, +1} inspired by BitNet
     W: tensor[t2] = [
         [1,  0, -1,  1],
         [-1, 1,  0, -1],
         [0, -1,  1,  0]
     ]
 
-    # Vetor de ativacoes continuas f32
+    # Continuous f32 activation vector
     x: [f32] = [0.8, -1.2, 2.5, 0.4]
 
-    # 2. Multiplicacao Matricial Ternaria Nativa (Add-only GEMM livre de multiplicacoes)
+    # 2. Native Ternary Matrix Multiplication (Multiplication-free Add-only GEMM)
     y = W @ x
-    print(f"Ativacoes de entrada: {x}")
-    print(f"Resultado do Matmul Ternario (W @ x): {y}")
+    print(f"Input activations: {x}")
+    print(f"Ternary Matmul Result (W @ x): {y}")
 
-    # 3. Quantizacao Ternaria dinamica das ativacoes
+    # 3. Dynamic ternary quantization of activations
     ativacoes = [1.8, -0.3, 0.1, -1.5, 0.9, -0.1]
     trits = quantize_ternary(ativacoes, 0.5)
-    print(f"Ativacoes originais: {ativacoes}")
-    print(f"Ativacoes quantizadas em {{-1, 0, 1}}: {trits}")
+    print(f"Original activations: {ativacoes}")
+    print(f"Activations quantized to {{-1, 0, 1}}: {trits}")
 
-    # 4. Compactacao de memoria (Bit Packing: 2 bits por trit, 4 trits por byte)
+    # 4. Memory compression (Bit Packing: 2 bits per trit, 4 trits per byte)
     compactado = pack_ternary(trits)
     descompactado = unpack_ternary(compactado, len(trits))
-    print(f"Bytes compactados (4 trits/byte): {compactado}")
-    print(f"Valores descompactados: {descompactado}")
+    print(f"Packed bytes (4 trits/byte): {compactado}")
+    print(f"Unpacked values: {descompactado}")
 ''',
 }
 
@@ -6413,43 +6413,43 @@ class Erros(unittest.TestCase):
         if linha: self.assertEqual(cm.exception.line, linha)
 
     def test_erros(self):
-        self.falha("fn f(x):\n    pass\n", "precisam de tipo", 1)
-        self.falha("fn f():\nx = 1\n", "bloco indentado", 2)
-        self.falha("fn f():\n    x = (1 + 2\n", "não foi fechado", 2)
-        self.falha("fn f():\n    x = 1)\n", "sem abertura", 2)
-        self.falha("fn f():\n    a = 1\n  b = 2\n", "indentação inconsistente", 3)
-        self.falha("fn f():\n    a = 1\n        b = 2\n", "indentação inesperada", 3)
-        self.falha("fn f():\n\tx = 1\n", "tabs", 2)
-        self.falha("fn f():\n    x = 1 2\n", "fim de linha", 2)
-        self.falha("fn f():\n    else:\n        pass\n", "sem 'if'", 2)
-        self.falha("fn f():\n    f() = 1\n", "lado esquerdo", 2)
-        self.falha("fn f():\n    x = \n", "esperada uma expressão", 2)
-        self.falha("fn f():\n    x = $\n", "caractere inesperado", 2)
-        self.falha("x = 1\n", "nível superior", 1)
-        self.falha('fn f():\n    s = "abc\n', "string não terminada", 2)
-        self.falha("fn f():\n    fn g():\n        pass\n", "nível superior", 2)
+        self.falha("fn f(x):\n    pass\n", "require a type", 1)
+        self.falha("fn f():\nx = 1\n", "expected an indented block", 2)
+        self.falha("fn f():\n    x = (1 + 2\n", "was not closed", 2)
+        self.falha("fn f():\n    x = 1)\n", "without matching opening bracket", 2)
+        self.falha("fn f():\n    a = 1\n  b = 2\n", "inconsistent indentation", 3)
+        self.falha("fn f():\n    a = 1\n        b = 2\n", "unexpected indentation", 3)
+        self.falha("fn f():\n\tx = 1\n", "tab", 2)
+        self.falha("fn f():\n    x = 1 2\n", "end of line", 2)
+        self.falha("fn f():\n    else:\n        pass\n", "without matching 'if'", 2)
+        self.falha("fn f():\n    f() = 1\n", "left-hand side", 2)
+        self.falha("fn f():\n    x = \n", "expected an expression", 2)
+        self.falha("fn f():\n    x = $\n", "unexpected character", 2)
+        self.falha("x = 1\n", "allowed at top level", 1)
+        self.falha('fn f():\n    s = "abc\n', "unterminated string", 2)
+        self.falha("fn f():\n    fn g():\n        pass\n", "only allowed at top level", 2)
 
     def test_encadeamentos_proibidos(self):
-        self.falha("a < b < c", "encadeadas", expr=True)
-        self.falha("1..2..3", "encadeados", expr=True)
+        self.falha("a < b < c", "cannot be chained", expr=True)
+        self.falha("1..2..3", "cannot be chained", expr=True)
 
     def test_fstring_erros(self):
-        self.falha('f"{}"', "vazia", expr=True)
-        self.falha('f"{x"', "sem '}'", expr=True)
-        self.falha('f"x}"', "solto", expr=True)
-        self.falha('f"{1 +}"', "na f-string", expr=True)
+        self.falha('f"{}"', "empty expression", expr=True)
+        self.falha('f"{x"', "without matching '}'", expr=True)
+        self.falha('f"x}"', "unmatched '}'", expr=True)
+        self.falha('f"{1 +}"', "in f-string", expr=True)
 
     def test_mensagem_formatada(self):
         s = "fn f():\n    x = (1\n"
         with self.assertRaises(NatError) as cm: parse(s)
         out = cm.exception.pretty(s, "t.nat")
-        self.assertIn("t.nat:2:9: erro:", out)
+        self.assertIn("t.nat:2:9: error:", out)
         self.assertIn("x = (1", out)
 
 
 def analisar(fonte):
     d = SemanticAnalyzer().analyze(parse(fonte))
-    return ([x.msg for x in d if x.level == "erro"], [x.msg for x in d if x.level == "aviso"])
+    return ([x.msg for x in d if x.level in ("error", "erro")], [x.msg for x in d if x.level in ("warning", "aviso")])
 
 def M(corpo, antes=""):
     linhas = "\n".join(("    " + l) if l.strip() else l for l in corpo.strip("\n").split("\n"))
@@ -6463,12 +6463,12 @@ class SemBase(unittest.TestCase):
 
     def erro(self, fonte, trecho):
         e, _ = analisar(fonte)
-        self.assertTrue(any(trecho in x for x in e), f"esperava '{trecho}' em {e}")
+        self.assertTrue(any(trecho in x for x in e), f"expected '{trecho}' in {e}")
 
     def aviso(self, fonte, trecho):
         e, w = analisar(fonte)
         self.assertEqual(e, [], e)
-        self.assertTrue(any(trecho in x for x in w), f"esperava '{trecho}' em {w}")
+        self.assertTrue(any(trecho in x for x in w), f"expected '{trecho}' in {w}")
 
 
 class SemExemplos(SemBase):
@@ -6479,58 +6479,58 @@ class SemExemplos(SemBase):
 
 class SemTipos(SemBase):
     def test_tipo_estavel(self):
-        self.erro(M('x = 1\nx = "a"\nprint(x)'), "não pode receber")
-        self.erro(M("x = 1\nx = 2.5\nprint(x)"), "não pode receber")
+        self.erro(M('x = 1\nx = "a"\nprint(x)'), "cannot be assigned")
+        self.erro(M("x = 1\nx = 2.5\nprint(x)"), "cannot be assigned")
         self.ok(M("x = 1.0\nx = 2\nprint(x)"))
 
     def test_divisao(self):
-        self.erro(M("n: i64 = 4 / 2\nprint(n)"), "declarado como")
+        self.erro(M("n: i64 = 4 / 2\nprint(n)"), "declared as")
         self.ok(M("a = 4 / 2\na = 1.5\nprint(a)"))
         self.ok(M("n: i64 = 7 // 2\nprint(n)"))
 
     def test_operadores(self):
-        self.erro(M('a = 1 + "x"\nprint(a)'), "não é definido para")
+        self.erro(M('a = 1 + "x"\nprint(a)'), "is not defined for")
         self.ok(M('s = "a" + "b"\nprint(s)'))
-        self.erro(M('print(1 < "a")'), "não é possível comparar")
-        self.erro(M('print(1 == "a")'), "não é possível comparar")
+        self.erro(M('print(1 < "a")'), "cannot compare")
+        self.erro(M('print(1 == "a")'), "cannot compare")
 
     def test_logicos(self):
-        self.erro(M("print(1 and true)"), "'and' exige bool")
-        self.erro(M("print(not 1)"), "'not' exige bool")
-        self.erro(M("if 1:\n    pass"), "a condição deve ser bool")
-        self.erro(M("while 1.5:\n    pass"), "a condição deve ser bool")
+        self.erro(M("print(1 and true)"), "'and' requires bool")
+        self.erro(M("print(not 1)"), "'not' requires bool")
+        self.erro(M("if 1:\n    pass"), "condition must be bool")
+        self.erro(M("while 1.5:\n    pass"), "condition must be bool")
         self.ok(M("a = 1 < 2 and not false\nprint(a)"))
 
     def test_listas(self):
         self.ok(M("a = [1, 2.5]\nb: [f64] = a\nprint(b)"))
-        self.erro(M('a = [1, "x"]\nprint(a)'), "incompatíveis")
-        self.erro(M("a = [1.0]\nprint(a[0.5])"), "o índice deve ser i64")
-        self.erro(M("x = 5\nprint(x[0])"), "não pode ser indexado")
-        self.erro(M("for i in 0..2.5:\n    pass"), "limites de um intervalo")
-        self.erro(M("for i in 5:\n    pass"), "iterar")
-        self.erro(M('v = [1.0, 2.0]\nv[1] = "a"\nprint(v)'), "não pode receber")
-        self.erro(M("a: [f64] = [1, 2]\nprint(a)"), "declarado como")
+        self.erro(M('a = [1, "x"]\nprint(a)'), "incompatible")
+        self.erro(M("a = [1.0]\nprint(a[0.5])"), "index must be i64")
+        self.erro(M("x = 5\nprint(x[0])"), "cannot be indexed")
+        self.erro(M("for i in 0..2.5:\n    pass"), "range bounds")
+        self.erro(M("for i in 5:\n    pass"), "cannot iterate over")
+        self.erro(M('v = [1.0, 2.0]\nv[1] = "a"\nprint(v)'), "cannot be assigned")
+        self.erro(M("a: [f64] = [1, 2]\nprint(a)"), "declared as")
 
     def test_broadcasting(self):
         self.ok(M("w = [1.0, 2.0]\nw += 2.0\nw = w * w + w\nw = 2.0 * w\nprint(w)"))
-        self.erro(M('w = [1.0]\nw += "a"\nprint(w)'), "não é definido para")
+        self.erro(M('w = [1.0]\nw += "a"\nprint(w)'), "is not defined for")
 
     def test_composta(self):
-        self.erro(M("x = 1\nx += 2.5\nprint(x)"), "produz")
-        self.erro(M("y += 1"), "antes de ser declarado")
+        self.erro(M("x = 1\nx += 2.5\nprint(x)"), "produces")
+        self.erro(M("y += 1"), "before being declared")
 
     def test_sem_valor(self):
-        self.erro(M("x = print(1)"), "não produz valor")
+        self.erro(M("x = print(1)"), "does not produce a value")
 
     def test_result_unwrap(self):
         self.ok(M('r = ok(42)\nx: i64 = r?\nprint(x)'))
         self.ok(M('r = ok("teste")\ns: str = unwrap(r)\nprint(s)'))
         self.ok(M('r = err("falha")\ns: str = unwrap_or(r, "padrao")\nprint(s)'))
         self.ok(M('r: Result[str] = ok("ola")\ns: str = r?\nprint(s)'))
-        self.erro(M('r: Result[str] = ok("ola")\nx: i64 = r?\nprint(x)'), "declarado como")
-        self.erro(M('x = 1\nr: Result[str] = ok("ola")\nx = r?\nprint(x)'), "não pode receber")
-        self.erro(M('s = read_file("a.txt")?\nprint(s)'), "exige um Result[T]")
-        self.erro(M('n = 5\nm = n?\nprint(m)'), "exige um Result[T]")
+        self.erro(M('r: Result[str] = ok("ola")\nx: i64 = r?\nprint(x)'), "declared as")
+        self.erro(M('x = 1\nr: Result[str] = ok("ola")\nx = r?\nprint(x)'), "cannot be assigned")
+        self.erro(M('s = read_file("a.txt")?\nprint(s)'), "requires a Result[T]")
+        self.erro(M('n = 5\nm = n?\nprint(m)'), "requires a Result[T]")
 
     def test_tensor_matmul_broadcasting(self):
         # Multiplicação matricial e broadcasting com tensores e ativações
@@ -6542,47 +6542,47 @@ class SemFuncoes(SemBase):
     F = "fn f(a: i64) -> i64:\n    return a\n\n"
 
     def test_aridade(self):
-        self.erro(M("print(sqrt(1.0, 2.0))"), "espera 1")
-        self.erro(M("print(sqrt())"), "espera 1")
+        self.erro(M("print(sqrt(1.0, 2.0))"), "expects 1")
+        self.erro(M("print(sqrt())"), "expects 1")
         self.ok(M("print(1, 2, 3)"))
         self.ok(M("print()"))
 
     def test_argumentos(self):
-        self.erro(M("print(f(2.5))", self.F), "argumento 1")
+        self.erro(M("print(f(2.5))", self.F), "argument 1")
         self.ok(M("print(f(2))", self.F))
         self.ok(M("print(g(2))", "fn g(a: f64) -> f64:\n    return a\n\n"))
-        self.erro(M("print(dot([1, 2], [1.0]))"), "argumento 1")
+        self.erro(M("print(dot([1, 2], [1.0]))"), "argument 1")
 
     def test_retorno(self):
-        self.erro("fn f() -> i64:\n    pass\n", "nem todos os caminhos")
-        self.erro("fn f() -> i64:\n    if true:\n        return 1\n", "nem todos os caminhos")
+        self.erro("fn f() -> i64:\n    pass\n", "not all")
+        self.erro("fn f() -> i64:\n    if true:\n        return 1\n", "not all")
         self.ok("fn f(x: bool) -> i64:\n    if x:\n        return 1\n    else:\n        return 2\n")
         self.ok("fn f(x: bool) -> i64:\n    if x:\n        return 1\n    elif true:\n        return 2\n    else:\n        return 3\n")
-        self.erro("fn f():\n    return 1\n", "não pode retornar valor")
-        self.erro("fn f() -> i64:\n    return 1.5\n", "retorno esperado")
-        self.erro("fn f() -> i64:\n    return\n", "deve retornar")
+        self.erro("fn f():\n    return 1\n", "cannot return a value")
+        self.erro("fn f() -> i64:\n    return 1.5\n", "expected return type")
+        self.erro("fn f() -> i64:\n    return\n", "must return")
         self.ok("fn f() -> f64:\n    return 1\n")
 
     def test_hoisting(self):
         self.ok("fn main():\n    print(f())\n\nfn f() -> i64:\n    return 1\n")
 
     def test_nomes(self):
-        self.erro("fn sqrt():\n    pass\n", "embutida")
-        self.erro("fn f():\n    pass\nfn f():\n    pass\n", "já foi definida")
-        self.erro(M("print = 1"), "já é o nome")
-        self.erro(M("x = 1\nx()\nprint(x)"), "é uma variável")
-        self.erro(M("print(f)", "fn f():\n    pass\n\n"), "é uma função")
-        self.erro("fn f(x: foo):\n    pass\n", "tipo desconhecido")
+        self.erro("fn sqrt():\n    pass\n", "is a built-in function")
+        self.erro("fn f():\n    pass\nfn f():\n    pass\n", "already defined")
+        self.erro(M("print = 1"), "already a function name")
+        self.erro(M("x = 1\nx()\nprint(x)"), "is a variable, not a function")
+        self.erro(M("print(f)", "fn f():\n    pass\n\n"), "is a function; call it with parentheses")
+        self.erro("fn f(x: foo):\n    pass\n", "unknown type")
 
     def test_math(self):
         self.ok(M("print(math.sqrt(4.0) + math.PI)", "import math\n\n"))
-        self.erro(M("print(math.sqrt(4.0))"), "não importado")
-        self.erro(M("print(math.foo(1.0))", "import math\n\n"), "não tem")
-        self.erro("import xyz\n", "módulo desconhecido")
+        self.erro(M("print(math.sqrt(4.0))"), "is not imported")
+        self.erro(M("print(math.foo(1.0))", "import math\n\n"), "has no member")
+        self.erro("import xyz\n", "unknown module")
 
     def test_break_continue(self):
-        self.erro(M("break"), "fora de um laço")
-        self.erro(M("continue"), "fora de um laço")
+        self.erro(M("break"), "outside of a loop")
+        self.erro(M("continue"), "outside of a loop")
         self.ok(M("while true:\n    if true:\n        break"))
 
 
@@ -6598,33 +6598,33 @@ class SemEscopo(SemBase):
         self.ok("fn f(x: i64):\n    pass\nfn g(x: i64):\n    pass\n")
 
     def test_escopo_de_bloco(self):
-        self.erro(M("if true:\n    t = 5\nprint(t)"), "não definido")
+        self.erro(M("if true:\n    t = 5\nprint(t)"), "not defined")
         self.ok(M("t = 0\nif true:\n    t = 5\nprint(t)"))
-        self.erro(M("if true:\n    pass\nelse:\n    z = 1\n    print(z)\nprint(z)"), "não definido")
-        self.erro(M("for i in 0..3:\n    pass\nprint(i)"), "não definido")
+        self.erro(M("if true:\n    pass\nelse:\n    z = 1\n    print(z)\nprint(z)"), "not defined")
+        self.erro(M("for i in 0..3:\n    pass\nprint(i)"), "not defined")
 
     def test_constantes(self):
-        self.erro(M("const k = 1\nk = 2"), "constante")
-        self.erro("const PI = 3.14\nfn main():\n    PI = 3.0\n", "constante")
+        self.erro(M("const k = 1\nk = 2"), "constant")
+        self.erro("const PI = 3.14\nfn main():\n    PI = 3.0\n", "constant")
         self.ok(M("const x: f64 = 3\nprint(x)"))
-        self.erro(M('const x: i64 = "a"\nprint(x)'), "declarada como")
+        self.erro(M('const x: i64 = "a"\nprint(x)'), "declared as")
         self.ok("fn main():\n    print(PI)\n\nconst PI = 3.14\n")
 
     def test_nao_definido(self):
-        self.erro(M("while true:\n    y = naoexiste\n    print(y)\n    break"), "não definido")
-        self.erro(M('print(f"{naoexiste}")'), "não definido")
-        self.erro(M("print(-naoexiste)"), "não definido")
-        self.erro(M("total = 1\nprint(totl)"), "você quis dizer 'total'")
-        self.erro(M("x = x + 1\nprint(x)"), "não definido")
+        self.erro(M("while true:\n    y = naoexiste\n    print(y)\n    break"), "not defined")
+        self.erro(M('print(f"{naoexiste}")'), "not defined")
+        self.erro(M("print(-naoexiste)"), "not defined")
+        self.erro(M("total = 1\nprint(totl)"), "did you mean 'total'")
+        self.erro(M("x = x + 1\nprint(x)"), "not defined")
 
 
 class SemAvisos(SemBase):
     def test_typo(self):
-        self.aviso(M("total = 0\ntotl = total + 1\nprint(total)"), "erro de digitação de 'total'")
+        self.aviso(M("total = 0\ntotl = total + 1\nprint(total)"), "possible typo for 'total'")
 
     def test_nunca_usada(self):
-        self.aviso(M("x = 1"), "nunca é usada")
-        self.aviso(M("x = 1\nx += 1"), "nunca é usada")
+        self.aviso(M("x = 1"), "never used")
+        self.aviso(M("x = 1\nx += 1"), "never used")
 
     def test_sem_falso_positivo(self):
         self.assertEqual(analisar(M("valores = [1, 2]\nvalor = 3\nprint(valores, valor)"))[1], [])
@@ -6642,7 +6642,7 @@ class SemAIETensores(SemBase):
     def test_operador_matmul(self):
         self.ok(M("A = [[1.0, 2.0], [3.0, 4.0]]\nB = [1.0, 2.0]\nC = A @ B\nprint(C)"))
         self.ok(M("v1 = [1.0, 2.0]\nv2 = [3.0, 4.0]\ns = v1 @ v2\nprint(s)"))
-        self.erro(M("x = 1.0 @ 2.0"), "não é definido para")
+        self.erro(M("x = 1.0 @ 2.0"), "is not defined for")
 
     def test_fatiamento(self):
         self.ok(M("v = [10, 20, 30, 40]\nf = v[1..3]\nprint(f)"))
@@ -6674,8 +6674,8 @@ class SemTernario(SemBase):
 class RuntimeExecucao(unittest.TestCase):
     def _analyze_and_run(self, fonte: str) -> Interpreter:
         prog = parse(fonte)
-        erros = [d.msg for d in SemanticAnalyzer().analyze(prog) if d.level == "erro"]
-        self.assertEqual(erros, [], f"Erros semânticos inesperados: {erros}")
+        erros = [d.msg for d in SemanticAnalyzer().analyze(prog) if d.level in ("error", "erro")]
+        self.assertEqual(erros, [], f"Unexpected semantic errors: {erros}")
         interp = Interpreter()
         interp.run(prog)
         return interp
@@ -7192,7 +7192,7 @@ class CTranspiler:
         return "double"
 
     def _prescan_shapes(self):
-        """Propaga formatos estáticos de tensores para campos de structs e parâmetros de funções."""
+        """Propagates static tensor shapes to struct fields and function parameters."""
         all_stmts: list[Node] = []
         fn_map: dict[str, Function] = {}
         for it in self.program.items:
@@ -7200,7 +7200,7 @@ class CTranspiler:
                 fn_map[it.name] = it
                 all_stmts.extend(it.body)
 
-        # Executa 2 passagens para propagar shapes de main -> structs/funções -> retornos
+        # Run 2 passes to propagate shapes from main -> structs/functions -> returns
         for _ in range(2):
             for fn_name in (["main"] + [k for k in fn_map if k != "main"]):
                 if fn_name not in fn_map:
@@ -7351,7 +7351,7 @@ class CTranspiler:
         self._prescan_shapes()
         out = []
         out.append("/* ========================================================================= */")
-        out.append("/* Gerado automaticamente pelo compilador Nativa (AOT C99 Transpiler)        */")
+        out.append("/* Automatically generated by Nativa compiler (AOT C99 Transpiler)          */")
         out.append(NATIVA_RT_HEADER_C)
         out.append("")
 
@@ -7386,7 +7386,7 @@ class CTranspiler:
                 self.var_types[it.name] = ctype
         out.append("")
 
-        # Declarações antecipadas de funções (Forward Declarations)
+        # Forward Declarations
         for it in self.program.items:
             if isinstance(it, Function) and it.name != "main":
                 ret_t, params = self.func_signatures[it.name]
@@ -7394,7 +7394,7 @@ class CTranspiler:
                 out.append(f"{ret_t} {it.name}({p_str});")
         out.append("")
 
-        # Definições de funções
+        # Function Definitions
         for it in self.program.items:
             if isinstance(it, Function):
                 out.append(self.emit_function(it))
@@ -8175,7 +8175,7 @@ class CTranspiler:
                 val = self.emit_expr(s.value)
                 return self._with_pre_stmts(f"{ind}{obj_code}.{tgt.name} {s.op} {val};")
             raise NatError(
-                f"Atribuição a '{type(tgt).__name__}' não é suportada no backend C99 nativo",
+                f"Assignment to '{type(tgt).__name__}' is not supported in native C99 backend",
                 getattr(s, "line", 0),
                 getattr(s, "col", 0)
             )
@@ -8272,7 +8272,7 @@ class CTranspiler:
                 return "\n".join(res)
 
             raise NatError(
-                f"Backend C99 suporta iteração apenas sobre intervalos 'Range' (ex: '0..N') ou listas/tensores; iteração sobre '{type(s.iter).__name__}' não é suportada",
+                f"C99 backend supports iteration only over 'Range' intervals (e.g. '0..N') or lists/tensors; iteration over '{type(s.iter).__name__}' is not supported",
                 getattr(s, "line", 0),
                 getattr(s, "col", 0)
             )
@@ -8298,7 +8298,7 @@ class CTranspiler:
             return f"{ind}/* pass */;"
 
         raise NatError(
-            f"Instrução do tipo '{type(s).__name__}' não é suportada no backend C99 nativo",
+            f"Statement of type '{type(s).__name__}' is not supported in native C99 backend",
             getattr(s, "line", 0),
             getattr(s, "col", 0)
         )
@@ -8341,7 +8341,7 @@ class CTranspiler:
             if e.op == "//": return f"((int64_t)floor((double)({l}) / (double)({r})))"
             if e.op == "@":
                 raise NatError(
-                    "Operador de multiplicação matricial '@' requer operandos de tensor/matriz; multiplicação escalar não é suportada no backend C99 nativo (use kernels AOT como gemv_vec_lut)",
+                    "Matrix multiplication operator '@' requires tensor/matrix operands; scalar multiplication is not supported in native C99 backend (use AOT kernels such as gemv_vec_lut)",
                     getattr(e, "line", 0),
                     getattr(e, "col", 0)
                 )
@@ -8404,7 +8404,7 @@ class CTranspiler:
             return f"{self.emit_expr(e.obj)}.{e.name}"
 
         raise NatError(
-            f"Expressão do tipo '{type(e).__name__}' não é suportada no backend C99 nativo",
+            f"Expression of type '{type(e).__name__}' is not supported in native C99 backend",
             getattr(e, "line", 0),
             getattr(e, "col", 0)
         )
@@ -8678,7 +8678,7 @@ def compile_c_to_binary(c_path: str, exe_path: str) -> bool:
             print(res.stderr or res.stdout, file=sys.stderr)
         return res.returncode == 0
 
-    print("Erro: Nenhum compilador C encontrado (instale GCC, Clang ou MSVC).", file=sys.stderr)
+    print("Error: No C compiler found (install GCC, Clang, or MSVC).", file=sys.stderr)
     return False
 
 
@@ -8688,25 +8688,25 @@ def compile_c_to_binary(c_path: str, exe_path: str) -> bool:
 
 class TesteCoerenciaSemanticoRuntime(unittest.TestCase):
     def test_correspondencia_biunivoca_builtins(self):
-        """Critique #2: Garante que nenhuma função declarada em BUILTINS falte no runtime e vice-versa."""
+        """Critique #2: Ensures that no function declared in BUILTINS is missing from runtime and vice versa."""
         self.assertEqual(set(BUILTINS.keys()), set(BUILTIN_IMPLS.keys()))
         for name, sig in BUILTINS.items():
-            self.assertIsNotNone(sig.impl, f"Builtin '{name}' não possui implementação vinculada!")
-            self.assertTrue(callable(sig.impl), f"Implementação de '{name}' não é invocável!")
-            self.assertIsNotNone(sig.min_args, f"Builtin '{name}' não possui min_args definido!")
+            self.assertIsNotNone(sig.impl, f"Builtin '{name}' has no linked implementation!")
+            self.assertTrue(callable(sig.impl), f"Implementation of '{name}' is not callable!")
+            self.assertIsNotNone(sig.min_args, f"Builtin '{name}' has no min_args defined!")
             if sig.max_args is not None:
-                self.assertGreaterEqual(sig.max_args, sig.min_args, f"Builtin '{name}' possui max_args < min_args!")
+                self.assertGreaterEqual(sig.max_args, sig.min_args, f"Builtin '{name}' has max_args < min_args!")
 
     def test_interpretador_inicializa_de_builtins(self):
-        """Critique #2: O interpretador deve derivar seus builtins estritamente de BUILTINS."""
+        """Critique #2: The interpreter must derive its builtins strictly from BUILTINS."""
         interp = Interpreter()
         for name in BUILTINS:
-            self.assertIn(name, interp.globals, f"Builtin '{name}' ausente em Interpreter.globals!")
+            self.assertIn(name, interp.globals, f"Builtin '{name}' missing from Interpreter.globals!")
             self.assertIs(interp.globals[name], BUILTINS[name].impl)
 
 
 class TestePropagacaoResult(unittest.TestCase):
-    """Semântica de runtime do operador '?' sobre Result[T]."""
+    """Runtime semantics of the '?' operator on Result[T]."""
     FN = ('fn ler(p: str) -> Result[str]:\n'
           '    s = read_file_safe(p)?\n'
           '    return ok(s)\n\n')
@@ -8714,8 +8714,8 @@ class TestePropagacaoResult(unittest.TestCase):
     def _run(self, code):
         import io, contextlib
         prog = parse(code)
-        erros = [d.msg for d in SemanticAnalyzer().analyze(prog) if d.level == "erro"]
-        self.assertEqual(erros, [], f"Erros semânticos inesperados: {erros}")
+        erros = [d.msg for d in SemanticAnalyzer().analyze(prog) if d.level in ("error", "erro")]
+        self.assertEqual(erros, [], f"Unexpected semantic errors: {erros}")
         buf = io.StringIO()
         with contextlib.redirect_stdout(buf):
             Interpreter().run(prog)
@@ -8768,34 +8768,34 @@ class TestePropagacaoResult(unittest.TestCase):
 
 class TesteEscopoInterpretador(unittest.TestCase):
     def test_escopo_bloco_if(self):
-        # Variável definida dentro de if não deve vazar para fora
+        # Variable defined inside if must not leak outside
         code = "fn main():\n    if true:\n        x = 42\n    print(x)\n"
         with self.assertRaises(RuntimeError):
             Interpreter().run(parse(code))
 
     def test_escopo_bloco_for(self):
-        # Variável de iteração do for não deve vazar para fora
+        # For loop iteration variable must not leak outside
         code = "fn main():\n    for i in 0..5:\n        pass\n    print(i)\n"
         with self.assertRaises(RuntimeError):
             Interpreter().run(parse(code))
 
     def test_imutabilidade_constante(self):
-        # Reatribuição de constante em runtime deve falhar
+        # Reassigning constant at runtime must fail
         code = "fn main():\n    const c = 100\n    c = 200\n"
         with self.assertRaises(RuntimeError):
             Interpreter().run(parse(code))
 
     def test_mutacao_escopo_pai_em_loop(self):
-        # Mutação de variável do escopo pai dentro de loop deve persistir
+        # Mutating parent scope variable inside loop must persist
         code = "fn main():\n    s = 0\n    for i in 1..4:\n        s += i\n"
         prog = parse(code)
-        self.assertEqual([d.msg for d in SemanticAnalyzer().analyze(prog) if d.level == "erro"], [])
+        self.assertEqual([d.msg for d in SemanticAnalyzer().analyze(prog) if d.level in ("error", "erro")], [])
         interp = Interpreter()
         interp.run(prog)
         self.assertEqual(interp.last_scope.get("s"), 6)
 
     def test_isolamento_escopo_funcao_atribuicao(self):
-        # Função que atribui 'x' não pode alterar o 'x' do chamador (escopo léxico)
+        # Function assigning 'x' must not alter caller's 'x' (lexical scope)
         code = (
             "fn alterar():\n"
             "    x = 999\n"
@@ -8805,7 +8805,7 @@ class TesteEscopoInterpretador(unittest.TestCase):
             "    alterar()\n"
         )
         prog = parse(code)
-        self.assertEqual([d.msg for d in SemanticAnalyzer().analyze(prog) if d.level == "erro"], [])
+        self.assertEqual([d.msg for d in SemanticAnalyzer().analyze(prog) if d.level in ("error", "erro")], [])
         interp = Interpreter()
         import io, contextlib
         with contextlib.redirect_stdout(io.StringIO()):
@@ -8813,7 +8813,7 @@ class TesteEscopoInterpretador(unittest.TestCase):
         self.assertEqual(interp.last_scope.get("x"), 10)
 
     def test_isolamento_escopo_funcao_leitura(self):
-        # Função chamada não deve enxergar variáveis locais do chamador
+        # Called function must not see caller's local variables
         code = (
             "fn ler_x() -> i64:\n"
             "    return x\n\n"
@@ -8822,14 +8822,14 @@ class TesteEscopoInterpretador(unittest.TestCase):
             "    print(ler_x())\n"
         )
         prog = parse(code)
-        erros = [d.msg for d in SemanticAnalyzer().analyze(prog) if d.level == "erro"]
+        erros = [d.msg for d in SemanticAnalyzer().analyze(prog) if d.level in ("error", "erro")]
         self.assertGreater(len(erros), 0)
         interp = Interpreter()
         with self.assertRaises(RuntimeError):
             interp.run(prog)
 
     def test_erro_runtime_rastreia_linha_e_coluna(self):
-        # Erro de runtime reporta linha e coluna precisas
+        # Runtime error reports accurate line and column
         code = (
             "fn main():\n"
             "    if true:\n"
@@ -8843,9 +8843,9 @@ class TesteEscopoInterpretador(unittest.TestCase):
         err = cm.exception
         self.assertEqual(err.line, 4)
         self.assertEqual(err.col, 11)
-        self.assertIn("linha 4:11", str(err))
+        self.assertIn("line 4:11", str(err))
         pretty = err.pretty(code, "teste.nat")
-        self.assertIn("teste.nat:4:11: erro: Variável não definida: x", pretty)
+        self.assertIn("teste.nat:4:11: error: Undefined variable: x", pretty)
         self.assertIn("^", pretty)
 
 
@@ -8886,8 +8886,8 @@ class TesteDiferencialC(unittest.TestCase):
     def _run_differential(self, source: str, basename: str = "diff_test"):
         import io, tempfile
         prog = parse(source)
-        erros = [d.msg for d in SemanticAnalyzer().analyze(prog) if d.level == "erro"]
-        self.assertEqual(erros, [], f"Erros semânticos inesperados: {erros}")
+        erros = [d.msg for d in SemanticAnalyzer().analyze(prog) if d.level in ("error", "erro")]
+        self.assertEqual(erros, [], f"Unexpected semantic errors: {erros}")
 
         interp = Interpreter()
         buf = io.StringIO()
@@ -8941,11 +8941,11 @@ fn main():
         self.assertIn(NATIVA_RT_HEADER_C, AOT_C_SOURCE)
 
     def test_diferencial_mini_llm_c99(self):
-        """Meta de aceitação do Item 4: Mini-LLM completo com Structs, KVCache, RoPE,
-        RMSNorm, SiLU, Softmax, listas de camadas e desempacotamento de tuplas compilado
-        em C99 nativo e batendo com o interpretador Python."""
+        """Acceptance target: full Mini-LLM with Structs, KVCache, RoPE,
+        RMSNorm, SiLU, Softmax, layer lists, and tuple unpacking compiled
+        to native C99 and matching the Python interpreter."""
         if not self.compiler_available:
-            self.skipTest("Nenhum compilador C disponível para teste diferencial")
+            self.skipTest("No C compiler available for differential test")
 
         source = '''
 struct CamadaLLM:
@@ -9155,13 +9155,13 @@ fn main():
 
 
 class TesteStructsTuplasModulos(unittest.TestCase):
-    """Testa structs, tuplas/desempacotamento, atribuição a atributos, append/push/Dict e import de módulos locais."""
+    """Tests structs, tuples/unpacking, attribute assignment, append/push/Dict, and local module imports."""
 
     def _run_checked(self, src: str) -> Interpreter:
         prog = parse(src)
         sem = SemanticAnalyzer()
         sem.analyze(prog)
-        self.assertEqual(sem.errors, [], f"Erros semânticos inesperados: {sem.errors}")
+        self.assertEqual(sem.errors, [], f"Unexpected semantic errors: {sem.errors}")
         interp = Interpreter()
         interp.run(prog)
         return interp
@@ -9205,7 +9205,7 @@ fn main():
 """
         s1 = SemanticAnalyzer()
         s1.analyze(parse(src_campo_inexistente))
-        self.assertTrue(any("não possui o campo 'z'" in d.msg for d in s1.errors))
+        self.assertTrue(any("has no field 'z'" in d.msg for d in s1.errors))
 
         src_tipo_incompativel = """
 struct Ponto:
@@ -9218,7 +9218,7 @@ fn main():
 """
         s2 = SemanticAnalyzer()
         s2.analyze(parse(src_tipo_incompativel))
-        self.assertTrue(any("não pode receber str" in d.msg for d in s2.errors))
+        self.assertTrue(any("cannot be assigned" in d.msg for d in s2.errors))
 
     def test_tuplas_retorno_multiplo_e_desempacotamento(self):
         src = """
@@ -9458,7 +9458,7 @@ fn main():
 
 
 class TesteAutodiff(unittest.TestCase):
-    """Valida o motor de Autodiff (grafo no Tensor, backward contra diferenças finitas, sgd/adam, cross_entropy e treino de mini-LLM de 5 camadas)."""
+    """Validates the Autodiff engine (graph in Tensor, backward against finite differences, sgd/adam, cross_entropy, and training a 5-layer mini-LLM)."""
 
     def _check_grad_finite_diff(self, fn: Callable[[], Tensor], params: list[Tensor], eps: float = 1e-6, tol: float = 1e-5):
         zero_grad_fn(params)
@@ -9625,12 +9625,12 @@ fn main():
         prog = parse(src)
         sem = SemanticAnalyzer()
         sem.analyze(prog)
-        self.assertEqual(sem.errors, [], f"Erros semânticos: {sem.errors}")
+        self.assertEqual(sem.errors, [], f"Semantic errors: {sem.errors}")
         interp = Interpreter()
         interp.run(prog)
         loss_ini = interp.last_scope["loss_inicial"]
         loss_fim = interp.last_scope["loss_final"]
-        self.assertLess(loss_fim, loss_ini * 0.15, f"A perda do mini-LLM de 5 camadas não caiu o suficiente: {loss_ini:.4f} -> {loss_fim:.4f}")
+        self.assertLess(loss_fim, loss_ini * 0.15, f"The 5-layer mini-LLM loss did not decrease enough: {loss_ini:.4f} -> {loss_fim:.4f}")
         self.assertLess(loss_fim, 0.15)
 
 
@@ -9646,34 +9646,34 @@ def run_tests() -> int:
 
 def print_nativa_help() -> None:
     print("""======================================================================
-  NATIVA CLI v0.4.0 - Linguagem Nativa (AI, Data, Spectral & Ternary Edition)
+  NATIVA CLI v0.4.0 - Nativa Language (AI, Data, Spectral & Ternary Edition)
 ======================================================================
-Uso: nativa <comando> [opcoes]
+Usage: nativa <command> [options]
 
-Comandos principais:
-  nativa run <arquivo.nat>           Executa o arquivo no interpretador Nativa
-  nativa run <arquivo.nat> --native  Compila AOT para C99/Machine Code e executa
-  nativa build <arquivo.nat>         Compila AOT gerando executavel nativo (.exe)
-  nativa bundle <modelo.natq4> [-o]  Gera executavel autocontido estilo llamafile
-  nativa bench [opcoes]              Executa o benchmark oficial de velocidade e PPL
-  nativa chat [modelo.natq4]         Inicia chat local Qwen2 em INT4
-  nativa quantize <dir_hf> [out]     Converte Qwen2 SafeTensors para .natq4 Q4x4
-  nativa test                        Executa a suite completa de 100 testes
-  nativa version                     Exibe a versao instalada
+Main commands:
+  nativa run <file.nat>              Execute file in Nativa interpreter
+  nativa run <file.nat> --native     Compile AOT to C99/Machine Code and execute
+  nativa build <file.nat>            Compile AOT generating native executable (.exe)
+  nativa bundle <model.natq4> [-o]   Generate self-contained executable like llamafile
+  nativa bench [options]             Run official speed and PPL benchmark
+  nativa chat [model.natq4]          Start local Qwen2 chat in INT4
+  nativa quantize <dir_hf> [out]     Convert Qwen2 SafeTensors to .natq4 Q4x4
+  nativa test                        Run complete test suite (104 tests)
+  nativa version                     Display installed version
 
-Exemplos pre-carregados:
-  nativa run @riemann                Zeros da funcao Zeta de Riemann
-  nativa run @rede                   Rede Neural Perceptron multicamada
-  nativa run @ia_tensor              Operacoes com Tensores e Autodiff
-  nativa run @ternario               Computacao Ternaria BitNet / Trits
-=======================================================================""")
+Preloaded examples:
+  nativa run @riemann                Zeros of the Riemann Zeta function
+  nativa run @rede                   Multilayer Perceptron Neural Network
+  nativa run @ia_tensor              Tensor operations and Autodiff
+  nativa run @ternario               BitNet / Trits Ternary Computing
+======================================================================""")
 
 
 def print_detected_devices() -> int:
     print("====================================================================")
-    print("  NATIVA - DISPOSITIVOS DE COMPUTAÇÃO DETECTADOS")
+    print("  NATIVA - DETECTED COMPUTATION DEVICES")
     print("====================================================================")
-    print(f"  [CPU Host] SO: {sys.platform} | Python {sys.version.split()[0]}")
+    print(f"  [CPU Host] OS: {sys.platform} | Python {sys.version.split()[0]}")
 
     try:
         import ctypes
@@ -9712,14 +9712,14 @@ def print_detected_devices() -> int:
                         cl.clGetDeviceInfo(d, 0x1000, 8, ctypes.byref(d_type), None)
                         is_gpu = bool(d_type.value & 4)
                         d_name = d_name_buf.value.decode("utf-8", errors="ignore")
-                        print(f"  [{total_devs}] [{'GPU' if is_gpu else 'CPU'}] {d_name} (Plataforma: {p_name})")
+                        print(f"  [{total_devs}] [{'GPU' if is_gpu else 'CPU'}] {d_name} (Platform: {p_name})")
                         total_devs += 1
             if total_devs == 0:
-                print("  Nenhum dispositivo OpenCL ativo.")
+                print("  No active OpenCL device found.")
         else:
-            print("  Nenhuma plataforma OpenCL ativa.")
+            print("  No active OpenCL platform found.")
     except Exception:
-        print("  [OpenCL] Nenhuma biblioteca OpenCL ativa (modo CPU C99/OpenMP nativo padrão).")
+        print("  [OpenCL] No active OpenCL library (standard native CPU C99/OpenMP mode).")
 
     print("====================================================================")
     return 0
@@ -9732,14 +9732,14 @@ def main(argv: Optional[list[str]] = None) -> int:
         print_nativa_help()
         return 0
 
-    # Subcomandos modernos estilo NodeJS / Cargo / Go / Python CLI
+    # Modern subcommands NodeJS / Cargo / Go / Python CLI style
     subcmd = raw_args[0].lower()
     if subcmd in ("version", "--version", "-v"):
         print("Nativa v0.4.0 (AI, Data, Spectral & Ternary Edition)")
         return 0
     elif subcmd == "run":
         if len(raw_args) == 1:
-            print("Uso: nativa run <arquivo.nat|@exemplo> [--native]")
+            print("Usage: nativa run <file.nat|@example> [--native]")
             return 1
         clean = [a for a in raw_args[1:] if a not in ("--native", "--aot")]
         if "--native" in raw_args or "--aot" in raw_args:
@@ -9747,7 +9747,7 @@ def main(argv: Optional[list[str]] = None) -> int:
         return main([raw_args[1], "--run"] + raw_args[2:])
     elif subcmd == "build":
         if len(raw_args) == 1:
-            print("Uso: nativa build <arquivo.nat|@exemplo>")
+            print("Usage: nativa build <file.nat|@example>")
             return 1
         return main([raw_args[1], "--build"] + raw_args[2:])
     elif subcmd in ("test", "--test"):
@@ -9756,40 +9756,40 @@ def main(argv: Optional[list[str]] = None) -> int:
         model_target = raw_args[1] if len(raw_args) > 1 else os.path.join(os.path.dirname(__file__), "data", "qwen2.5_3b.natq4")
         chat_script = os.path.join(os.path.dirname(__file__), "tools", "chat_natq4.py")
         if not os.path.isfile(chat_script):
-            print(f"[ERRO] Script de chat não encontrado: {chat_script}", file=sys.stderr)
+            print(f"[ERROR] Chat script not found: {chat_script}", file=sys.stderr)
             return 1
         return subprocess.call([sys.executable, chat_script, model_target])
     elif subcmd == "quantize":
         quant_script = os.path.join(os.path.dirname(__file__), "tools", "nativa_quantize.py")
         if not os.path.isfile(quant_script):
-            print(f"[ERRO] Script de quantização não encontrado: {quant_script}", file=sys.stderr)
+            print(f"[ERROR] Quantization script not found: {quant_script}", file=sys.stderr)
             return 1
         return subprocess.call([sys.executable, quant_script] + raw_args[1:])
     elif subcmd == "bundle":
         bundle_script = os.path.join(os.path.dirname(__file__), "tools", "nativa_bundle.py")
         if not os.path.isfile(bundle_script):
-            print(f"[ERRO] Script de empacotamento não encontrado: {bundle_script}", file=sys.stderr)
+            print(f"[ERROR] Bundle script not found: {bundle_script}", file=sys.stderr)
             return 1
         return subprocess.call([sys.executable, bundle_script] + raw_args[1:])
     elif subcmd in ("bench", "benchmark"):
         bench_script = os.path.join(os.path.dirname(__file__), "tools", "nativa_benchmark.py")
         if not os.path.isfile(bench_script):
-            print(f"[ERRO] Script de benchmark não encontrado: {bench_script}", file=sys.stderr)
+            print(f"[ERROR] Benchmark script not found: {bench_script}", file=sys.stderr)
             return 1
         return subprocess.call([sys.executable, bench_script] + raw_args[1:])
     elif subcmd in ("devices", "--devices", "opencl", "--opencl"):
         return print_detected_devices()
 
     ap = argparse.ArgumentParser(description="Nativa v0.4 (AI, Data, Spectral & Ternary Edition)")
-    ap.add_argument("arquivo", nargs="?", help="arquivo .nat ou @exemplo | @riemann | @rede | @ia_tensor | @ternario")
-    ap.add_argument("--ast", action="store_true", help="imprime a AST")
-    ap.add_argument("--tokens", action="store_true", help="imprime os tokens")
-    ap.add_argument("--run", action="store_true", help="executa o programa (modo runtime)")
-    ap.add_argument("--emit-c", metavar="ARQUIVO_C", nargs="?", const="", help="emite codigo C99 correspondente")
-    ap.add_argument("--build", action="store_true", help="compila codigo C99 AOT para executavel nativo (.exe)")
-    ap.add_argument("--test", action="store_true", help="roda a suite de testes")
-    ap.add_argument("--devices", action="store_true", help="lista os dispositivos de computação disponíveis (CPU, OpenCL GPU/CPU)")
-    ap.add_argument("--opencl", action="store_true", help="lista os dispositivos OpenCL disponíveis")
+    ap.add_argument("arquivo", nargs="?", help="file .nat or @example | @riemann | @rede | @ia_tensor | @ternario")
+    ap.add_argument("--ast", action="store_true", help="print AST")
+    ap.add_argument("--tokens", action="store_true", help="print tokens")
+    ap.add_argument("--run", action="store_true", help="execute program (runtime mode)")
+    ap.add_argument("--emit-c", metavar="C_FILE", nargs="?", const="", help="emit corresponding C99 code")
+    ap.add_argument("--build", action="store_true", help="compile AOT C99 code to native executable (.exe)")
+    ap.add_argument("--test", action="store_true", help="run test suite")
+    ap.add_argument("--devices", action="store_true", help="list available computation devices (CPU, OpenCL GPU/CPU)")
+    ap.add_argument("--opencl", action="store_true", help="list available OpenCL devices")
     ap.add_argument("-v", "--version", action="version", version="Nativa v0.4.0 (AI, Data, Spectral & Ternary Edition)")
     args = ap.parse_args(argv)
 
@@ -9806,7 +9806,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     if args.arquivo.startswith("@"):
         nome = args.arquivo[1:]
         if nome not in EXEMPLOS:
-            ap.error(f"exemplo desconhecido '{nome}' (opções: {', '.join(EXEMPLOS)})")
+            ap.error(f"unknown example '{nome}' (options: {', '.join(EXEMPLOS)})")
         source = EXEMPLOS[nome]
     elif args.arquivo in EXEMPLOS:
         source = EXEMPLOS[args.arquivo]
@@ -9832,12 +9832,12 @@ def main(argv: Optional[list[str]] = None) -> int:
     for d in diags:
         print(f"{args.arquivo}:{d.line}: {d.level}: {d.msg}", file=sys.stderr)
 
-    erros = sum(d.level == "erro" for d in diags)
+    erros = sum(d.level in ("error", "erro") for d in diags)
     avisos = len(diags) - erros
     fns = sum(isinstance(i, Function) for i in prog.items)
 
     if erros:
-        print(f"FALHOU: {fns} função(ões), {erros} erro(s), {avisos} aviso(s)")
+        print(f"FAILED: {fns} function(s), {erros} error(s), {avisos} warning(s)")
         return 1
 
     if args.emit_c is not None:
@@ -9845,7 +9845,7 @@ def main(argv: Optional[list[str]] = None) -> int:
         out_c = args.emit_c if args.emit_c else (args.arquivo.replace(".nat", "") + ".c" if not args.arquivo.startswith("@") else args.arquivo[1:] + ".c")
         with open(out_c, "w", encoding="utf-8") as f:
             f.write(c_code)
-        print(f"[OK] Código C99 emitido com sucesso: {out_c}")
+        print(f"[OK] C99 code successfully emitted: {out_c}")
         return 0
 
     if args.build:
@@ -9855,18 +9855,18 @@ def main(argv: Optional[list[str]] = None) -> int:
         c_code = CTranspiler(prog).transpile()
         with open(out_c, "w", encoding="utf-8") as f:
             f.write(c_code)
-        print(f"[*] Código C99 emitido: {out_c}")
+        print(f"[*] C99 code emitted: {out_c}")
         t0 = time.perf_counter()
         ok = compile_c_to_binary(out_c, out_exe)
         t_comp = time.perf_counter() - t0
         if ok:
-            print(f"[OK] Binário nativo compilado com sucesso em {t_comp:.3f}s: {out_exe}")
+            print(f"[OK] Native binary successfully compiled in {t_comp:.3f}s: {out_exe}")
             if args.run:
-                print(f"[*] Executando {out_exe} nativamente:\n")
+                print(f"[*] Running {out_exe} natively:\n")
                 subprocess.run([os.path.abspath(out_exe)])
             return 0
         else:
-            print(f"[ERRO] Falha ao compilar binário nativo.", file=sys.stderr)
+            print(f"[ERROR] Failed to compile native binary.", file=sys.stderr)
             return 1
 
     if args.run:
@@ -9878,7 +9878,7 @@ def main(argv: Optional[list[str]] = None) -> int:
             return 1
         return 0
 
-    print(f"OK: {fns} função(ões), {erros} erro(s), {avisos} aviso(s)")
+    print(f"OK: {fns} function(s), {erros} error(s), {avisos} warning(s)")
     return 0
 
 

@@ -1,24 +1,24 @@
 #!/usr/bin/env python3
 """
 gerar_safetensors.py
-Gera um arquivo .safetensors sintético de grande porte simulando camadas de um LLM moderno.
+Generates a large-scale synthetic .safetensors file simulating layers of a modern LLM.
 """
 import json
 import struct
 import numpy as np
 
 def criar_safetensors_sintetico(caminho: str):
-    print(f"[*] Gerando tensores sintéticos no padrão SafeTensors...")
+    print(f"[*] Generating synthetic tensors in SafeTensors format...")
     
-    # 1. Matriz de projeção MLP Gate (1024 x 2048 = 2.097.152 floats ~ 8.4 MB)
-    # Inicializada com distribuição normal N(0, 0.02) típica de LLMs
+    # 1. MLP Gate projection matrix (1024 x 2048 = 2,097,152 floats ~ 8.4 MB)
+    # Initialized with a normal distribution N(0, 0.02) typical of LLMs
     rng = np.random.RandomState(42)
     w_gate = rng.normal(0.0, 0.02, size=(1024, 2048)).astype(np.float32)
     
-    # 2. Matriz de projeção Self-Attention Q (1024 x 1024 = 1.048.576 floats ~ 4.2 MB)
+    # 2. Self-Attention Q projection matrix (1024 x 1024 = 1,048,576 floats ~ 4.2 MB)
     w_q = rng.normal(0.0, 0.02, size=(1024, 1024)).astype(np.float32)
 
-    # 3. Matriz de projeção Up (512 x 2048 = 1.048.576 floats ~ 4.2 MB)
+    # 3. Up projection matrix (512 x 2048 = 1,048,576 floats ~ 4.2 MB)
     w_up = rng.normal(0.0, 0.02, size=(512, 2048)).astype(np.float32)
 
     tensors = {
@@ -52,9 +52,9 @@ def criar_safetensors_sintetico(caminho: str):
             f.write(buf)
 
     total_mb = (8 + header_len + current_offset) / (1024 * 1024)
-    print(f"[OK] Arquivo '{caminho}' gerado com sucesso!")
-    print(f"     Tamanho total: {total_mb:.2f} MB")
-    print(f"     Tensores incluídos: {list(tensors.keys())}")
+    print(f"[OK] File '{caminho}' generated successfully!")
+    print(f"     Total size: {total_mb:.2f} MB")
+    print(f"     Included tensors: {list(tensors.keys())}")
 
 if __name__ == "__main__":
     criar_safetensors_sintetico("grande_modelo.safetensors")

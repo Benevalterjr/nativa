@@ -1,9 +1,9 @@
 import math
 
 fn main():
-    print("=== Teste Espectral Fourier em Nativa ===")
+    print("=== Spectral Fourier Test in Nativa ===")
     
-    # 1. Numeros Complexos
+    # 1. Complex Numbers
     c1 = Complex(3.0, 4.0)
     c2 = Complex(1.0, 2.0)
     c_soma = c1 + c2
@@ -12,20 +12,20 @@ fn main():
     print("c_soma.real:", c_soma.real)
     print("c_soma.imag:", c_soma.imag)
 
-    # 2. Transformada de Fourier 1D (rfft)
+    # 2. 1D Fourier Transform (rfft)
     sinal = [1.0, 2.0, 3.0, 4.0, 3.0, 2.0, 1.0, 0.0]
     spec = rfft(sinal)
-    print("Frequencias no espectro:", len(spec))
+    print("Frequencies in spectrum:", len(spec))
 
-    # 3. Densidade Espectral de Potencia (|X|^2)
+    # 3. Power Spectral Density (|X|^2)
     ps = power_spectrum(spec)
-    print("Potencia DC (k=0):", ps[0])
+    print("DC Power (k=0):", ps[0])
 
-    # 4. Transformada Inversa (irfft) - Reconstrucao Exata
+    # 4. Inverse Transform (irfft) - Exact Reconstruction
     rec = irfft(spec)
-    print("Tamanho do sinal reconstruido:", len(rec))
+    print("Reconstructed signal length:", len(rec))
     
-    # Validacao de reconstrucao
+    # Reconstruction validation
     diff = rec[0] - sinal[0]
-    print("Diferenca na primeira amostra:", diff)
-    print("=== Fourier concluido com sucesso ===")
+    print("Difference at first sample:", diff)
+    print("=== Fourier completed successfully ===")
