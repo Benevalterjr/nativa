@@ -64,30 +64,61 @@ typedef struct {
 static VocabEntry* g_vocab = NULL;
 static uint32_t g_vocab_size = 0;
 
+static void free_vocab(void) {
+    if (g_vocab) {
+        for (uint32_t i = 0; i < g_vocab_size; i++) {
+            if (g_vocab[i].str) {
+                free(g_vocab[i].str);
+                g_vocab[i].str = NULL;
+            }
+        }
+        free(g_vocab);
+        g_vocab = NULL;
+    }
+    g_vocab_size = 0;
+}
+
 static bool load_vocab_stream(FILE* f) {
+    free_vocab();
     if (fread(&g_vocab_size, sizeof(uint32_t), 1, f) != 1) {
         return false;
     }
-    g_vocab = (VocabEntry*)malloc(g_vocab_size * sizeof(VocabEntry));
-    if (!g_vocab) return false;
+    if (g_vocab_size == 0 || g_vocab_size > 1000000) {
+        fprintf(stderr, "[ERROR] Vocabulary size %u out of valid bounds (1..1000000).\n", g_vocab_size);
+        g_vocab_size = 0;
+        return false;
+    }
+    g_vocab = (VocabEntry*)calloc(g_vocab_size, sizeof(VocabEntry));
+    if (!g_vocab) {
+        g_vocab_size = 0;
+        return false;
+    }
 
     uint32_t i;
     for (i = 0; i < g_vocab_size; i++) {
         uint16_t len = 0;
         if (fread(&len, sizeof(uint16_t), 1, f) != 1) {
-            g_vocab[i].len = 0;
-            g_vocab[i].str = "";
-            continue;
+            fprintf(stderr, "[ERROR] Truncated vocabulary file at token index %u.\n", i);
+            free_vocab();
+            return false;
         }
         g_vocab[i].len = len;
-        g_vocab[i].str = (char*)malloc(len + 1);
-        if (g_vocab[i].str && len > 0) {
+        g_vocab[i].str = (char*)malloc((size_t)len + 1);
+        if (!g_vocab[i].str) {
+            fprintf(stderr, "[ERROR] Memory allocation failed for token %u (len=%u).\n", i, len);
+            free_vocab();
+            return false;
+        }
+        if (len > 0) {
             size_t bytes_read = fread(g_vocab[i].str, 1, len, f);
-            (void)bytes_read;
+            if (bytes_read != len) {
+                fprintf(stderr, "[ERROR] Incomplete token read at index %u (expected %u bytes, got %zu).\n",
+                        i, len, bytes_read);
+                free_vocab();
+                return false;
+            }
         }
-        if (g_vocab[i].str) {
-            g_vocab[i].str[len] = '\0';
-        }
+        g_vocab[i].str[len] = '\0';
     }
     return true;
 }
@@ -211,37 +242,86 @@ typedef struct {
 
 static ModelArena g_arena;
 
+static void arena_free(void) {
+    if (g_arena.k_cache)    { free(g_arena.k_cache);    g_arena.k_cache = NULL; }
+    if (g_arena.v_cache)    { free(g_arena.v_cache);    g_arena.v_cache = NULL; }
+    if (g_arena.x)          { free(g_arena.x);          g_arena.x = NULL; }
+    if (g_arena.xn)         { free(g_arena.xn);         g_arena.xn = NULL; }
+    if (g_arena.q)          { free(g_arena.q);          g_arena.q = NULL; }
+    if (g_arena.k)          { free(g_arena.k);          g_arena.k = NULL; }
+    if (g_arena.v)          { free(g_arena.v);          g_arena.v = NULL; }
+    if (g_arena.attn_out)   { free(g_arena.attn_out);   g_arena.attn_out = NULL; }
+    if (g_arena.h_mlp)      { free(g_arena.h_mlp);      g_arena.h_mlp = NULL; }
+    if (g_arena.x_final)    { free(g_arena.x_final);    g_arena.x_final = NULL; }
+    if (g_arena.logits)     { free(g_arena.logits);     g_arena.logits = NULL; }
+    if (g_arena.scores)     { free(g_arena.scores);     g_arena.scores = NULL; }
+    if (g_arena.xn_q8)      { free(g_arena.xn_q8);      g_arena.xn_q8 = NULL; }
+    if (g_arena.attn_q8)    { free(g_arena.attn_q8);    g_arena.attn_q8 = NULL; }
+    if (g_arena.h_mlp_q8)   { free(g_arena.h_mlp_q8);   g_arena.h_mlp_q8 = NULL; }
+    if (g_arena.x_final_q8) { free(g_arena.x_final_q8); g_arena.x_final_q8 = NULL; }
+    if (g_arena.rope_freqs) { free(g_arena.rope_freqs); g_arena.rope_freqs = NULL; }
+}
+
+static inline bool check_mul_overflow_size(size_t a, size_t b, size_t* out) {
+    if (a != 0 && b > SIZE_MAX / a) return true;
+    *out = a * b;
+    return false;
+}
+
 static bool arena_allocate(const NativaModelHeader* hdr) {
+    arena_free();
+
     uint32_t q_dim = hdr->num_heads * hdr->head_dim;
     uint32_t kv_dim = hdr->num_kv_heads * hdr->head_dim;
-    size_t kv_cache_elements = (size_t)hdr->num_layers * hdr->max_seq_len * kv_dim;
 
-    g_arena.k_cache = (float*)malloc(kv_cache_elements * sizeof(float));
-    g_arena.v_cache = (float*)malloc(kv_cache_elements * sizeof(float));
-
-    g_arena.x        = (float*)malloc(hdr->dim * sizeof(float));
-    g_arena.xn       = (float*)malloc(hdr->dim * sizeof(float));
-    g_arena.q        = (float*)malloc(q_dim * sizeof(float));
-    g_arena.k        = (float*)malloc(kv_dim * sizeof(float));
-    g_arena.v        = (float*)malloc(kv_dim * sizeof(float));
-    g_arena.attn_out = (float*)malloc(q_dim * sizeof(float));
-    g_arena.h_mlp    = (float*)malloc(hdr->intermediate_dim * sizeof(float));
-    g_arena.x_final  = (float*)malloc(hdr->dim * sizeof(float));
-    g_arena.logits   = (float*)malloc(hdr->vocab_size * sizeof(float));
-    g_arena.scores   = (float*)malloc((size_t)hdr->num_heads * hdr->max_seq_len * sizeof(float));
-
-    g_arena.xn_q8      = (BlockQ8*)malloc((hdr->dim / 32) * sizeof(BlockQ8));
-    g_arena.attn_q8    = (BlockQ8*)malloc((q_dim / 32) * sizeof(BlockQ8));
-    g_arena.h_mlp_q8   = (BlockQ8*)malloc((hdr->intermediate_dim / 32) * sizeof(BlockQ8));
-    g_arena.x_final_q8 = (BlockQ8*)malloc((hdr->dim / 32) * sizeof(BlockQ8));
-
-    g_arena.rope_freqs = (float*)malloc((hdr->head_dim / 2) * sizeof(float));
-
-    if (!g_arena.k_cache || !g_arena.v_cache || !g_arena.x || !g_arena.logits) {
+    size_t tmp = 0;
+    size_t kv_cache_elements = 0;
+    if (check_mul_overflow_size(hdr->num_layers, hdr->max_seq_len, &tmp) ||
+        check_mul_overflow_size(tmp, kv_dim, &kv_cache_elements) ||
+        check_mul_overflow_size(kv_cache_elements, sizeof(float), &tmp)) {
+        fprintf(stderr, "[ERROR] KV-cache allocation size calculation overflow.\n");
         return false;
     }
 
-    // Inicializa RoPE
+    size_t scores_elements = 0;
+    if (check_mul_overflow_size(hdr->num_heads, hdr->max_seq_len, &scores_elements) ||
+        check_mul_overflow_size(scores_elements, sizeof(float), &tmp)) {
+        fprintf(stderr, "[ERROR] Attention scores allocation size calculation overflow.\n");
+        return false;
+    }
+
+    g_arena.k_cache    = (float*)malloc(kv_cache_elements * sizeof(float));
+    g_arena.v_cache    = (float*)malloc(kv_cache_elements * sizeof(float));
+
+    g_arena.x          = (float*)malloc((size_t)hdr->dim * sizeof(float));
+    g_arena.xn         = (float*)malloc((size_t)hdr->dim * sizeof(float));
+    g_arena.q          = (float*)malloc((size_t)q_dim * sizeof(float));
+    g_arena.k          = (float*)malloc((size_t)kv_dim * sizeof(float));
+    g_arena.v          = (float*)malloc((size_t)kv_dim * sizeof(float));
+    g_arena.attn_out   = (float*)malloc((size_t)q_dim * sizeof(float));
+    g_arena.h_mlp      = (float*)malloc((size_t)hdr->intermediate_dim * sizeof(float));
+    g_arena.x_final    = (float*)malloc((size_t)hdr->dim * sizeof(float));
+    g_arena.logits     = (float*)malloc((size_t)hdr->vocab_size * sizeof(float));
+    g_arena.scores     = (float*)malloc(scores_elements * sizeof(float));
+
+    g_arena.xn_q8      = (BlockQ8*)malloc(((size_t)hdr->dim / 32) * sizeof(BlockQ8));
+    g_arena.attn_q8    = (BlockQ8*)malloc(((size_t)q_dim / 32) * sizeof(BlockQ8));
+    g_arena.h_mlp_q8   = (BlockQ8*)malloc(((size_t)hdr->intermediate_dim / 32) * sizeof(BlockQ8));
+    g_arena.x_final_q8 = (BlockQ8*)malloc(((size_t)hdr->dim / 32) * sizeof(BlockQ8));
+
+    g_arena.rope_freqs = (float*)malloc(((size_t)hdr->head_dim / 2) * sizeof(float));
+
+    if (!g_arena.k_cache || !g_arena.v_cache || !g_arena.x || !g_arena.xn ||
+        !g_arena.q || !g_arena.k || !g_arena.v || !g_arena.attn_out ||
+        !g_arena.h_mlp || !g_arena.x_final || !g_arena.logits || !g_arena.scores ||
+        !g_arena.xn_q8 || !g_arena.attn_q8 || !g_arena.h_mlp_q8 || !g_arena.x_final_q8 ||
+        !g_arena.rope_freqs) {
+        fprintf(stderr, "[ERROR] Memory allocation failed during arena setup.\n");
+        arena_free();
+        return false;
+    }
+
+    // Initialize RoPE
     int half_head = hdr->head_dim / 2;
     for (int i = 0; i < half_head; i++) {
         g_arena.rope_freqs[i] = 1.0f / powf(hdr->rope_theta, (float)i / (float)half_head);
@@ -325,7 +405,7 @@ static bool validate_model_header(const NativaModelHeader* hdr, uint64_t file_si
             return false;
         }
         if (hdr->has_attn_bias &&
-            (!range_is_valid(lo->bq, norm_bytes, file_size, hdr->data_start_off) ||
+            (!range_is_valid(lo->bq, (uint64_t)q_dim * sizeof(uint16_t), file_size, hdr->data_start_off) ||
              !range_is_valid(lo->bk, (uint64_t)kv_dim * sizeof(uint16_t), file_size, hdr->data_start_off) ||
              !range_is_valid(lo->bv, (uint64_t)kv_dim * sizeof(uint16_t), file_size, hdr->data_start_off))) {
             fprintf(stderr, "[ERROR] Invalid bias offsets in layer %u.\n", l);
@@ -441,9 +521,26 @@ static inline void apply_rope(float* vec, int pos, int num_heads, int head_dim, 
 }
 
 // ----------------------------------------------------------------------------
-// KERNEL Q4x4 UNIVERSAL (SSSE3 Fused 4-Row Vector Dot Product)
+// KERNEL Q4x4 UNIVERSAL (SIMD SSSE3/SSE4.1 & Full C99 Scalar Backend)
 // ----------------------------------------------------------------------------
-static bool g_cpu_has_ssse3 = true;
+static bool g_cpu_has_simd = true;
+
+static inline void embedding_lookup_scalar(float* restrict x, const BlockQ4x4* restrict emb_grp, int lane, int dim) {
+    int num_blocks = dim / 32;
+    for (int b = 0; b < num_blocks; b++) {
+        const BlockQ4x4* blk = &emb_grp[b];
+        float scale = bf16_to_fp32(blk->scale[lane]);
+        const uint8_t* qs = blk->qs + lane * 16;
+        float* xb = x + b * 32;
+        for (int i = 0; i < 16; i++) {
+            uint8_t byte = qs[i];
+            int v_lo = (int)(byte & 0x0F) - 8;
+            int v_hi = (int)(byte >> 4) - 8;
+            xb[i]      = (float)v_lo * scale;
+            xb[i + 16] = (float)v_hi * scale;
+        }
+    }
+}
 
 static inline __m128 q4x4_dot4(const BlockQ4x4* restrict W4, const BlockQ8* restrict x_q8, int nb) {
     const __m128i mask = _mm_set1_epi8(0x0F);
@@ -505,20 +602,20 @@ static inline void q4x4_dot4_scalar(const BlockQ4x4* W4, const BlockQ8* x_q8, in
             uint8_t b2 = blk->qs[i + 32];
             uint8_t b3 = blk->qs[i + 48];
 
-            int8_t x_lo = xb->qs[i * 2];
-            int8_t x_hi = xb->qs[i * 2 + 1];
+            int8_t x_lo = xb->qs[i];
+            int8_t x_hi = xb->qs[i + 16];
 
-            dot0 += ((b0 & 0x0F) - 8) * x_lo + ((b0 >> 4) - 8) * x_hi;
-            dot1 += ((b1 & 0x0F) - 8) * x_lo + ((b1 >> 4) - 8) * x_hi;
-            dot2 += ((b2 & 0x0F) - 8) * x_lo + ((b2 >> 4) - 8) * x_hi;
-            dot3 += ((b3 & 0x0F) - 8) * x_lo + ((b3 >> 4) - 8) * x_hi;
+            dot0 += ((int32_t)(b0 & 0x0F) - 8) * (int32_t)x_lo + ((int32_t)(b0 >> 4) - 8) * (int32_t)x_hi;
+            dot1 += ((int32_t)(b1 & 0x0F) - 8) * (int32_t)x_lo + ((int32_t)(b1 >> 4) - 8) * (int32_t)x_hi;
+            dot2 += ((int32_t)(b2 & 0x0F) - 8) * (int32_t)x_lo + ((int32_t)(b2 >> 4) - 8) * (int32_t)x_hi;
+            dot3 += ((int32_t)(b3 & 0x0F) - 8) * (int32_t)x_lo + ((int32_t)(b3 >> 4) - 8) * (int32_t)x_hi;
         }
 
         float sc = xb->scale;
-        acc0 += (float)dot0 * s0 * sc;
-        acc1 += (float)dot1 * s1 * sc;
-        acc2 += (float)dot2 * s2 * sc;
-        acc3 += (float)dot3 * s3 * sc;
+        acc0 += (float)dot0 * (s0 * sc);
+        acc1 += (float)dot1 * (s1 * sc);
+        acc2 += (float)dot2 * (s2 * sc);
+        acc3 += (float)dot3 * (s3 * sc);
     }
     out4[0] = acc0;
     out4[1] = acc1;
@@ -543,7 +640,7 @@ static inline void matvec_q4x4(float* y, const BlockQ4x4* W, const BlockQ8* x_q8
     int nb = cols / 32;
     int groups = rows / 4;
     int g;
-    if (g_cpu_has_ssse3) {
+    if (g_cpu_has_simd) {
         #pragma omp parallel for schedule(static)
         for (g = 0; g < groups; g++) {
             __m128 acc = q4x4_dot4(W + (size_t)g * nb, x_q8, nb);
@@ -567,7 +664,18 @@ static double g_prof_mlp = 0.0;
 static double g_prof_lm = 0.0;
 static int g_prof_tokens = 0;
 
-static void forward_token_universal(const NativaModelHeader* hdr, const uint8_t* model_bytes, int token_id, int pos) {
+static bool forward_token_universal(const NativaModelHeader* hdr, const uint8_t* model_bytes, int token_id, int pos) {
+    if (token_id < 0 || (uint32_t)token_id >= hdr->vocab_size) {
+        fprintf(stderr, "[WARNING] Invalid token_id %d (vocab_size=%u, context_pos=%d). Skipping forward.\n",
+                token_id, hdr->vocab_size, pos);
+        return false;
+    }
+    if (pos < 0 || (uint32_t)pos >= hdr->max_seq_len) {
+        fprintf(stderr, "[WARNING] Invalid context position %d (max_seq_len=%u). Skipping forward.\n",
+                pos, hdr->max_seq_len);
+        return false;
+    }
+
     const int dim = hdr->dim;
     const int inter_dim = hdr->intermediate_dim;
     const int num_heads = hdr->num_heads;
@@ -580,38 +688,43 @@ static void forward_token_universal(const NativaModelHeader* hdr, const uint8_t*
     // 1. Embedding lookup Q4x4
     const BlockQ4x4* emb_grp = (const BlockQ4x4*)(model_bytes + hdr->embed_tokens_off) + (size_t)(token_id / 4) * (dim / 32);
     const int lane = token_id % 4;
-    __m128i mask = _mm_set1_epi8(0x0F);
-    __m128i off = _mm_set1_epi8(8);
 
-    int b;
-    for (b = 0; b < dim / 32; b++) {
-        const BlockQ4x4* blk = &emb_grp[b];
-        float scale = bf16_to_fp32(blk->scale[lane]);
-        __m128 svec = _mm_set1_ps(scale);
+    if (g_cpu_has_simd) {
+        __m128i mask = _mm_set1_epi8(0x0F);
+        __m128i off = _mm_set1_epi8(8);
 
-        __m128i raw = _mm_loadu_si128((const __m128i*)(blk->qs + lane * 16));
-        __m128i lo = _mm_sub_epi8(_mm_and_si128(raw, mask), off);
-        __m128i hi = _mm_sub_epi8(_mm_and_si128(_mm_srli_epi16(raw, 4), mask), off);
+        int b;
+        for (b = 0; b < dim / 32; b++) {
+            const BlockQ4x4* blk = &emb_grp[b];
+            float scale = bf16_to_fp32(blk->scale[lane]);
+            __m128 svec = _mm_set1_ps(scale);
 
-        __m128 f0 = _mm_cvtepi32_ps(_mm_cvtepi8_epi32(lo));
-        __m128 f1 = _mm_cvtepi32_ps(_mm_cvtepi8_epi32(_mm_srli_si128(lo, 4)));
-        __m128 f2 = _mm_cvtepi32_ps(_mm_cvtepi8_epi32(_mm_srli_si128(lo, 8)));
-        __m128 f3 = _mm_cvtepi32_ps(_mm_cvtepi8_epi32(_mm_srli_si128(lo, 12)));
+            __m128i raw = _mm_loadu_si128((const __m128i*)(blk->qs + lane * 16));
+            __m128i lo = _mm_sub_epi8(_mm_and_si128(raw, mask), off);
+            __m128i hi = _mm_sub_epi8(_mm_and_si128(_mm_srli_epi16(raw, 4), mask), off);
 
-        _mm_storeu_ps(&g_arena.x[b * 32],      _mm_mul_ps(f0, svec));
-        _mm_storeu_ps(&g_arena.x[b * 32 + 4],  _mm_mul_ps(f1, svec));
-        _mm_storeu_ps(&g_arena.x[b * 32 + 8],  _mm_mul_ps(f2, svec));
-        _mm_storeu_ps(&g_arena.x[b * 32 + 12], _mm_mul_ps(f3, svec));
+            __m128 f0 = _mm_cvtepi32_ps(_mm_cvtepi8_epi32(lo));
+            __m128 f1 = _mm_cvtepi32_ps(_mm_cvtepi8_epi32(_mm_srli_si128(lo, 4)));
+            __m128 f2 = _mm_cvtepi32_ps(_mm_cvtepi8_epi32(_mm_srli_si128(lo, 8)));
+            __m128 f3 = _mm_cvtepi32_ps(_mm_cvtepi8_epi32(_mm_srli_si128(lo, 12)));
 
-        __m128 f4 = _mm_cvtepi32_ps(_mm_cvtepi8_epi32(hi));
-        __m128 f5 = _mm_cvtepi32_ps(_mm_cvtepi8_epi32(_mm_srli_si128(hi, 4)));
-        __m128 f6 = _mm_cvtepi32_ps(_mm_cvtepi8_epi32(_mm_srli_si128(hi, 8)));
-        __m128 f7 = _mm_cvtepi32_ps(_mm_cvtepi8_epi32(_mm_srli_si128(hi, 12)));
+            _mm_storeu_ps(&g_arena.x[b * 32],      _mm_mul_ps(f0, svec));
+            _mm_storeu_ps(&g_arena.x[b * 32 + 4],  _mm_mul_ps(f1, svec));
+            _mm_storeu_ps(&g_arena.x[b * 32 + 8],  _mm_mul_ps(f2, svec));
+            _mm_storeu_ps(&g_arena.x[b * 32 + 12], _mm_mul_ps(f3, svec));
 
-        _mm_storeu_ps(&g_arena.x[b * 32 + 16], _mm_mul_ps(f4, svec));
-        _mm_storeu_ps(&g_arena.x[b * 32 + 20], _mm_mul_ps(f5, svec));
-        _mm_storeu_ps(&g_arena.x[b * 32 + 24], _mm_mul_ps(f6, svec));
-        _mm_storeu_ps(&g_arena.x[b * 32 + 28], _mm_mul_ps(f7, svec));
+            __m128 f4 = _mm_cvtepi32_ps(_mm_cvtepi8_epi32(hi));
+            __m128 f5 = _mm_cvtepi32_ps(_mm_cvtepi8_epi32(_mm_srli_si128(hi, 4)));
+            __m128 f6 = _mm_cvtepi32_ps(_mm_cvtepi8_epi32(_mm_srli_si128(hi, 8)));
+            __m128 f7 = _mm_cvtepi32_ps(_mm_cvtepi8_epi32(_mm_srli_si128(hi, 12)));
+
+            _mm_storeu_ps(&g_arena.x[b * 32 + 16], _mm_mul_ps(f4, svec));
+            _mm_storeu_ps(&g_arena.x[b * 32 + 20], _mm_mul_ps(f5, svec));
+            _mm_storeu_ps(&g_arena.x[b * 32 + 24], _mm_mul_ps(f6, svec));
+            _mm_storeu_ps(&g_arena.x[b * 32 + 28], _mm_mul_ps(f7, svec));
+        }
+    } else {
+        embedding_lookup_scalar(g_arena.x, emb_grp, lane, dim);
     }
 
     // 2. Loop through layers
@@ -639,15 +752,26 @@ static void forward_token_universal(const NativaModelHeader* hdr, const uint8_t*
         const int gq = q_dim / 4;
         const int gk = kv_dim / 4;
         int g;
-        #pragma omp parallel for schedule(static)
-        for (g = 0; g < gq + 2 * gk; g++) {
-            float* y; const BlockQ4x4* W; const uint16_t* bias; int r;
-            if (g < gq)            { y = g_arena.q; W = wq_w; bias = bq_w; r = g; }
-            else if (g < gq + gk)  { y = g_arena.k; W = wk_w; bias = bk_w; r = g - gq; }
-            else                   { y = g_arena.v; W = wv_w; bias = bv_w; r = g - gq - gk; }
-            __m128 acc = q4x4_dot4(W + (size_t)r * nb, g_arena.xn_q8, nb);
-            if (bias) acc = _mm_add_ps(acc, bf16x4_to_ps(bias + r * 4));
-            _mm_storeu_ps(&y[r * 4], acc);
+        if (g_cpu_has_simd) {
+            #pragma omp parallel for schedule(static)
+            for (g = 0; g < gq + 2 * gk; g++) {
+                float* y; const BlockQ4x4* W; const uint16_t* bias; int r;
+                if (g < gq)            { y = g_arena.q; W = wq_w; bias = bq_w; r = g; }
+                else if (g < gq + gk)  { y = g_arena.k; W = wk_w; bias = bk_w; r = g - gq; }
+                else                   { y = g_arena.v; W = wv_w; bias = bv_w; r = g - gq - gk; }
+                __m128 acc = q4x4_dot4(W + (size_t)r * nb, g_arena.xn_q8, nb);
+                if (bias) acc = _mm_add_ps(acc, bf16x4_to_ps(bias + r * 4));
+                _mm_storeu_ps(&y[r * 4], acc);
+            }
+        } else {
+            #pragma omp parallel for schedule(static)
+            for (g = 0; g < gq + 2 * gk; g++) {
+                float* y; const BlockQ4x4* W; const uint16_t* bias; int r;
+                if (g < gq)            { y = g_arena.q; W = wq_w; bias = bq_w; r = g; }
+                else if (g < gq + gk)  { y = g_arena.k; W = wk_w; bias = bk_w; r = g - gq; }
+                else                   { y = g_arena.v; W = wv_w; bias = bv_w; r = g - gq - gk; }
+                matvec_q4x4_scalar_group(y, W, g_arena.xn_q8, bias, r, nb, 0);
+            }
         }
 
         if (hdr->arch == NAT_ARCH_QWEN3) {
@@ -660,12 +784,12 @@ static void forward_token_universal(const NativaModelHeader* hdr, const uint8_t*
         apply_rope(g_arena.q, pos, num_heads, head_dim, g_arena.rope_freqs);
         apply_rope(g_arena.k, pos, num_kv_heads, head_dim, g_arena.rope_freqs);
 
-        // Grava no KV-Cache
+        // Save to KV-Cache
         size_t layer_kv_offset = ((size_t)l * hdr->max_seq_len + pos) * kv_dim;
         memcpy(g_arena.k_cache + layer_kv_offset, g_arena.k, kv_dim * sizeof(float));
         memcpy(g_arena.v_cache + layer_kv_offset, g_arena.v, kv_dim * sizeof(float));
 
-        // Grouped Query Attention (GQA) SIMD
+        // Grouped Query Attention (GQA)
         const float inv_sqrt_head = 1.0f / sqrtf((float)head_dim);
         int h;
         for (h = 0; h < num_heads; h++) {
@@ -678,23 +802,36 @@ static void forward_token_universal(const NativaModelHeader* hdr, const uint8_t*
 
             float max_score = -1e30f;
             int s;
-            for (s = 0; s <= pos; s++) {
-                const float* k_vec = k_base + (size_t)s * kv_dim;
-                __m128 a0 = _mm_setzero_ps(), a1 = _mm_setzero_ps();
-                __m128 a2 = _mm_setzero_ps(), a3 = _mm_setzero_ps();
-                int d;
-                for (d = 0; d < head_dim; d += 16) {
-                    a0 = _mm_add_ps(a0, _mm_mul_ps(_mm_loadu_ps(q_h + d),      _mm_loadu_ps(k_vec + d)));
-                    a1 = _mm_add_ps(a1, _mm_mul_ps(_mm_loadu_ps(q_h + d + 4),  _mm_loadu_ps(k_vec + d + 4)));
-                    a2 = _mm_add_ps(a2, _mm_mul_ps(_mm_loadu_ps(q_h + d + 8),  _mm_loadu_ps(k_vec + d + 8)));
-                    a3 = _mm_add_ps(a3, _mm_mul_ps(_mm_loadu_ps(q_h + d + 12), _mm_loadu_ps(k_vec + d + 12)));
+            if (g_cpu_has_simd) {
+                for (s = 0; s <= pos; s++) {
+                    const float* k_vec = k_base + (size_t)s * kv_dim;
+                    __m128 a0 = _mm_setzero_ps(), a1 = _mm_setzero_ps();
+                    __m128 a2 = _mm_setzero_ps(), a3 = _mm_setzero_ps();
+                    int d;
+                    for (d = 0; d < head_dim; d += 16) {
+                        a0 = _mm_add_ps(a0, _mm_mul_ps(_mm_loadu_ps(q_h + d),      _mm_loadu_ps(k_vec + d)));
+                        a1 = _mm_add_ps(a1, _mm_mul_ps(_mm_loadu_ps(q_h + d + 4),  _mm_loadu_ps(k_vec + d + 4)));
+                        a2 = _mm_add_ps(a2, _mm_mul_ps(_mm_loadu_ps(q_h + d + 8),  _mm_loadu_ps(k_vec + d + 8)));
+                        a3 = _mm_add_ps(a3, _mm_mul_ps(_mm_loadu_ps(q_h + d + 12), _mm_loadu_ps(k_vec + d + 12)));
+                    }
+                    __m128 sum128 = _mm_add_ps(_mm_add_ps(a0, a1), _mm_add_ps(a2, a3));
+                    sum128 = _mm_hadd_ps(sum128, sum128);
+                    sum128 = _mm_hadd_ps(sum128, sum128);
+                    float dot = _mm_cvtss_f32(sum128) * inv_sqrt_head;
+                    head_scores[s] = dot;
+                    if (dot > max_score) max_score = dot;
                 }
-                __m128 sum128 = _mm_add_ps(_mm_add_ps(a0, a1), _mm_add_ps(a2, a3));
-                sum128 = _mm_hadd_ps(sum128, sum128);
-                sum128 = _mm_hadd_ps(sum128, sum128);
-                float dot = _mm_cvtss_f32(sum128) * inv_sqrt_head;
-                head_scores[s] = dot;
-                if (dot > max_score) max_score = dot;
+            } else {
+                for (s = 0; s <= pos; s++) {
+                    const float* k_vec = k_base + (size_t)s * kv_dim;
+                    float dot = 0.0f;
+                    for (int d = 0; d < head_dim; d++) {
+                        dot += q_h[d] * k_vec[d];
+                    }
+                    dot *= inv_sqrt_head;
+                    head_scores[s] = dot;
+                    if (dot > max_score) max_score = dot;
+                }
             }
 
             float sum_exp = 0.0f;
@@ -706,16 +843,26 @@ static void forward_token_universal(const NativaModelHeader* hdr, const uint8_t*
             float inv_sum = 1.0f / sum_exp;
 
             memset(out_h, 0, head_dim * sizeof(float));
-            for (s = 0; s <= pos; s++) {
-                float p = head_scores[s] * inv_sum;
-                __m128 pvec = _mm_set1_ps(p);
-                const float* v_vec = v_base + (size_t)s * kv_dim;
-                int d;
-                for (d = 0; d < head_dim; d += 16) {
-                    _mm_storeu_ps(out_h + d,      _mm_add_ps(_mm_loadu_ps(out_h + d),      _mm_mul_ps(pvec, _mm_loadu_ps(v_vec + d))));
-                    _mm_storeu_ps(out_h + d + 4,  _mm_add_ps(_mm_loadu_ps(out_h + d + 4),  _mm_mul_ps(pvec, _mm_loadu_ps(v_vec + d + 4))));
-                    _mm_storeu_ps(out_h + d + 8,  _mm_add_ps(_mm_loadu_ps(out_h + d + 8),  _mm_mul_ps(pvec, _mm_loadu_ps(v_vec + d + 8))));
-                    _mm_storeu_ps(out_h + d + 12, _mm_add_ps(_mm_loadu_ps(out_h + d + 12), _mm_mul_ps(pvec, _mm_loadu_ps(v_vec + d + 12))));
+            if (g_cpu_has_simd) {
+                for (s = 0; s <= pos; s++) {
+                    float p = head_scores[s] * inv_sum;
+                    __m128 pvec = _mm_set1_ps(p);
+                    const float* v_vec = v_base + (size_t)s * kv_dim;
+                    int d;
+                    for (d = 0; d < head_dim; d += 16) {
+                        _mm_storeu_ps(out_h + d,      _mm_add_ps(_mm_loadu_ps(out_h + d),      _mm_mul_ps(pvec, _mm_loadu_ps(v_vec + d))));
+                        _mm_storeu_ps(out_h + d + 4,  _mm_add_ps(_mm_loadu_ps(out_h + d + 4),  _mm_mul_ps(pvec, _mm_loadu_ps(v_vec + d + 4))));
+                        _mm_storeu_ps(out_h + d + 8,  _mm_add_ps(_mm_loadu_ps(out_h + d + 8),  _mm_mul_ps(pvec, _mm_loadu_ps(v_vec + d + 8))));
+                        _mm_storeu_ps(out_h + d + 12, _mm_add_ps(_mm_loadu_ps(out_h + d + 12), _mm_mul_ps(pvec, _mm_loadu_ps(v_vec + d + 12))));
+                    }
+                }
+            } else {
+                for (s = 0; s <= pos; s++) {
+                    float p = head_scores[s] * inv_sum;
+                    const float* v_vec = v_base + (size_t)s * kv_dim;
+                    for (int d = 0; d < head_dim; d++) {
+                        out_h[d] += p * v_vec[d];
+                    }
                 }
             }
         }
@@ -730,14 +877,26 @@ static void forward_token_universal(const NativaModelHeader* hdr, const uint8_t*
         quantize_x_to_q8(g_arena.xn, g_arena.xn_q8, dim);
 
         const int mlp_groups = inter_dim / 4;
-        #pragma omp parallel for schedule(static)
-        for (g = 0; g < mlp_groups; g++) {
-            float gv[4], uv[4];
-            _mm_storeu_ps(gv, q4x4_dot4(wgate_w + (size_t)g * nb, g_arena.xn_q8, nb));
-            _mm_storeu_ps(uv, q4x4_dot4(wup_w   + (size_t)g * nb, g_arena.xn_q8, nb));
-            int j;
-            for (j = 0; j < 4; j++) {
-                g_arena.h_mlp[g * 4 + j] = (gv[j] / (1.0f + expf(-gv[j]))) * uv[j];
+        if (g_cpu_has_simd) {
+            #pragma omp parallel for schedule(static)
+            for (g = 0; g < mlp_groups; g++) {
+                float gv[4], uv[4];
+                _mm_storeu_ps(gv, q4x4_dot4(wgate_w + (size_t)g * nb, g_arena.xn_q8, nb));
+                _mm_storeu_ps(uv, q4x4_dot4(wup_w   + (size_t)g * nb, g_arena.xn_q8, nb));
+                int j;
+                for (j = 0; j < 4; j++) {
+                    g_arena.h_mlp[g * 4 + j] = (gv[j] / (1.0f + expf(-gv[j]))) * uv[j];
+                }
+            }
+        } else {
+            #pragma omp parallel for schedule(static)
+            for (g = 0; g < mlp_groups; g++) {
+                float gv[4], uv[4];
+                q4x4_dot4_scalar(wgate_w + (size_t)g * nb, g_arena.xn_q8, nb, gv);
+                q4x4_dot4_scalar(wup_w   + (size_t)g * nb, g_arena.xn_q8, nb, uv);
+                for (int j = 0; j < 4; j++) {
+                    g_arena.h_mlp[g * 4 + j] = (gv[j] / (1.0f + expf(-gv[j]))) * uv[j];
+                }
             }
         }
 
@@ -758,6 +917,7 @@ static void forward_token_universal(const NativaModelHeader* hdr, const uint8_t*
     matvec_q4x4(g_arena.logits, lm_w, g_arena.x_final_q8, NULL, hdr->vocab_size, dim, 0);
     g_prof_lm += (timer_now() - t_l0);
     g_prof_tokens++;
+    return true;
 }
 
 // ----------------------------------------------------------------------------
@@ -788,6 +948,7 @@ int main(int argc, char** argv) {
     bool chat_mode = false;
     bool bench_mode = false;
     int bench_tokens = 25;
+    bool force_scalar = false;
 
     if (is_bundle) {
         printf("[*] [NATIVA BUNDLE] Self-contained executable detected!\n");
@@ -818,6 +979,9 @@ int main(int argc, char** argv) {
             } else if (strcmp(argv[a], "--vocab") == 0 && a + 1 < argc) {
                 vocab_path = argv[a + 1];
                 a += 2;
+            } else if (strcmp(argv[a], "--scalar") == 0) {
+                force_scalar = true;
+                a++;
             } else {
                 a++;
             }
@@ -828,7 +992,7 @@ int main(int argc, char** argv) {
             arg_idx = 2;
         }
         if (argc <= arg_idx) {
-            printf("Usage: nativa_engine [--] <model.natq4> [--chat] [--bench <N>] [--threads <N>] [--eval-tokens <file>] [--vocab <vocab.bin>]\n");
+            printf("Usage: nativa_engine [--] <model.natq4> [--chat] [--bench <N>] [--threads <N>] [--eval-tokens <file>] [--vocab <vocab.bin>] [--scalar]\n");
             return 1;
         }
 
@@ -853,6 +1017,9 @@ int main(int argc, char** argv) {
             } else if (strcmp(argv[a], "--vocab") == 0 && a + 1 < argc) {
                 vocab_path = argv[a + 1];
                 a += 2;
+            } else if (strcmp(argv[a], "--scalar") == 0) {
+                force_scalar = true;
+                a++;
             } else {
                 a++;
             }
@@ -866,11 +1033,16 @@ int main(int argc, char** argv) {
     cpu_apply_auto_tune(&cpu);
     if (custom_threads > 0) {
         omp_set_num_threads(custom_threads);
-        printf("  [OPENMP] Threads ajustadas manualmente para: %d\n", custom_threads);
+        printf("  [OPENMP] Threads manually set to: %d\n", custom_threads);
     }
-    g_cpu_has_ssse3 = cpu.ssse3;
-    if (!g_cpu_has_ssse3) {
-        printf("  [NATIVA UNIVERSAL] Processor without SSSE3 detected. C99 scalar mode active!\n");
+    g_cpu_has_simd = cpu.ssse3 && cpu.sse41;
+    if (force_scalar) {
+        g_cpu_has_simd = false;
+        printf("  [NATIVA UNIVERSAL] Flag --scalar specified: C99 scalar backend forced!\n");
+    } else if (!g_cpu_has_simd) {
+        printf("  [NATIVA UNIVERSAL] CPU without SSSE3/SSE4.1 detected. Full C99 scalar mode active!\n");
+    } else {
+        printf("  [NATIVA SIMD] SSSE3 + SSE4.1 acceleration active.\n");
     }
 
     // 2. Load vocabulary
@@ -884,7 +1056,7 @@ int main(int argc, char** argv) {
         }
     }
 
-    // 3. Mapear arquivo .natq4
+    // 3. Map .natq4 model file
     const uint8_t* model_bytes = NULL;
 
 #ifdef _WIN32
@@ -906,25 +1078,35 @@ int main(int argc, char** argv) {
 
     HANDLE hMapping = CreateFileMappingA(hFile, NULL, PAGE_READONLY, 0, 0, NULL);
     if (!hMapping) {
-        fprintf(stderr, "[ERROR] Failed to create file mapping\n");
+        fprintf(stderr, "[ERROR] Failed to create file mapping (Code: %lu)\n", GetLastError());
         CloseHandle(hFile);
         return 1;
     }
 
-    DWORD off_high = (DWORD)(model_offset >> 32);
-    DWORD off_low  = (DWORD)(model_offset & 0xFFFFFFFF);
-    model_bytes = (const uint8_t*)MapViewOfFile(hMapping, FILE_MAP_READ, off_high, off_low, (SIZE_T)model_file_size);
-    if (!model_bytes) {
-        fprintf(stderr, "[ERROR] Failed to map file to memory\n");
+    SYSTEM_INFO sys_info;
+    GetSystemInfo(&sys_info);
+    uint64_t gran = sys_info.dwAllocationGranularity ? (uint64_t)sys_info.dwAllocationGranularity : 65536ULL;
+    uint64_t aligned_offset = (model_offset / gran) * gran;
+    uint64_t offset_delta = model_offset - aligned_offset;
+    SIZE_T map_size = (SIZE_T)(model_file_size + offset_delta);
+
+    DWORD off_high = (DWORD)(aligned_offset >> 32);
+    DWORD off_low  = (DWORD)(aligned_offset & 0xFFFFFFFF);
+    const uint8_t* raw_mapped = (const uint8_t*)MapViewOfFile(hMapping, FILE_MAP_READ, off_high, off_low, map_size);
+    if (!raw_mapped) {
+        fprintf(stderr, "[ERROR] Failed to map file to memory (Code: %lu)\n", GetLastError());
         CloseHandle(hMapping);
         CloseHandle(hFile);
         return 1;
     }
+    model_bytes = raw_mapped + offset_delta;
 
     #define UNMAP_AND_CLOSE() do { \
-        if (model_bytes) UnmapViewOfFile(model_bytes); \
+        if (raw_mapped) UnmapViewOfFile(raw_mapped); \
         if (hMapping) CloseHandle(hMapping); \
         if (hFile != INVALID_HANDLE_VALUE) CloseHandle(hFile); \
+        arena_free(); \
+        free_vocab(); \
     } while (0)
 #else
     int fd = open(model_path, O_RDONLY);
@@ -943,16 +1125,25 @@ int main(int argc, char** argv) {
         model_file_size = (uint64_t)st.st_size;
     }
 
-    model_bytes = (const uint8_t*)mmap(NULL, (size_t)model_file_size, PROT_READ, MAP_SHARED, fd, (off_t)model_offset);
-    if (model_bytes == MAP_FAILED || !model_bytes) {
+    long page_size = sysconf(_SC_PAGE_SIZE);
+    uint64_t gran = page_size > 0 ? (uint64_t)page_size : 4096ULL;
+    uint64_t aligned_offset = (model_offset / gran) * gran;
+    uint64_t offset_delta = model_offset - aligned_offset;
+    size_t map_size = (size_t)(model_file_size + offset_delta);
+
+    const uint8_t* raw_mapped = (const uint8_t*)mmap(NULL, map_size, PROT_READ, MAP_SHARED, fd, (off_t)aligned_offset);
+    if (raw_mapped == MAP_FAILED || !raw_mapped) {
         fprintf(stderr, "[ERROR] Failed to map file to memory\n");
         close(fd);
         return 1;
     }
+    model_bytes = raw_mapped + offset_delta;
 
     #define UNMAP_AND_CLOSE() do { \
-        if (model_bytes && model_bytes != MAP_FAILED) munmap((void*)model_bytes, (size_t)model_file_size); \
+        if (raw_mapped && raw_mapped != MAP_FAILED) munmap((void*)raw_mapped, map_size); \
         if (fd >= 0) close(fd); \
+        arena_free(); \
+        free_vocab(); \
     } while (0)
 #endif
 
@@ -1027,6 +1218,11 @@ int main(int argc, char** argv) {
                 int prev_tok = -1;
                 int cur_tok = 0;
                 while (fscanf(tf, "%d", &cur_tok) == 1 && cur_seq_pos < (int)hdr->max_seq_len - 1) {
+                    if (cur_tok < 0 || (uint32_t)cur_tok >= hdr->vocab_size) {
+                        fprintf(stderr, "[WARNING] Rejecting out-of-bounds token %d in PPL file (vocab_size=%u).\n",
+                                cur_tok, hdr->vocab_size);
+                        break;
+                    }
                     if (prev_tok != -1) {
                         float max_l = -1e30f;
                         for (int v = 0; v < sampling_vocab_size; v++) {
@@ -1045,7 +1241,7 @@ int main(int argc, char** argv) {
                         if (best_v == cur_tok) correct++;
                         if (evaluated < 64) {
                             printf("[NLL_STEP %2d] id=%7d nll=%.4f best=%7d acc=%d\n",
-                                   evaluated, cur_tok, -log_prob, best_v, best_v == cur_tok);
+                                    evaluated, cur_tok, -log_prob, best_v, best_v == cur_tok);
                             fflush(stdout);
                         }
                         evaluated++;
@@ -1061,7 +1257,7 @@ int main(int argc, char** argv) {
                 double acc_val = (evaluated > 0) ? (100.0 * correct / evaluated) : 0.0;
                 double ppl_speed = (ppl_sec > 0.0) ? (evaluated / ppl_sec) : 0.0;
                 printf("\n[PPL_DONE tokens=%d nll=%.4f ppl=%.4f acc=%.2f time=%.3f speed=%.2f]\n",
-                       evaluated, mean_nll, ppl_val, acc_val, ppl_sec, ppl_speed);
+                        evaluated, mean_nll, ppl_val, acc_val, ppl_sec, ppl_speed);
                 fflush(stdout);
                 continue;
             }
@@ -1082,6 +1278,12 @@ int main(int argc, char** argv) {
             for (t_idx = 0; t_idx < num_in && cur_seq_pos < (int)hdr->max_seq_len; t_idx++) {
                 int tok_val = 0;
                 if (sscanf(ptr, "%d", &tok_val) != 1) break;
+                if (tok_val < 0 || (uint32_t)tok_val >= hdr->vocab_size) {
+                    fprintf(stderr, "[WARNING] Rejecting out-of-bounds token %d (vocab_size=%u).\n", tok_val, hdr->vocab_size);
+                    while (*ptr && *ptr != ' ' && *ptr != '\t' && *ptr != '\n' && *ptr != '\r') ptr++;
+                    while (*ptr && (*ptr == ' ' || *ptr == '\t')) ptr++;
+                    continue;
+                }
                 forward_token_universal(hdr, model_bytes, tok_val, cur_seq_pos);
                 cur_seq_pos++;
                 while (*ptr && *ptr != ' ' && *ptr != '\t' && *ptr != '\n' && *ptr != '\r') ptr++;
@@ -1092,6 +1294,7 @@ int main(int argc, char** argv) {
             double t_turn0 = timer_now();
             while (cur_seq_pos < (int)hdr->max_seq_len - 1 && gen_step < max_gen) {
                 int next_tok = sample_topk(g_arena.logits, sampling_vocab_size, 0.6f, 30);
+                if (next_tok < 0 || (uint32_t)next_tok >= hdr->vocab_size) break;
                 if (is_stop_token(hdr, next_tok)) break;
 
                 print_token(next_tok);
@@ -1124,6 +1327,10 @@ int main(int argc, char** argv) {
         int total_tokens = 0;
         int val = 0;
         while (fscanf(tf, "%d", &val) == 1) {
+            if (val < 0 || (uint32_t)val >= hdr->vocab_size) {
+                fprintf(stderr, "[WARNING] Rejecting out-of-bounds token %d from evaluation file.\n", val);
+                continue;
+            }
             if (total_tokens >= max_cap) {
                 max_cap *= 2;
                 int* new_list = (int*)realloc(token_list, max_cap * sizeof(int));
@@ -1148,10 +1355,10 @@ int main(int argc, char** argv) {
         }
 
         printf("\n====================================================================\n");
-        printf("  [NATIVA BENCHMARK] AVALIACAO DE PERPLEXIDADE (WIKITEXT / NLL)\n");
+        printf("  [NATIVA BENCHMARK] PERPLEXITY EVALUATION (WIKITEXT / NLL)\n");
         printf("====================================================================\n");
-        printf("  Tokens no split   : %d\n", total_tokens);
-        printf("  Pares avaliados   : %d\n", total_tokens - 1);
+        printf("  Tokens in split   : %d\n", total_tokens);
+        printf("  Evaluated pairs   : %d\n", total_tokens - 1);
         printf("  Active vocabulary : %d\n", sampling_vocab_size);
         printf("--------------------------------------------------------------------\n");
 
@@ -1185,7 +1392,7 @@ int main(int argc, char** argv) {
 
             if (p < 512) {
                 printf("[NLL_NATIVA] pos=%3d input=%7d target=%7d nll=%.4f best=%7d\n",
-                       p, input_tok, target_tok, -log_prob, best_v);
+                        p, input_tok, target_tok, -log_prob, best_v);
                 fflush(stdout);
             }
 
@@ -1196,7 +1403,7 @@ int main(int argc, char** argv) {
                 double cur_ppl = exp(cur_nll);
                 double cur_acc = 100.0 * correct / evaluated;
                 printf("  [%4d/%4d] NLL: %.4f | PPL: %.2f | Top-1: %.2f%% | Speed: %.1f tok/s\r",
-                       evaluated, total_tokens - 1, cur_nll, cur_ppl, cur_acc, cur_speed);
+                        evaluated, total_tokens - 1, cur_nll, cur_ppl, cur_acc, cur_speed);
                 fflush(stdout);
             }
         }
@@ -1211,13 +1418,13 @@ int main(int argc, char** argv) {
         printf("  [OFFICIAL PERPLEXITY RESULT]:\n");
         printf("    Evaluated tokens : %d\n", evaluated);
         printf("    Mean NLL         : %.4f nats/token\n", mean_nll);
-        printf("    Perplexidade PPL : \x1b[1;32m%.4f\x1b[0m\n", ppl_val);
+        printf("    Perplexity PPL   : \x1b[1;32m%.4f\x1b[0m\n", ppl_val);
         printf("    Top-1 Accuracy   : %.2f%%\n", acc_val);
         printf("    Total time       : %.3f s\n", ppl_sec);
         printf("    Throughput       : %.2f tokens/s\n", ppl_speed);
         printf("====================================================================\n");
         printf("[PPL_DONE tokens=%d nll=%.4f ppl=%.4f acc=%.2f time=%.3f speed=%.2f]\n",
-               evaluated, mean_nll, ppl_val, acc_val, ppl_sec, ppl_speed);
+                evaluated, mean_nll, ppl_val, acc_val, ppl_sec, ppl_speed);
         fflush(stdout);
 
         free(token_list);
@@ -1226,14 +1433,16 @@ int main(int argc, char** argv) {
         int default_prompt[] = { 151644, 8948, 198, 2610, 525, 264, 10950, 17847, 13, 151645, 198, 151644, 77091, 198 };
         int prompt_len = 14;
 
-        printf("\n[*] Executando prefill do prompt (%d tokens)...\n", prompt_len);
+        printf("\n[*] Running prompt prefill (%d tokens)...\n", prompt_len);
         double t0 = timer_now();
         for (int p = 0; p < prompt_len - 1; p++) {
-            forward_token_universal(hdr, model_bytes, default_prompt[p], p);
+            if (default_prompt[p] >= 0 && (uint32_t)default_prompt[p] < hdr->vocab_size) {
+                forward_token_universal(hdr, model_bytes, default_prompt[p], p);
+            }
         }
         printf("    -> Prefill completed in %.3f s!\n\n", timer_now() - t0);
 
-        printf("[*] Gerando %d tokens no motor universal:\n----------------------------------------------------\n", bench_tokens);
+        printf("[*] Generating %d tokens in universal engine:\n----------------------------------------------------\n", bench_tokens);
         int cur = default_prompt[prompt_len - 1];
         int pos = prompt_len - 1;
         int gen = 0;
@@ -1245,8 +1454,9 @@ int main(int argc, char** argv) {
 
         while (gen < bench_tokens && pos < (int)hdr->max_seq_len - 1) {
             forward_token_universal(hdr, model_bytes, cur, pos);
-                int next = bench_mode ? sample_argmax(g_arena.logits, sampling_vocab_size)
+            int next = bench_mode ? sample_argmax(g_arena.logits, sampling_vocab_size)
                                   : sample_topk(g_arena.logits, sampling_vocab_size, 0.6f, 30);
+            if (next < 0 || (uint32_t)next >= hdr->vocab_size) break;
             if (!bench_mode && is_stop_token(hdr, next)) break;
 
             seq_hash = (seq_hash ^ (uint32_t)next) * 16777619u;
