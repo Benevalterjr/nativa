@@ -104,7 +104,7 @@ python nativa.py bench --all
 
 - 📊 [English Benchmark Report](BENCHMARKS_EN.md) — Throughput, PPL, and zero-shot reasoning evaluation.
 - 📊 [Relatório de Benchmarks em Português](BENCHMARKS.md) — Avaliação auditável completa.
-- 📋 [Q4x4 Lean Specification & Gatekeeping Protocol](docs/SPEC_Q4X4_LEAN_AND_GATEKEEPING.md) — Especificação técnica do baseline congelado, diagnóstico de banda e protocolo de gatekeeping.
+- 📋 [Q4x4 Lean Specification & Gatekeeping Protocol](docs/SPEC_Q4X4_LEAN_AND_GATEKEEPING_EN.md) — Frozen baseline specification, DRAM bandwidth analysis, and gatekeeping rules.
 
 ---
 
@@ -243,6 +243,16 @@ python nativa.py chat data/meu_modelo.natq4
 python nativa.py build tests/riemann.nat
 ./tests/riemann
 ```
+
+---
+
+### Benchmarks Oficiais & Desempenho
+
+A Nativa inclui uma suíte reproduzível de benchmarks medindo vazão (tokens/s), time-to-first-token (TTFT), perplexidade no WikiText-2 (PPL) e consumo de memória:
+
+- 📊 [Relatório de Benchmarks em Português](BENCHMARKS.md) — Avaliação auditável completa.
+- 📊 [English Benchmark Report](BENCHMARKS_EN.md) — Throughput, PPL, and zero-shot reasoning evaluation.
+- 📋 [Especificação Q4x4 Lean & Protocolo de Gatekeeping](docs/SPEC_Q4X4_LEAN_AND_GATEKEEPING.md) — Especificação técnica do baseline congelado, diagnóstico de banda e protocolo de gatekeeping.
 
 ---
 

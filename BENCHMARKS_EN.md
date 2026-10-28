@@ -179,4 +179,4 @@ Comparing the full compute kernel against a pure memory stream probe (`stream_re
 
 ### C. Gatekeeping Protocol for New Kernels
 For complete technical specifications, ternary microbenchmarks (2-bit vs. 5-trit trade-offs), and acceptance criteria, see:
-- 📋 [Q4x4 Lean Specification & Gatekeeping Protocol](docs/SPEC_Q4X4_LEAN_AND_GATEKEEPING.md)
+- 📋 [Q4x4 Lean Specification & Gatekeeping Protocol](docs/SPEC_Q4X4_LEAN_AND_GATEKEEPING_EN.md)
