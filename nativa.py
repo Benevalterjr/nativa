@@ -4695,7 +4695,7 @@ class Tensor:
                 res_mat = np.column_stack(cols)
                 out = Tensor(res_mat, dtype="f32", device=self.device)
 
-            if self.scale != 1.0:
+            if not math.isclose(self.scale, 1.0):
                 out.data *= self.scale
             return out
 
@@ -4722,7 +4722,7 @@ class Tensor:
                 res_mat = np.column_stack(cols)
                 out = Tensor(res_mat, dtype="f32", device=other.device)
 
-            if other.scale != 1.0:
+            if not math.isclose(other.scale, 1.0):
                 out.data *= other.scale
             return out
 
@@ -4892,7 +4892,7 @@ class Tensor:
         s = f"Tensor(shape={self.shape}, dtype='{self.dtype}'"
         if self.device != "cpu":
             s += f", device='{self.device}'"
-        if self.scale != 1.0:
+        if not math.isclose(self.scale, 1.0):
             s += f", scale={self.scale:.6f}"
         s += f", data={self.data.tolist() if self.numel() <= 8 else f'[{self.data.ravel()[0]} ... {self.data.ravel()[-1]}]'})"
         return s
@@ -5041,7 +5041,7 @@ def relative_error_fn(a: Any, b: Any) -> float:
     a_arr = np.array(a, dtype=float)
     b_arr = np.array(b, dtype=float)
     norm_a = float(np.linalg.norm(a_arr))
-    if norm_a == 0.0:
+    if math.isclose(norm_a, 0.0, abs_tol=1e-12):
         return 0.0
     return float(np.linalg.norm(a_arr - b_arr) / norm_a)
 
@@ -5055,7 +5055,7 @@ def pearson_corr_fn(a: Any, b: Any) -> float:
     a_diff = a_arr - np.mean(a_arr)
     b_diff = b_arr - np.mean(b_arr)
     denom = np.sqrt(np.sum(a_diff ** 2) * np.sum(b_diff ** 2))
-    if denom == 0.0:
+    if math.isclose(denom, 0.0, abs_tol=1e-12):
         return 0.0
     return float(np.sum(a_diff * b_diff) / denom)
 
@@ -5066,7 +5066,7 @@ def cosine_sim_fn(a: Any, b: Any) -> float:
     b_arr = np.array(b, dtype=float).ravel()
     norm_a = float(np.linalg.norm(a_arr))
     norm_b = float(np.linalg.norm(b_arr))
-    if norm_a == 0.0 or norm_b == 0.0:
+    if math.isclose(norm_a, 0.0, abs_tol=1e-12) or math.isclose(norm_b, 0.0, abs_tol=1e-12):
         return 0.0
     return float(np.dot(a_arr, b_arr) / (norm_a * norm_b))
 
@@ -5150,11 +5150,11 @@ def ternary_add_only_matmul(W: Any, X: Any) -> Any:
                 M, K
             )
             out = Tensor(y, dtype="f32") if isinstance(W, Tensor) or isinstance(X, Tensor) else (y if isinstance(W, np.ndarray) else y.tolist())
-            if isinstance(W, Tensor) and hasattr(W, "gamma") and W.gamma != 1.0:
+            if isinstance(W, Tensor) and hasattr(W, "gamma") and not math.isclose(W.gamma, 1.0):
                 out = out * W.gamma
             return out
         res = W_arr.astype(np.float32).dot(X_arr.astype(np.float32))
-        if isinstance(W, Tensor) and hasattr(W, "gamma") and W.gamma != 1.0:
+        if isinstance(W, Tensor) and hasattr(W, "gamma") and not math.isclose(W.gamma, 1.0):
             res = res * W.gamma
     elif is_ternary_X and W_arr.ndim == 1 and X_arr.ndim == 2:
         K, M = X_arr.shape
@@ -5169,11 +5169,11 @@ def ternary_add_only_matmul(W: Any, X: Any) -> Any:
                 M, K
             )
             out = Tensor(y, dtype="f32") if isinstance(W, Tensor) or isinstance(X, Tensor) else (y if isinstance(X, np.ndarray) else y.tolist())
-            if isinstance(X, Tensor) and hasattr(X, "gamma") and X.gamma != 1.0:
+            if isinstance(X, Tensor) and hasattr(X, "gamma") and not math.isclose(X.gamma, 1.0):
                 out = out * X.gamma
             return out
         res = W_arr.astype(np.float32).dot(X_arr.astype(np.float32))
-        if isinstance(X, Tensor) and hasattr(X, "gamma") and X.gamma != 1.0:
+        if isinstance(X, Tensor) and hasattr(X, "gamma") and not math.isclose(X.gamma, 1.0):
             res = res * X.gamma
     elif is_ternary_W and W_arr.ndim == 1 and X_arr.ndim == 1:
         pos = (W_arr == 1)
@@ -11463,7 +11463,7 @@ class TesteAritmeticaFix256Intervalar(unittest.TestCase):
         self.assertIn("nat_interval256_neg", c_code)
 
         import tempfile
-        with tempfile.TemporaryDirectory() as tmpdir:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmpdir:
             c_file = os.path.join(tmpdir, "test_fix256.c")
             exe_file = os.path.join(tmpdir, "test_fix256.exe")
             with open(c_file, "w", encoding="utf-8") as f:
