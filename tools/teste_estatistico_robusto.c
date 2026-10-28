@@ -34,6 +34,20 @@ static inline uint16_t fp32_to_bf16(float f) {
     return (uint16_t)(conv.u >> 16);
 }
 
+static uint32_t g_test_rng = 1337;
+static inline void fast_srand(uint32_t seed) {
+    g_test_rng = seed ? seed : 1337;
+}
+static inline uint32_t fast_rand32(void) {
+    g_test_rng ^= g_test_rng << 13;
+    g_test_rng ^= g_test_rng >> 17;
+    g_test_rng ^= g_test_rng << 5;
+    return g_test_rng;
+}
+static inline float fast_randf(void) {
+    return (float)(fast_rand32() & 0x7FFFFFFF) / (float)0x7FFFFFFF;
+}
+
 // ----------------------------------------------------------------------------
 // 1. ATIVAÇÃO VETORIZADA SWIGLU (Fast Exp)
 // ----------------------------------------------------------------------------
@@ -510,16 +524,16 @@ int main(void) {
             } else if (scen == 2) {
                 for (int i = 0; i < K; i++) x[i] = (i % 2 == 0) ? 40.0f : -40.0f;
             } else {
-                srand(1337 + s_idx);
-                for (int i = 0; i < K; i++) x[i] = ((float)rand() / (float)RAND_MAX) * 8.0f - 4.0f;
+                fast_srand(1337 + (uint32_t)s_idx);
+                for (int i = 0; i < K; i++) x[i] = fast_randf() * 8.0f - 4.0f;
                 for (int g = 0; g < ng * nb; g++) {
                     for (int r = 0; r < 4; r++) {
-                        Wg[g].scale[r] = fp32_to_bf16(0.005f + ((float)rand() / (float)RAND_MAX) * 0.02f);
-                        Wu[g].scale[r] = fp32_to_bf16(0.005f + ((float)rand() / (float)RAND_MAX) * 0.02f);
+                        Wg[g].scale[r] = fp32_to_bf16(0.005f + fast_randf() * 0.02f);
+                        Wu[g].scale[r] = fp32_to_bf16(0.005f + fast_randf() * 0.02f);
                     }
                     for (int k = 0; k < 64; k++) {
-                        Wg[g].qs[k] = (uint8_t)(rand() & 0xFF);
-                        Wu[g].qs[k] = (uint8_t)(rand() & 0xFF);
+                        Wg[g].qs[k] = (uint8_t)(fast_rand32() & 0xFF);
+                        Wu[g].qs[k] = (uint8_t)(fast_rand32() & 0xFF);
                     }
                 }
             }
@@ -584,8 +598,8 @@ int main(void) {
     float* out_lean = (float*)malloc(M * sizeof(float));
     float* out_fast = (float*)malloc(M * sizeof(float));
 
-    srand(42);
-    for (int i = 0; i < K; i++) x[i] = ((float)rand() / (float)RAND_MAX) * 4.0f - 2.0f;
+    fast_srand(42);
+    for (int i = 0; i < K; i++) x[i] = fast_randf() * 4.0f - 2.0f;
     quantize_x_to_q8(x, xq, K);
     for (int g = 0; g < ng * nb; g++) {
         for (int r = 0; r < 4; r++) {
@@ -593,8 +607,8 @@ int main(void) {
             Wu[g].scale[r] = fp32_to_bf16(0.01f);
         }
         for (int k = 0; k < 64; k++) {
-            Wg[g].qs[k] = (uint8_t)(rand() & 0xFF);
-            Wu[g].qs[k] = (uint8_t)(rand() & 0xFF);
+            Wg[g].qs[k] = (uint8_t)(fast_rand32() & 0xFF);
+            Wu[g].qs[k] = (uint8_t)(fast_rand32() & 0xFF);
         }
     }
 

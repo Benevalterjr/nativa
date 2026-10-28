@@ -41,6 +41,15 @@ def get_remote_size(url: str) -> int:
         return int(resp.headers.get("Content-Length", 0))
 
 
+def resolve_safe_path(base_dir: str, filename: str) -> str:
+    base = os.path.abspath(base_dir)
+    clean_name = os.path.basename(filename)
+    resolved = os.path.abspath(os.path.join(base, clean_name))
+    if os.path.commonpath([base, resolved]) != base:
+        raise ValueError(f"Path traversal detected: {filename}")
+    return resolved
+
+
 def download_small_file(url: str, dest_path: str, filename: str) -> None:
     if os.path.exists(dest_path):
         remote_sz = get_remote_size(url)
@@ -132,7 +141,7 @@ def download_large_file_parallel(url: str, dest_path: str, filename: str) -> Non
 
 
 def main() -> None:
-    dest_dir = DEFAULT_DEST
+    dest_dir = os.path.abspath(DEFAULT_DEST)
     if len(sys.argv) > 1:
         dest_dir = os.path.abspath(sys.argv[1])
 
@@ -142,13 +151,13 @@ def main() -> None:
     print("\n--- 1. Downloading Metadata & Tokenizer ---")
     for f in METADATA_FILES:
         url = f"{BASE_URL}/{f}"
-        dest = os.path.join(dest_dir, f)
+        dest = resolve_safe_path(dest_dir, f)
         download_small_file(url, dest, f)
 
     print("\n--- 2. Downloading SafeTensors Shards ---")
     for f in LARGE_FILES:
         url = f"{BASE_URL}/{f}"
-        dest = os.path.join(dest_dir, f)
+        dest = resolve_safe_path(dest_dir, f)
         download_large_file_parallel(url, dest, f)
 
     print("\n=== All Qwen3-1.7B files downloaded successfully! ===")

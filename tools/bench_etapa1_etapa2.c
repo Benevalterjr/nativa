@@ -287,12 +287,25 @@ void init_lut5() {
     }
 }
 
+static uint32_t g_bench_rng = 1337;
+static inline uint32_t fast_rand(void) {
+    g_bench_rng ^= g_bench_rng << 13;
+    g_bench_rng ^= g_bench_rng >> 17;
+    g_bench_rng ^= g_bench_rng << 5;
+    return g_bench_rng;
+}
+
 // Microbenchmark for decoding 5 trits/byte via LUT
 double benchmark_decode_5trit(int num_weights) {
     int num_bytes = num_weights / 5;
     uint8_t* encoded = (uint8_t*)malloc(num_bytes);
     int8_t* decoded = (int8_t*)malloc(num_weights);
-    for (int i = 0; i < num_bytes; i++) encoded[i] = (uint8_t)(rand() % 243);
+    if (!encoded || !decoded) {
+        free(encoded);
+        free(decoded);
+        return 0.0;
+    }
+    for (int i = 0; i < num_bytes; i++) encoded[i] = (uint8_t)(fast_rand() % 243);
 
     double t0 = omp_get_wtime();
     for (int it = 0; it < 50; it++) {
