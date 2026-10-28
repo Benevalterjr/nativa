@@ -30,10 +30,12 @@ tests/*.c
 *.natq4
 *.parquet
 *.gguf
+*.raw
 data/*.safetensors
 data/*.bin
 data/*.natq4
 data/*.parquet
+data/*.raw
 
 # Manter arquivos leves essenciais de dados/configuração no git
 !data/tokenizer_qwen.json
@@ -54,3 +56,6 @@ desktop.ini
 tools/llama_cpp/
 chat.html
 
+
+data/qwen3_1.7b/
+data/branch_dev/

@@ -810,6 +810,20 @@ static inline void nat_print_mat_f64(const double* A, int64_t M, int64_t N) {
     }
     printf("]");
 }
+static inline void nat_print_vec_i64(const int64_t* v, int64_t n) {
+    printf("[");
+    for (int64_t i = 0; i < n; i++) printf("%lld%s", (long long)v[i], (i < n - 1) ? ", " : "");
+    printf("]");
+}
+static inline void nat_print_mat_i64(const int64_t* A, int64_t M, int64_t N) {
+    printf("[");
+    for (int64_t i = 0; i < M; i++) {
+        printf("[");
+        for (int64_t j = 0; j < N; j++) printf("%lld%s", (long long)A[i * N + j], (j < N - 1) ? ", " : "");
+        printf("]%s", (i < M - 1) ? ", " : "");
+    }
+    printf("]");
+}
 
 typedef struct {
     const char* val_str;
@@ -887,6 +901,816 @@ static inline NatResult nat_read_file_safe(const char* path) {
 static inline const char* nat_read_file(const char* path) {
     NatResult r = nat_read_file_safe(path);
     return nat_unwrap_str(r);
+}
+
+/* ------------------------------------------------------------------------- */
+/* 6. 256-Bit Fixed-Point and Interval Arithmetic (High Altitude Steps)      */
+/* ------------------------------------------------------------------------- */
+
+#if defined(_MSC_VER) && (defined(_M_X64) || defined(_M_ARM64))
+#include <intrin.h>
+#endif
+
+#ifndef NAT_FIX256_DEFAULT_FRAC
+#define NAT_FIX256_DEFAULT_FRAC 64
+#endif
+
+typedef struct {
+    uint64_t limbs[4]; /* limbs[0]=least significant 64 bits, limbs[3]=most significant */
+    int32_t frac_bits; /* Default 64: Q192.64 */
+    int8_t sign;       /* +1 for >= 0, -1 for < 0 */
+} nat_fix256_t;
+
+typedef struct {
+    nat_fix256_t lo;
+    nat_fix256_t hi;
+} nat_interval256_t;
+
+static inline uint64_t nat_add_carry(uint64_t a, uint64_t b, uint64_t carry_in, uint64_t* carry_out) {
+    uint64_t s = a + carry_in;
+    uint64_t c1 = (s < a) ? 1ULL : 0ULL;
+    uint64_t res = s + b;
+    uint64_t c2 = (res < s) ? 1ULL : 0ULL;
+    *carry_out = c1 + c2;
+    return res;
+}
+
+static inline uint64_t nat_sub_borrow(uint64_t a, uint64_t b, uint64_t borrow_in, uint64_t* borrow_out) {
+    uint64_t s = a - borrow_in;
+    uint64_t b1 = (a < borrow_in) ? 1ULL : 0ULL;
+    uint64_t res = s - b;
+    uint64_t b2 = (s < b) ? 1ULL : 0ULL;
+    *borrow_out = b1 + b2;
+    return res;
+}
+
+static inline uint64_t nat_mul64(uint64_t u, uint64_t v, uint64_t* hi) {
+#if defined(_MSC_VER) && (defined(_M_X64) || defined(_M_ARM64))
+    return _umul128(u, v, hi);
+#elif defined(__SIZEOF_INT128__)
+    unsigned __int128 prod = (unsigned __int128)u * (unsigned __int128)v;
+    *hi = (uint64_t)(prod >> 64);
+    return (uint64_t)prod;
+#else
+    uint64_t u0 = u & 0xFFFFFFFFULL, u1 = u >> 32;
+    uint64_t v0 = v & 0xFFFFFFFFULL, v1 = v >> 32;
+    uint64_t p00 = u0 * v0;
+    uint64_t p01 = u0 * v1;
+    uint64_t p10 = u1 * v0;
+    uint64_t p11 = u1 * v1;
+    uint64_t mid = p01 + (p00 >> 32);
+    uint64_t mid_c = (mid < p01) ? 1ULL : 0ULL;
+    mid += p10;
+    if (mid < p10) mid_c++;
+    *hi = p11 + (mid_c << 32) + (mid >> 32);
+    return (mid << 32) | (p00 & 0xFFFFFFFFULL);
+#endif
+}
+
+static inline bool nat_u256_is_zero(const uint64_t a[4]) {
+    return (a[0] | a[1] | a[2] | a[3]) == 0ULL;
+}
+
+static inline int nat_u256_cmp(const uint64_t a[4], const uint64_t b[4]) {
+    for (int i = 3; i >= 0; i--) {
+        if (a[i] > b[i]) return 1;
+        if (a[i] < b[i]) return -1;
+    }
+    return 0;
+}
+
+static inline uint64_t nat_u256_add(const uint64_t a[4], const uint64_t b[4], uint64_t out[4]) {
+    uint64_t carry = 0;
+    for (int i = 0; i < 4; i++) {
+        uint64_t c = 0;
+        out[i] = nat_add_carry(a[i], b[i], carry, &c);
+        carry = c;
+    }
+    return carry;
+}
+
+static inline uint64_t nat_u256_sub(const uint64_t a[4], const uint64_t b[4], uint64_t out[4]) {
+    uint64_t borrow = 0;
+    for (int i = 0; i < 4; i++) {
+        uint64_t br = 0;
+        out[i] = nat_sub_borrow(a[i], b[i], borrow, &br);
+        borrow = br;
+    }
+    return borrow;
+}
+
+static inline void nat_u256_shift_left_1(uint64_t x[4]) {
+    uint64_t c0 = x[0] >> 63;
+    uint64_t c1 = x[1] >> 63;
+    uint64_t c2 = x[2] >> 63;
+    x[3] = (x[3] << 1) | c2;
+    x[2] = (x[2] << 1) | c1;
+    x[1] = (x[1] << 1) | c0;
+    x[0] = (x[0] << 1);
+}
+
+static inline void nat_u256_shift_left(const uint64_t in[4], int shift, uint64_t out[4]) {
+    if (shift <= 0) {
+        memcpy(out, in, 4 * sizeof(uint64_t));
+        return;
+    }
+    if (shift >= 256) {
+        memset(out, 0, 4 * sizeof(uint64_t));
+        return;
+    }
+    int w = shift / 64;
+    int b = shift % 64;
+    uint64_t tmp[4] = {0};
+    for (int i = 3; i >= 0; i--) {
+        int src = i - w;
+        if (src >= 0) {
+            uint64_t low = in[src];
+            uint64_t prev = (src > 0) ? in[src - 1] : 0ULL;
+            if (b == 0) {
+                tmp[i] = low;
+            } else {
+                tmp[i] = (low << b) | (prev >> (64 - b));
+            }
+        }
+    }
+    memcpy(out, tmp, 4 * sizeof(uint64_t));
+}
+
+static inline void nat_u256_shift_right(const uint64_t in[4], int shift, uint64_t out[4]) {
+    if (shift <= 0) {
+        memcpy(out, in, 4 * sizeof(uint64_t));
+        return;
+    }
+    if (shift >= 256) {
+        memset(out, 0, 4 * sizeof(uint64_t));
+        return;
+    }
+    int w = shift / 64;
+    int b = shift % 64;
+    uint64_t tmp[4] = {0};
+    for (int i = 0; i < 4; i++) {
+        int src = i + w;
+        if (src < 4) {
+            uint64_t low = in[src];
+            uint64_t high = (src + 1 < 4) ? in[src + 1] : 0ULL;
+            if (b == 0) {
+                tmp[i] = low;
+            } else {
+                tmp[i] = (low >> b) | (high << (64 - b));
+            }
+        }
+    }
+    memcpy(out, tmp, 4 * sizeof(uint64_t));
+}
+
+static inline uint64_t nat_u256_mul_64(const uint64_t a[4], uint64_t b, uint64_t out[4]) {
+    uint64_t carry = 0;
+    for (int i = 0; i < 4; i++) {
+        uint64_t hi = 0;
+        uint64_t lo = nat_mul64(a[i], b, &hi);
+        uint64_t c1 = 0;
+        uint64_t s = nat_add_carry(lo, carry, 0, &c1);
+        out[i] = s;
+        carry = hi + c1;
+    }
+    return carry;
+}
+
+static inline uint64_t nat_u256_add_64(uint64_t a[4], uint64_t b) {
+    uint64_t carry = b;
+    for (int i = 0; i < 4 && carry > 0; i++) {
+        uint64_t c = 0;
+        a[i] = nat_add_carry(a[i], carry, 0, &c);
+        carry = c;
+    }
+    return carry;
+}
+
+static inline void nat_u256_mul_full(const uint64_t a[4], const uint64_t b[4], uint64_t prod[8]) {
+    memset(prod, 0, 8 * sizeof(uint64_t));
+    for (int i = 0; i < 4; i++) {
+        uint64_t carry = 0;
+        for (int j = 0; j < 4; j++) {
+            uint64_t hi = 0;
+            uint64_t lo = nat_mul64(a[i], b[j], &hi);
+            uint64_t c1 = 0, c2 = 0;
+            uint64_t s1 = nat_add_carry(prod[i + j], lo, 0, &c1);
+            uint64_t s2 = nat_add_carry(s1, carry, 0, &c2);
+            prod[i + j] = s2;
+            carry = hi + c1 + c2;
+        }
+        for (int k = i + 4; k < 8 && carry > 0; k++) {
+            uint64_t c = 0;
+            prod[k] = nat_add_carry(prod[k], carry, 0, &c);
+            carry = c;
+        }
+    }
+}
+
+static inline void nat_u512_shift_right(const uint64_t in[8], int shift_bits, uint64_t out[4]) {
+    if (shift_bits <= 0) {
+        memcpy(out, in, 4 * sizeof(uint64_t));
+        return;
+    }
+    int w = shift_bits / 64;
+    int b = shift_bits % 64;
+    for (int i = 0; i < 4; i++) {
+        int idx = i + w;
+        uint64_t low = (idx < 8) ? in[idx] : 0ULL;
+        uint64_t high = (idx + 1 < 8) ? in[idx + 1] : 0ULL;
+        if (b == 0) {
+            out[i] = low;
+        } else {
+            out[i] = (low >> b) | (high << (64 - b));
+        }
+    }
+}
+
+static inline void nat_u256_divmod(const uint64_t num[4], const uint64_t den[4], uint64_t quot[4], uint64_t rem[4]) {
+    memset(quot, 0, 4 * sizeof(uint64_t));
+    memset(rem, 0, 4 * sizeof(uint64_t));
+    if (nat_u256_is_zero(den)) return;
+    for (int i = 255; i >= 0; i--) {
+        nat_u256_shift_left_1(rem);
+        int bit = (int)((num[i / 64] >> (i % 64)) & 1ULL);
+        rem[0] |= (uint64_t)bit;
+        if (nat_u256_cmp(rem, den) >= 0) {
+            nat_u256_sub(rem, den, rem);
+            quot[i / 64] |= (1ULL << (i % 64));
+        }
+    }
+}
+
+static inline void nat_u256_shift_left_to_512(const uint64_t in[4], int shift, uint64_t out[8]) {
+    memset(out, 0, 8 * sizeof(uint64_t));
+    if (shift < 0 || shift >= 512) return;
+    int w = shift / 64;
+    int b = shift % 64;
+    for (int i = 0; i < 4; i++) {
+        int idx = i + w;
+        if (idx < 8) {
+            if (b == 0) {
+                out[idx] |= in[i];
+            } else {
+                out[idx] |= (in[i] << b);
+                if (idx + 1 < 8) {
+                    out[idx + 1] |= (in[i] >> (64 - b));
+                }
+            }
+        }
+    }
+}
+
+static inline void nat_u512_div_256(const uint64_t num[8], const uint64_t den[4], uint64_t quot[4]) {
+    memset(quot, 0, 4 * sizeof(uint64_t));
+    if (nat_u256_is_zero(den)) return;
+    int top = 7;
+    while (top >= 0 && num[top] == 0) top--;
+    if (top < 0) return;
+    int top_bit = top * 64 + 63;
+    while (top_bit >= 0 && !((num[top_bit / 64] >> (top_bit % 64)) & 1ULL)) {
+        top_bit--;
+    }
+    uint64_t rem[4] = {0};
+    for (int i = top_bit; i >= 0; i--) {
+        nat_u256_shift_left_1(rem);
+        int bit = (int)((num[i / 64] >> (i % 64)) & 1ULL);
+        rem[0] |= (uint64_t)bit;
+        if (nat_u256_cmp(rem, den) >= 0) {
+            nat_u256_sub(rem, den, rem);
+            if (i < 256) {
+                quot[i / 64] |= (1ULL << (i % 64));
+            }
+        }
+    }
+}
+
+static inline nat_fix256_t nat_fix256_zero(void) {
+    nat_fix256_t r;
+    memset(&r, 0, sizeof(r));
+    r.frac_bits = NAT_FIX256_DEFAULT_FRAC;
+    r.sign = 1;
+    return r;
+}
+
+static inline nat_fix256_t nat_fix256_from_parts(int8_t sign, uint64_t l0, uint64_t l1, uint64_t l2, uint64_t l3, int32_t frac_bits) {
+    nat_fix256_t r;
+    r.limbs[0] = l0; r.limbs[1] = l1; r.limbs[2] = l2; r.limbs[3] = l3;
+    r.frac_bits = frac_bits > 0 ? frac_bits : NAT_FIX256_DEFAULT_FRAC;
+    r.sign = (sign >= 0) ? 1 : -1;
+    if (nat_u256_is_zero(r.limbs)) r.sign = 1;
+    return r;
+}
+
+static inline nat_fix256_t nat_fix256_from_i64(int64_t val, int32_t frac_bits) {
+    nat_fix256_t r = nat_fix256_zero();
+    if (frac_bits >= 0) r.frac_bits = frac_bits;
+    if (val < 0) {
+        r.sign = -1;
+        val = -val;
+    } else {
+        r.sign = 1;
+    }
+    uint64_t uval = (uint64_t)val;
+    uint64_t raw[4] = {uval, 0, 0, 0};
+    nat_u256_shift_left(raw, r.frac_bits, r.limbs);
+    return r;
+}
+
+static inline nat_fix256_t nat_fix256_from_f64(double val, int32_t frac_bits) {
+    nat_fix256_t r = nat_fix256_zero();
+    if (frac_bits >= 0) r.frac_bits = frac_bits;
+    if (val < 0.0) {
+        r.sign = -1;
+        val = -val;
+    } else {
+        r.sign = 1;
+    }
+    double scale = ldexp(1.0, r.frac_bits);
+    double scaled = val * scale;
+    double int_part = 0.0;
+    double frac_part = modf(scaled, &int_part);
+    if (frac_part >= 0.5) int_part += 1.0;
+    double cur = int_part;
+    for (int i = 0; i < 4; i++) {
+        double rem = fmod(cur, 18446744073709551616.0);
+        r.limbs[i] = (uint64_t)rem;
+        cur = floor(cur / 18446744073709551616.0);
+    }
+    return r;
+}
+
+static inline nat_fix256_t nat_fix256_from_str(const char* s, int32_t frac_bits) {
+    nat_fix256_t r = nat_fix256_zero();
+    if (frac_bits >= 0) r.frac_bits = frac_bits;
+    if (!s) return r;
+    while (*s == ' ' || *s == '\t') s++;
+    int8_t sgn = 1;
+    if (*s == '-') { sgn = -1; s++; }
+    else if (*s == '+') { s++; }
+
+    uint64_t int_val[4] = {0};
+    while (*s >= '0' && *s <= '9') {
+        nat_u256_mul_64(int_val, 10, int_val);
+        nat_u256_add_64(int_val, (uint64_t)(*s - '0'));
+        s++;
+    }
+
+    uint64_t frac_val[4] = {0};
+    uint64_t frac_den[4] = {1, 0, 0, 0};
+    if (*s == '.') {
+        s++;
+        while (*s >= '0' && *s <= '9') {
+            nat_u256_mul_64(frac_val, 10, frac_val);
+            nat_u256_add_64(frac_val, (uint64_t)(*s - '0'));
+            nat_u256_mul_64(frac_den, 10, frac_den);
+            s++;
+        }
+    }
+
+    nat_u256_shift_left(int_val, r.frac_bits, r.limbs);
+
+    if (!nat_u256_is_zero(frac_val)) {
+        uint64_t f_scaled[4] = {0};
+        nat_u256_shift_left(frac_val, r.frac_bits, f_scaled);
+        uint64_t f_part[4] = {0}, rem[4] = {0};
+        nat_u256_divmod(f_scaled, frac_den, f_part, rem);
+        nat_u256_add(r.limbs, f_part, r.limbs);
+    }
+
+    if (*s == 'e' || *s == 'E') {
+        s++;
+        int exp_sgn = 1;
+        if (*s == '-') { exp_sgn = -1; s++; }
+        else if (*s == '+') { s++; }
+        int exp_val = 0;
+        while (*s >= '0' && *s <= '9') {
+            exp_val = exp_val * 10 + (*s - '0');
+            s++;
+        }
+        if (exp_sgn > 0) {
+            for (int k = 0; k < exp_val; k++) {
+                nat_u256_mul_64(r.limbs, 10, r.limbs);
+            }
+        } else {
+            uint64_t ten[4] = {10, 0, 0, 0};
+            uint64_t q[4] = {0}, rem[4] = {0};
+            for (int k = 0; k < exp_val; k++) {
+                nat_u256_divmod(r.limbs, ten, q, rem);
+                memcpy(r.limbs, q, 4 * sizeof(uint64_t));
+            }
+        }
+    }
+
+    r.sign = sgn;
+    if (nat_u256_is_zero(r.limbs)) r.sign = 1;
+    return r;
+}
+
+static inline bool nat_fix256_is_zero(nat_fix256_t a) {
+    return nat_u256_is_zero(a.limbs);
+}
+
+static inline int nat_fix256_cmp(nat_fix256_t a, nat_fix256_t b) {
+    if (nat_fix256_is_zero(a) && nat_fix256_is_zero(b)) return 0;
+    if (a.sign != b.sign) return (a.sign > b.sign) ? 1 : -1;
+    int c = nat_u256_cmp(a.limbs, b.limbs);
+    return (a.sign > 0) ? c : -c;
+}
+
+static inline bool nat_fix256_eq(nat_fix256_t a, nat_fix256_t b) { return nat_fix256_cmp(a, b) == 0; }
+static inline bool nat_fix256_lt(nat_fix256_t a, nat_fix256_t b) { return nat_fix256_cmp(a, b) < 0; }
+static inline bool nat_fix256_le(nat_fix256_t a, nat_fix256_t b) { return nat_fix256_cmp(a, b) <= 0; }
+static inline bool nat_fix256_gt(nat_fix256_t a, nat_fix256_t b) { return nat_fix256_cmp(a, b) > 0; }
+static inline bool nat_fix256_ge(nat_fix256_t a, nat_fix256_t b) { return nat_fix256_cmp(a, b) >= 0; }
+
+static inline nat_fix256_t nat_fix256_neg(nat_fix256_t a) {
+    nat_fix256_t r = a;
+    if (!nat_fix256_is_zero(r)) r.sign = -r.sign;
+    return r;
+}
+
+static inline nat_fix256_t nat_fix256_abs(nat_fix256_t a) {
+    nat_fix256_t r = a;
+    r.sign = 1;
+    return r;
+}
+
+static inline nat_fix256_t nat_fix256_add(nat_fix256_t a, nat_fix256_t b) {
+    nat_fix256_t r = nat_fix256_zero();
+    r.frac_bits = a.frac_bits;
+    if (a.sign == b.sign) {
+        r.sign = a.sign;
+        nat_u256_add(a.limbs, b.limbs, r.limbs);
+    } else {
+        int c = nat_u256_cmp(a.limbs, b.limbs);
+        if (c >= 0) {
+            r.sign = a.sign;
+            nat_u256_sub(a.limbs, b.limbs, r.limbs);
+        } else {
+            r.sign = b.sign;
+            nat_u256_sub(b.limbs, a.limbs, r.limbs);
+        }
+    }
+    if (nat_u256_is_zero(r.limbs)) r.sign = 1;
+    return r;
+}
+
+static inline nat_fix256_t nat_fix256_sub(nat_fix256_t a, nat_fix256_t b) {
+    return nat_fix256_add(a, nat_fix256_neg(b));
+}
+
+static inline nat_fix256_t nat_fix256_mul(nat_fix256_t a, nat_fix256_t b) {
+    nat_fix256_t r = nat_fix256_zero();
+    r.frac_bits = a.frac_bits;
+    r.sign = a.sign * b.sign;
+    uint64_t prod[8] = {0};
+    nat_u256_mul_full(a.limbs, b.limbs, prod);
+    nat_u512_shift_right(prod, r.frac_bits, r.limbs);
+    if (nat_u256_is_zero(r.limbs)) r.sign = 1;
+    return r;
+}
+
+static inline nat_fix256_t nat_fix256_div(nat_fix256_t a, nat_fix256_t b) {
+    nat_fix256_t r = nat_fix256_zero();
+    r.frac_bits = a.frac_bits;
+    if (nat_fix256_is_zero(b)) return r;
+    r.sign = a.sign * b.sign;
+    uint64_t num[8];
+    nat_u256_shift_left_to_512(a.limbs, r.frac_bits, num);
+    nat_u512_div_256(num, b.limbs, r.limbs);
+    if (nat_u256_is_zero(r.limbs)) r.sign = 1;
+    return r;
+}
+
+static inline int64_t nat_fix256_to_i64(nat_fix256_t a) {
+    uint64_t int_part[4] = {0};
+    nat_u256_shift_right(a.limbs, a.frac_bits, int_part);
+    int64_t val = (int64_t)int_part[0];
+    return (a.sign < 0) ? -val : val;
+}
+
+static inline double nat_fix256_to_f64(nat_fix256_t a) {
+    double scale = ldexp(1.0, -a.frac_bits);
+    double total = 0.0;
+    double limb_scale = 1.0;
+    for (int i = 0; i < 4; i++) {
+        total += (double)a.limbs[i] * limb_scale;
+        limb_scale *= 18446744073709551616.0;
+    }
+    double res = total * scale;
+    return (a.sign < 0) ? -res : res;
+}
+
+static inline void nat_fix256_to_str(nat_fix256_t a, char* buf, size_t buf_size) {
+    if (!buf || buf_size < 4) return;
+    if (nat_fix256_is_zero(a)) {
+        snprintf(buf, buf_size, "0.000000");
+        return;
+    }
+    uint64_t int_part[4] = {0};
+    nat_u256_shift_right(a.limbs, a.frac_bits, int_part);
+
+    uint64_t frac_part[4] = {0};
+    uint64_t mask[4] = {0};
+    nat_u256_shift_left((const uint64_t[]){1, 0, 0, 0}, a.frac_bits, mask);
+    nat_u256_sub(mask, (const uint64_t[]){1, 0, 0, 0}, mask);
+    for (int i = 0; i < 4; i++) frac_part[i] = a.limbs[i] & mask[i];
+
+    char digits[128];
+    int digit_count = 0;
+    uint64_t ten[4] = {10, 0, 0, 0};
+
+    uint64_t cur[4];
+    memcpy(cur, int_part, 4 * sizeof(uint64_t));
+    if (nat_u256_is_zero(cur)) {
+        digits[digit_count++] = '0';
+    } else {
+        while (!nat_u256_is_zero(cur) && digit_count < 120) {
+            uint64_t q[4] = {0}, rem[4] = {0};
+            nat_u256_divmod(cur, ten, q, rem);
+            digits[digit_count++] = (char)('0' + rem[0]);
+            memcpy(cur, q, 4 * sizeof(uint64_t));
+        }
+    }
+
+    size_t out_idx = 0;
+    if (a.sign < 0 && out_idx + 1 < buf_size) buf[out_idx++] = '-';
+    for (int i = digit_count - 1; i >= 0 && out_idx + 1 < buf_size; i--) {
+        buf[out_idx++] = digits[i];
+    }
+    if (out_idx + 1 < buf_size) buf[out_idx++] = '.';
+
+    uint64_t cur_f[4];
+    memcpy(cur_f, frac_part, 4 * sizeof(uint64_t));
+    for (int step = 0; step < 6 && out_idx + 1 < buf_size; step++) {
+        nat_u256_mul_64(cur_f, 10, cur_f);
+        uint64_t d[4] = {0};
+        nat_u256_shift_right(cur_f, a.frac_bits, d);
+        buf[out_idx++] = (char)('0' + (d[0] % 10));
+        for (int i = 0; i < 4; i++) cur_f[i] &= mask[i];
+    }
+    buf[out_idx] = '\0';
+}
+
+static inline nat_interval256_t nat_interval256_create(nat_fix256_t lo, nat_fix256_t hi) {
+    nat_interval256_t iv;
+    if (nat_fix256_gt(lo, hi)) {
+        iv.lo = hi; iv.hi = lo;
+    } else {
+        iv.lo = lo; iv.hi = hi;
+    }
+    return iv;
+}
+
+static inline bool nat_interval256_contains(nat_interval256_t a, nat_fix256_t x) {
+    return nat_fix256_ge(x, a.lo) && nat_fix256_le(x, a.hi);
+}
+
+static inline nat_interval256_t nat_interval256_point(nat_fix256_t val) {
+    return nat_interval256_create(val, val);
+}
+
+static inline nat_interval256_t nat_interval256_from_val(nat_fix256_t val, nat_fix256_t radius) {
+    return nat_interval256_create(nat_fix256_sub(val, radius), nat_fix256_add(val, radius));
+}
+
+static inline nat_interval256_t nat_interval256_from_str(const char* lo_str, const char* hi_str, int32_t frac_bits) {
+    nat_fix256_t lo = nat_fix256_from_str(lo_str, frac_bits);
+    nat_fix256_t hi = nat_fix256_from_str(hi_str, frac_bits);
+    return nat_interval256_create(lo, hi);
+}
+
+static inline nat_interval256_t nat_interval256_add(nat_interval256_t a, nat_interval256_t b) {
+    return nat_interval256_create(nat_fix256_add(a.lo, b.lo), nat_fix256_add(a.hi, b.hi));
+}
+
+static inline nat_interval256_t nat_interval256_sub(nat_interval256_t a, nat_interval256_t b) {
+    return nat_interval256_create(nat_fix256_sub(a.lo, b.hi), nat_fix256_sub(a.hi, b.lo));
+}
+
+static inline nat_interval256_t nat_interval256_mul(nat_interval256_t a, nat_interval256_t b) {
+    nat_fix256_t p1 = nat_fix256_mul(a.lo, b.lo);
+    nat_fix256_t p2 = nat_fix256_mul(a.lo, b.hi);
+    nat_fix256_t p3 = nat_fix256_mul(a.hi, b.lo);
+    nat_fix256_t p4 = nat_fix256_mul(a.hi, b.hi);
+    nat_fix256_t min_p = p1, max_p = p1;
+    if (nat_fix256_lt(p2, min_p)) min_p = p2;
+    if (nat_fix256_gt(p2, max_p)) max_p = p2;
+    if (nat_fix256_lt(p3, min_p)) min_p = p3;
+    if (nat_fix256_gt(p3, max_p)) max_p = p3;
+    if (nat_fix256_lt(p4, min_p)) min_p = p4;
+    if (nat_fix256_gt(p4, max_p)) max_p = p4;
+    return nat_interval256_create(min_p, max_p);
+}
+
+static inline nat_interval256_t nat_interval256_mul_scalar(nat_interval256_t a, nat_fix256_t s) {
+    if (nat_fix256_ge(s, nat_fix256_zero())) {
+        return nat_interval256_create(nat_fix256_mul(a.lo, s), nat_fix256_mul(a.hi, s));
+    } else {
+        return nat_interval256_create(nat_fix256_mul(a.hi, s), nat_fix256_mul(a.lo, s));
+    }
+}
+
+static inline nat_interval256_t nat_interval256_div_scalar(nat_interval256_t a, nat_fix256_t s) {
+    if (nat_fix256_is_zero(s)) {
+        return nat_interval256_create(nat_fix256_zero(), nat_fix256_zero());
+    }
+    if (nat_fix256_ge(s, nat_fix256_zero())) {
+        return nat_interval256_create(nat_fix256_div(a.lo, s), nat_fix256_div(a.hi, s));
+    } else {
+        return nat_interval256_create(nat_fix256_div(a.hi, s), nat_fix256_div(a.lo, s));
+    }
+}
+
+static inline nat_interval256_t nat_interval256_div(nat_interval256_t a, nat_interval256_t b) {
+    if (nat_interval256_contains(b, nat_fix256_zero())) {
+        return nat_interval256_create(nat_fix256_zero(), nat_fix256_zero());
+    }
+    nat_fix256_t p1 = nat_fix256_div(a.lo, b.lo);
+    nat_fix256_t p2 = nat_fix256_div(a.lo, b.hi);
+    nat_fix256_t p3 = nat_fix256_div(a.hi, b.lo);
+    nat_fix256_t p4 = nat_fix256_div(a.hi, b.hi);
+    nat_fix256_t min_p = p1, max_p = p1;
+    if (nat_fix256_lt(p2, min_p)) min_p = p2;
+    if (nat_fix256_gt(p2, max_p)) max_p = p2;
+    if (nat_fix256_lt(p3, min_p)) min_p = p3;
+    if (nat_fix256_gt(p3, max_p)) max_p = p3;
+    if (nat_fix256_lt(p4, min_p)) min_p = p4;
+    if (nat_fix256_gt(p4, max_p)) max_p = p4;
+    return nat_interval256_create(min_p, max_p);
+}
+
+static inline nat_interval256_t nat_interval256_neg(nat_interval256_t a) {
+    return nat_interval256_create(nat_fix256_neg(a.hi), nat_fix256_neg(a.lo));
+}
+
+static inline nat_fix256_t nat_interval256_width(nat_interval256_t a) {
+    return nat_fix256_sub(a.hi, a.lo);
+}
+
+static inline nat_fix256_t nat_interval256_mid(nat_interval256_t a) {
+    nat_fix256_t sum = nat_fix256_add(a.lo, a.hi);
+    nat_fix256_t two = nat_fix256_from_i64(2, a.lo.frac_bits);
+    return nat_fix256_div(sum, two);
+}
+
+static inline bool nat_interval256_is_coherent(nat_interval256_t a, nat_fix256_t max_width) {
+    nat_fix256_t w = nat_interval256_width(a);
+    return nat_fix256_le(w, max_width);
+}
+
+static inline nat_interval256_t nat_interval256_step(nat_interval256_t pos, nat_interval256_t vel, nat_fix256_t dt) {
+    nat_interval256_t delta = nat_interval256_mul_scalar(vel, dt);
+    return nat_interval256_add(pos, delta);
+}
+
+static inline nat_interval256_t nat_interval256_simulate_steps_val(nat_interval256_t pos, nat_interval256_t vel, nat_fix256_t dt, int64_t num_steps) {
+    nat_interval256_t delta = nat_interval256_mul_scalar(vel, dt);
+    for (int64_t i = 0; i < num_steps; i++) {
+        pos = nat_interval256_add(pos, delta);
+    }
+    return pos;
+}
+
+static inline void nat_interval256_to_str(nat_interval256_t a, char* buf, size_t buf_size) {
+    if (!buf || buf_size < 8) return;
+    char b_lo[128], b_hi[128];
+    nat_fix256_to_str(a.lo, b_lo, sizeof(b_lo));
+    nat_fix256_to_str(a.hi, b_hi, sizeof(b_hi));
+    snprintf(buf, buf_size, "[%s, %s]", b_lo, b_hi);
+}
+
+static inline const char* nat_fix256_as_str(nat_fix256_t a) {
+    static char bufs[8][128];
+    static int idx = 0;
+    char* b = bufs[(idx++) & 7];
+    nat_fix256_to_str(a, b, 128);
+    return b;
+}
+
+static inline const char* nat_interval256_as_str(nat_interval256_t a) {
+    static char bufs[8][256];
+    static int idx = 0;
+    char* b = bufs[(idx++) & 7];
+    nat_interval256_to_str(a, b, 256);
+    return b;
+}
+
+static inline void nat_print_fix256(nat_fix256_t a) {
+    printf("%s", nat_fix256_as_str(a));
+}
+
+static inline void nat_print_interval256(nat_interval256_t a) {
+    printf("%s", nat_interval256_as_str(a));
+}
+
+/* NAT_API exported C kernels for ctypes FFI */
+NAT_API void nat_c_fix256_from_str(const char* s, int32_t frac_bits, nat_fix256_t* out) {
+    if (out) *out = nat_fix256_from_str(s, frac_bits);
+}
+
+NAT_API void nat_c_fix256_to_str(const nat_fix256_t* a, char* buf, size_t buf_size) {
+    if (a && buf) nat_fix256_to_str(*a, buf, buf_size);
+}
+
+NAT_API void nat_c_fix256_from_i64(int64_t val, int32_t frac_bits, nat_fix256_t* out) {
+    if (out) *out = nat_fix256_from_i64(val, frac_bits);
+}
+
+NAT_API void nat_c_fix256_from_f64(double val, int32_t frac_bits, nat_fix256_t* out) {
+    if (out) *out = nat_fix256_from_f64(val, frac_bits);
+}
+
+NAT_API void nat_c_fix256_to_f64(const nat_fix256_t* a, double* out) {
+    if (a && out) *out = nat_fix256_to_f64(*a);
+}
+
+NAT_API void nat_c_fix256_add(const nat_fix256_t* a, const nat_fix256_t* b, nat_fix256_t* out) {
+    if (a && b && out) *out = nat_fix256_add(*a, *b);
+}
+
+NAT_API void nat_c_fix256_sub(const nat_fix256_t* a, const nat_fix256_t* b, nat_fix256_t* out) {
+    if (a && b && out) *out = nat_fix256_sub(*a, *b);
+}
+
+NAT_API void nat_c_fix256_mul(const nat_fix256_t* a, const nat_fix256_t* b, nat_fix256_t* out) {
+    if (a && b && out) *out = nat_fix256_mul(*a, *b);
+}
+
+NAT_API void nat_c_fix256_div(const nat_fix256_t* a, const nat_fix256_t* b, nat_fix256_t* out) {
+    if (a && b && out) *out = nat_fix256_div(*a, *b);
+}
+
+NAT_API int32_t nat_c_fix256_cmp(const nat_fix256_t* a, const nat_fix256_t* b) {
+    if (!a || !b) return 0;
+    return (int32_t)nat_fix256_cmp(*a, *b);
+}
+
+NAT_API void nat_c_interval256_create(const nat_fix256_t* lo, const nat_fix256_t* hi, nat_interval256_t* out) {
+    if (lo && hi && out) *out = nat_interval256_create(*lo, *hi);
+}
+
+NAT_API void nat_c_interval256_add(const nat_interval256_t* a, const nat_interval256_t* b, nat_interval256_t* out) {
+    if (a && b && out) *out = nat_interval256_add(*a, *b);
+}
+
+NAT_API void nat_c_interval256_sub(const nat_interval256_t* a, const nat_interval256_t* b, nat_interval256_t* out) {
+    if (a && b && out) *out = nat_interval256_sub(*a, *b);
+}
+
+NAT_API void nat_c_interval256_mul(const nat_interval256_t* a, const nat_interval256_t* b, nat_interval256_t* out) {
+    if (a && b && out) *out = nat_interval256_mul(*a, *b);
+}
+
+NAT_API void nat_c_interval256_mul_scalar(const nat_interval256_t* a, const nat_fix256_t* s, nat_interval256_t* out) {
+    if (a && s && out) *out = nat_interval256_mul_scalar(*a, *s);
+}
+
+NAT_API void nat_c_interval256_step(const nat_interval256_t* pos, const nat_interval256_t* vel, const nat_fix256_t* dt, nat_interval256_t* out) {
+    if (pos && vel && dt && out) *out = nat_interval256_step(*pos, *vel, *dt);
+}
+
+NAT_API void nat_c_interval256_width(const nat_interval256_t* a, nat_fix256_t* out) {
+    if (a && out) *out = nat_interval256_width(*a);
+}
+
+NAT_API void nat_c_interval256_mid(const nat_interval256_t* a, nat_fix256_t* out) {
+    if (a && out) *out = nat_interval256_mid(*a);
+}
+
+NAT_API bool nat_c_interval256_contains(const nat_interval256_t* a, const nat_fix256_t* x) {
+    if (!a || !x) return false;
+    return nat_interval256_contains(*a, *x);
+}
+
+NAT_API bool nat_c_interval256_is_coherent(const nat_interval256_t* a, const nat_fix256_t* max_width) {
+    if (!a || !max_width) return false;
+    return nat_interval256_is_coherent(*a, *max_width);
+}
+
+NAT_API void nat_c_interval256_to_str(const nat_interval256_t* a, char* buf, size_t buf_size) {
+    if (a && buf) nat_interval256_to_str(*a, buf, buf_size);
+}
+
+NAT_API void nat_c_interval256_simulate_steps(nat_interval256_t* pos, const nat_interval256_t* vel, const nat_fix256_t* dt, int64_t num_steps) {
+    if (!pos || !vel || !dt || num_steps <= 0) return;
+    nat_interval256_t delta = nat_interval256_mul_scalar(*vel, *dt);
+    for (int64_t i = 0; i < num_steps; i++) {
+        *pos = nat_interval256_add(*pos, delta);
+    }
+}
+
+NAT_API void nat_c_interval256_div(const nat_interval256_t* a, const nat_interval256_t* b, nat_interval256_t* out) {
+    if (a && b && out) *out = nat_interval256_div(*a, *b);
+}
+
+NAT_API void nat_c_interval256_div_scalar(const nat_interval256_t* a, const nat_fix256_t* s, nat_interval256_t* out) {
+    if (a && s && out) *out = nat_interval256_div_scalar(*a, *s);
+}
+
+NAT_API void nat_c_interval256_neg(const nat_interval256_t* a, nat_interval256_t* out) {
+    if (a && out) *out = nat_interval256_neg(*a);
 }
 
 #endif /* NATIVA_RT_H */

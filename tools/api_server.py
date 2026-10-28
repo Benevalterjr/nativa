@@ -25,7 +25,7 @@ MARKER_TURN_DONE = "[TURN_DONE"
 MSG_ENGINE_NOT_READY = "Engine not initialized."
 STATUS_503_RESPONSES = {503: {"description": MSG_ENGINE_NOT_READY}}
 PREFIX_ASSISTANT_THINK = "<|im_start|>assistant\n<think>\n"
-PREFIX_ASSISTANT_NO_THINK = "<|im_start|>assistant\n<think>\n</think>\n"
+PREFIX_ASSISTANT_NO_THINK = "<|im_start|>assistant\n"
 DEFAULT_MODEL_NAME = "qwen3-0.6b-natq4"
 DEFAULT_CHAT_EXAMPLE_MSG = "Hello! Briefly explain what the Nativa engine is."
 DEFAULT_RAG_CONTEXT = "Nativa is a high-efficiency C99 language and runtime for CPU LLM inference."
@@ -45,9 +45,10 @@ import nativa
 from tools.nativa_bundle import write_vocab_file
 
 try:
-    from fastapi import FastAPI, HTTPException
+    from fastapi import FastAPI, HTTPException, Request
+    from fastapi.exceptions import RequestValidationError
     from fastapi.middleware.cors import CORSMiddleware
-    from fastapi.responses import StreamingResponse
+    from fastapi.responses import StreamingResponse, JSONResponse
     from pydantic import BaseModel, ConfigDict, Field
 except ImportError:
     print("[ERROR] FastAPI and Uvicorn are required: pip install fastapi uvicorn pydantic")
@@ -64,8 +65,11 @@ DEFAULT_ENGINE_PATH = os.environ.get("ENGINE_PATH", os.path.join(ROOT_DIR, "tool
 
 
 def sanitize_chatml(text: str) -> str:
-    """Remove special ChatML markers from external inputs to prevent prompt injection."""
-    return text.replace("<|im_start|>", "").replace("<|im_end|>", "")
+    """Remove special ChatML markers from external inputs to prevent prompt injection and clean surrogates."""
+    if not isinstance(text, str):
+        return ""
+    cleaned = text.encode("utf-8", "replace").decode("utf-8", "replace")
+    return cleaned.replace("<|im_start|>", "").replace("<|im_end|>", "")
 
 
 def extract_thinking(text: str) -> Tuple[Optional[str], str]:
@@ -250,6 +254,14 @@ class EngineRunner:
             if not tokens:
                 return
 
+            # Keep prompt strictly within the model's physical window and latency budget
+            MAX_ENGINE_CONTEXT = 1100
+            if len(tokens) > MAX_ENGINE_CONTEXT:
+                print(f"[!] Trimming prompt from {len(tokens)} to {MAX_ENGINE_CONTEXT} tokens to fit C engine window (2048)...", flush=True)
+                tokens = tokens[:300] + tokens[-(MAX_ENGINE_CONTEXT - 300):]
+
+            print(f"[*] Engine: Sending {len(tokens)} tokens to C engine | max_gen: {max_tokens}", flush=True)
+
             cmd = f"RESET\nINPUT {len(tokens)} {max_tokens} " + " ".join(map(str, tokens)) + "\n"
             await asyncio.to_thread(self._write_stdin, cmd)
 
@@ -258,21 +270,31 @@ class EngineRunner:
             fd = self.proc.stdout.fileno()
             decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
 
-            while True:
-                raw = await asyncio.to_thread(os.read, fd, 1024)
-                if not raw:
-                    tail = decoder.decode(b"", final=True)
-                    final_chunk = (buf + tail)[printed_idx:]
-                    if final_chunk:
-                        yield final_chunk
-                    break
+            try:
+                while True:
+                    raw = await asyncio.to_thread(os.read, fd, 1024)
+                    if not raw:
+                        tail = decoder.decode(b"", final=True)
+                        final_chunk = (buf + tail)[printed_idx:]
+                        if final_chunk:
+                            yield final_chunk
+                        break
 
-                buf += decoder.decode(raw, final=False)
-                chunk, printed_idx, is_done = _extract_stream_chunk(buf, printed_idx)
-                if chunk:
-                    yield chunk
-                if is_done:
-                    break
+                    buf += decoder.decode(raw, final=False)
+                    chunk, printed_idx, is_done = _extract_stream_chunk(buf, printed_idx)
+                    if chunk:
+                        yield chunk
+                    if is_done:
+                        break
+            except (GeneratorExit, asyncio.CancelledError):
+                print("[*] Client cancelled turn. Killing stuck engine to reset cleanly...", flush=True)
+                if self.proc:
+                    try:
+                        self.proc.kill()
+                    except Exception:
+                        pass
+                    self.proc = None
+                raise
 
 
 runner: Optional[EngineRunner] = None
@@ -307,69 +329,45 @@ app.add_middleware(
 )
 
 
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request: Request, exc: RequestValidationError):
+    raw_error = str(exc)
+    safe_error = raw_error.encode("utf-8", "replace").decode("utf-8")
+    return JSONResponse(status_code=422, content={"detail": safe_error})
+
+
 # ----------------------------------------------------------------------------
 # DTOs (Pydantic Models)
 # ----------------------------------------------------------------------------
 class ChatMessage(BaseModel):
-    role: Literal["system", "user", "assistant"] = Field(
+    role: str = Field(
         default="user",
         description="Role of the message author in the conversation.",
-        examples=["user"],
     )
-    content: str = Field(
-        default=DEFAULT_CHAT_EXAMPLE_MSG,
-        min_length=1,
+    content: Optional[str] = Field(
+        default="",
         description="Text content of the message.",
-        examples=[DEFAULT_CHAT_EXAMPLE_MSG],
     )
+    name: Optional[str] = None
+    tool_call_id: Optional[str] = None
 
-    model_config = ConfigDict(
-        json_schema_extra={
-            "example": {"role": "user", "content": DEFAULT_CHAT_EXAMPLE_MSG},
-            "examples": [{"role": "user", "content": DEFAULT_CHAT_EXAMPLE_MSG}],
-        }
-    )
+    model_config = ConfigDict(extra="ignore")
 
 
 class ChatCompletionRequest(BaseModel):
-    model: Optional[str] = Field(default=DEFAULT_MODEL_NAME, examples=[DEFAULT_MODEL_NAME])
+    model: Optional[str] = Field(default=DEFAULT_MODEL_NAME)
     messages: List[ChatMessage] = Field(
-        default_factory=lambda: [ChatMessage(role="user", content=DEFAULT_CHAT_EXAMPLE_MSG)],
-        min_length=1,
-        description="List of conversation messages in ChatML format.",
-        examples=[[{"role": "user", "content": DEFAULT_CHAT_EXAMPLE_MSG}]],
+        default_factory=list,
+        description="List of conversation messages.",
     )
     temperature: Optional[float] = Field(default=0.7, ge=0.0, le=2.0)
-    max_tokens: Optional[int] = Field(default=256, ge=1, le=4096)
+    max_tokens: Optional[int] = Field(default=512, ge=1, le=4096)
     stream: Optional[bool] = Field(default=False)
     enable_thinking: Optional[bool] = Field(default=False)
+    tools: Optional[List[Any]] = None
+    tool_choice: Optional[Any] = None
 
-    model_config = ConfigDict(
-        json_schema_extra={
-            "example": {
-                "model": DEFAULT_MODEL_NAME,
-                "messages": [
-                    {"role": "user", "content": DEFAULT_CHAT_EXAMPLE_MSG}
-                ],
-                "temperature": 0.7,
-                "max_tokens": 256,
-                "stream": False,
-                "enable_thinking": False,
-            },
-            "examples": [
-                {
-                    "model": DEFAULT_MODEL_NAME,
-                    "messages": [
-                        {"role": "user", "content": DEFAULT_CHAT_EXAMPLE_MSG}
-                    ],
-                    "temperature": 0.7,
-                    "max_tokens": 256,
-                    "stream": False,
-                    "enable_thinking": False,
-                }
-            ],
-        }
-    )
+    model_config = ConfigDict(extra="ignore")
 
 
 class RagRequest(BaseModel):
@@ -487,6 +485,22 @@ def health():
     raise HTTPException(status_code=503, detail=MSG_ENGINE_NOT_READY)
 
 
+@app.get("/v1/models")
+def list_models():
+    model_id = runner.model_name if runner else DEFAULT_MODEL_NAME
+    return {
+        "object": "list",
+        "data": [
+            {
+                "id": model_id,
+                "object": "model",
+                "created": int(time.time()),
+                "owned_by": "nativa",
+            }
+        ],
+    }
+
+
 async def _stream_chat_chunks(
     runner_inst: EngineRunner,
     prompt: str,
@@ -528,10 +542,40 @@ async def chat_completions(req: ChatCompletionRequest):
     if not runner:
         raise HTTPException(status_code=503, detail=MSG_ENGINE_NOT_READY)
 
-    prompt_parts = [
-        f"<|im_start|>{msg.role}\n{sanitize_chatml(msg.content)}<|im_end|>\n"
-        for msg in req.messages
-    ]
+    prompt_parts = []
+    for msg in req.messages:
+        role = msg.role
+        content = sanitize_chatml(msg.content or "")
+        if role == "tool":
+            prompt_parts.append(f"<|im_start|>user\n[Tool Output ({msg.name or 'tool'})]:\n{content}<|im_end|>\n")
+        else:
+            prompt_parts.append(f"<|im_start|>{role}\n{content}<|im_end|>\n")
+
+    # Ensure no-think directive if thinking is disabled
+    if not req.enable_thinking:
+        no_think_directive = "You are a concise assistant. Never explain your thought process or internal monologue. Output only the final response directly.\n"
+        if prompt_parts:
+            if prompt_parts[0].startswith("<|im_start|>system\n"):
+                prompt_parts[0] = prompt_parts[0].replace("<|im_start|>system\n", f"<|im_start|>system\n{no_think_directive}")
+            else:
+                prompt_parts.insert(0, f"<|im_start|>system\n{no_think_directive}<|im_end|>\n")
+        # Also append right before assistant turn so it survives prompt trimming
+        prompt_parts.append(f"<|im_start|>system\nRespond directly. No internal monologue or reasoning.<|im_end|>\n")
+
+    # If tools provided and not already in prompt, append schema instructions
+    if req.tools and not any("# Tools" in (m.content or "") for m in req.messages):
+        tools_desc = "\n\n# Tools\nYou have access to the following functions:\n"
+        for t in req.tools:
+            if isinstance(t, dict):
+                func = t.get("function", t)
+                tools_desc += f"\n## `{func.get('name')}`\nDescription: {func.get('description', '')}\nParameters: {json.dumps(func.get('parameters', {}), ensure_ascii=False)}\n"
+        tools_desc += '\nWhen you choose to call a function, respond ONLY in this format:\n<tool_call>\n{"name": "function_name", "arguments": {"arg": "val"}}\n</tool_call>\n'
+        if prompt_parts:
+            if prompt_parts[0].startswith("<|im_start|>system\n"):
+                prompt_parts[0] = prompt_parts[0].replace("<|im_end|>\n", f"{tools_desc}<|im_end|>\n")
+            else:
+                prompt_parts.insert(0, f"<|im_start|>system\n{tools_desc}<|im_end|>\n")
+
     prompt_prefix = (
         PREFIX_ASSISTANT_THINK if req.enable_thinking else PREFIX_ASSISTANT_NO_THINK
     )
@@ -564,8 +608,40 @@ async def chat_completions(req: ChatCompletionRequest):
     full_response = "".join(accumulated).strip()
     reasoning, cleaned_content = extract_thinking(full_response)
 
+    # Check for tool_call tag in response
+    tool_calls = []
+    finish_reason = "stop"
+    if "<tool_call>" in cleaned_content:
+        tc_matches = re.findall(r"<tool_call>(.*?)</tool_call>", cleaned_content, re.DOTALL)
+        for tc_str in tc_matches:
+            try:
+                tc_data = json.loads(tc_str.strip())
+                tool_calls.append({
+                    "id": f"call_{uuid.uuid4().hex[:8]}",
+                    "type": "function",
+                    "function": {
+                        "name": tc_data.get("name", ""),
+                        "arguments": json.dumps(tc_data.get("arguments", {}), ensure_ascii=False)
+                        if isinstance(tc_data.get("arguments"), dict)
+                        else str(tc_data.get("arguments", "{}")),
+                    },
+                })
+            except Exception:
+                pass
+        if tool_calls:
+            finish_reason = "tool_calls"
+
     prompt_tokens_len = len(runner.tokenizer.encode(full_prompt).tolist())
     completion_tokens_len = len(runner.tokenizer.encode(full_response).tolist())
+
+    msg_data = {
+        "role": "assistant",
+        "content": cleaned_content,
+    }
+    if req.enable_thinking and reasoning:
+        msg_data["reasoning_content"] = reasoning
+    if tool_calls:
+        msg_data["tool_calls"] = tool_calls
 
     return {
         "id": completion_id,
@@ -575,12 +651,8 @@ async def chat_completions(req: ChatCompletionRequest):
         "choices": [
             {
                 "index": 0,
-                "message": {
-                    "role": "assistant",
-                    "content": cleaned_content,
-                    **({"reasoning_content": reasoning} if (req.enable_thinking and reasoning) else {}),
-                },
-                "finish_reason": "stop",
+                "message": msg_data,
+                "finish_reason": finish_reason,
             }
         ],
         "usage": {

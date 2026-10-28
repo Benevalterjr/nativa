@@ -154,3 +154,29 @@ tools/llama_cpp/llama-perplexity.exe -m data/qwen3_0.6b_q4_k_m.gguf -f data/wiki
 ---
 
 Related documentation: [Beginner's Guide (EN)](GUIA_INICIANTE_EN.md) | [Versão em Português](BENCHMARKS.md)
+
+---
+
+## 6. Physical Characterization of Fused MLP Q4x4 Lean & Memory Bandwidth
+
+To resolve ambiguities regarding hardware limits and validate C99 engine scalability, an in-depth characterization of the critical MLP layer ($M = 8960, K = 1536$) was executed with 4 OpenMP threads:
+
+### A. Reconciled Weight Volume
+- **`BlockQ4x4` Layout**: 4 rows $\times$ 32 columns per block = 128 weights in 72 bytes ($8\text{B}$ BF16 scales + $64\text{B}$ nibbles).
+- **Effective Density**: $0.5625\text{ bytes/weight}$ ($4.50\text{ bits/weight}$).
+- **Weight Transfer ($W_{gate} + W_{up}$)**: $2 \times (2240 \times 48 \times 72) = \mathbf{15,482,880\text{ bytes}}$ ($15.48\text{ MB}$ decimal / $14.77\text{ MiB}$ binary).
+
+### B. Bandwidth Diagnostics & Pure Stream Probe
+Comparing the full compute kernel against a pure memory stream probe (`stream_read_q4x4`) on the same physical host (Core i7-3770 Ivy Bridge, 4 threads, 100 samples):
+
+| Operation | Median Latency | Mean $\pm$ StdDev | Effective Bandwidth |
+| :--- | :---: | :---: | :---: |
+| **Pure DRAM Stream Probe** (Zero compute) | **$0.910\text{ ms}$** | $0.999 \pm 0.456\text{ ms}$ | $17.02\text{ GB/s}$ |
+| **Fused Lean Q4x4 Kernel** (SIMD + SwiGLU) | **$0.991\text{ ms}$** | $1.179 \pm 0.591\text{ ms}$ | $15.63\text{ GB/s}$ |
+
+> [!NOTE]
+> **Bottleneck Finding**: Pure DRAM streaming accounts for **$91.8\%$** of total execution time ($0.910\text{ ms}$ out of $0.991\text{ ms}$). Arithmetic processing (dot products, BF16 unpacking, and SwiGLU) contributes only **$8.2\%$** ($0.081\text{ ms}$), confirming that execution is fundamentally memory-bound on the DDR3 bus.
+
+### C. Gatekeeping Protocol for New Kernels
+For complete technical specifications, ternary microbenchmarks (2-bit vs. 5-trit trade-offs), and acceptance criteria, see:
+- 📋 [Q4x4 Lean Specification & Gatekeeping Protocol](docs/SPEC_Q4X4_LEAN_AND_GATEKEEPING.md)

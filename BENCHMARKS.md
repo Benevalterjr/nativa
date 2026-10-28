@@ -154,3 +154,29 @@ tools/llama_cpp/llama-perplexity.exe -m data/qwen3_0.6b_q4_k_m.gguf -f data/wiki
 ---
 
 Documentação relacionada: [Guia do Iniciante](GUIA_INICIANTE.md) | [English Version](BENCHMARKS_EN.md)
+
+---
+
+## 6. Caracterização Física do Kernel Fused MLP Q4x4 Lean e Subsistema de Memória
+
+Para eliminar ambiguidades sobre os limites do hardware e validar a escalabilidade do motor C99, foi realizada uma caracterização profunda da camada crítica do MLP ($M = 8960, K = 1536$) em OpenMP com 4 threads:
+
+### A. Volume Físico Rigorosamente Reconciliado
+- **Layout `BlockQ4x4`**: 4 linhas $\times$ 32 colunas por bloco = 128 pesos em 72 bytes ($8\text{B}$ escalas BF16 + $64\text{B}$ nibbles).
+- **Densidade Real**: $0{,}5625\text{ bytes/peso}$ ($4{,}50\text{ bits/peso}$).
+- **Tráfego de Pesos ($W_{gate} + W_{up}$)**: $2 \times (2240 \times 48 \times 72) = \mathbf{15.482.880\text{ bytes}}$ ($15{,}48\text{ MB}$ decimais / $14{,}77\text{ MiB}$ binários).
+
+### B. Diagnóstico de Banda e Sonda de Leitura Pura (Stream Probe)
+Comparando o kernel completo contra uma sonda de leitura pura (`stream_read_q4x4`) no mesmo hardware (Core i7-3770 Ivy Bridge, 4 threads, 100 amostras):
+
+| Operação | Latência Mediana | Média $\pm$ DesvPad | Banda Efetiva |
+| :--- | :---: | :---: | :---: |
+| **Leitura Pura da DRAM** (*Stream Probe*) | **$0{,}910\text{ ms}$** | $0{,}999 \pm 0{,}456\text{ ms}$ | $17{,}02\text{ GB/s}$ |
+| **Kernel Fused Lean Q4x4** (SIMD + SwiGLU) | **$0{,}991\text{ ms}$** | $1{,}179 \pm 0{,}591\text{ ms}$ | $15{,}63\text{ GB/s}$ |
+
+> [!NOTE]
+> **Conclusão de Bottleneck**: A leitura contínua dos $15{,}48\text{ MB}$ de pesos da RAM representa **$91{,}8\%$** do tempo total de execução ($0{,}910\text{ ms}$ de $0{,}991\text{ ms}$). O processamento aritmético (produtos escalares, conversão BF16 e ativação SwiGLU) adiciona apenas **$8{,}2\%$** ($0{,}081\text{ ms}$) de sobrecarga, comprovando que o kernel opera essencialmente limitado pela taxa de entrega de bytes do barramento DDR3.
+
+### C. Protocolo de Gatekeeping para Novos Kernels
+Para detalhes completos de especificação, microbenchmarks comparativos com formatos ternários (2-bit vs. 5-trits) e critérios de aceitação compulsórios, consulte:
+- 📋 [Especificação Q4x4 Lean & Protocolo de Gatekeeping](docs/SPEC_Q4X4_LEAN_AND_GATEKEEPING.md)

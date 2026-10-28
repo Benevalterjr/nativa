@@ -58,9 +58,9 @@ int main(void) {
     printf("Threads |   Best (GB/s)  | Median (GB/s)  | Time for 828 MB (median)\n");
     printf("--------+----------------+----------------+--------------------------\n");
 
-    int cfgs[3] = {1, 2, 4};
+    int cfgs[4] = {1, 2, 4, 8};
     uint64_t sink = 0;
-    for (int c = 0; c < 3; c++) {
+    for (int c = 0; c < 4; c++) {
         omp_set_num_threads(cfgs[c]);
         sink ^= read_pass(buf, n_vec);  // warmup
         double gbs[REPS];

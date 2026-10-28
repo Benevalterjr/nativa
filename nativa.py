@@ -74,7 +74,8 @@ class NatError(Exception):
 class NatRuntimeError(RuntimeError, NatError):
     """Runtime error with accurate line and column tracking."""
     def __init__(self, message: str, line: int = 0, col: int = 0):
-        RuntimeError.__init__(self, f"[line {line}:{col}] {message}" if line else message)
+        formatted = f"[line {line}:{col}] {message}" if line else message
+        RuntimeError.__init__(self, formatted)
         self.message = message
         self.line = line
         self.col = col
@@ -1216,12 +1217,14 @@ class TensorT:
     def __repr__(self) -> str:
         return f"tensor[{self.elem}]"
 
-# Expanded numeric types (including t2 / ternary for 1.58-bit AI)
+# Expanded numeric types (including t2 / ternary for 1.58-bit AI and 256-bit fixed/interval)
 I8, U8, I16, U16, I32, U32, I64, U64 = (Prim(n) for n in ("i8", "u8", "i16", "u16", "i32", "u32", "i64", "u64"))
 F16, BF16, F32, F64 = (Prim(n) for n in ("f16", "bf16", "f32", "f64"))
 C64 = Prim("c64")
 COMPLEX = Prim("complex")
 T2 = Prim("t2")   # Ternary: -1, 0, +1
+FIX256 = Prim("fix256")
+INTERVAL256 = Prim("interval256")
 STR, BOOL, VOID, ANY = (Prim(n) for n in ("str", "bool", "void", "any"))
 
 @dataclass(frozen=True)
@@ -1264,6 +1267,8 @@ PRIM_TYPES = {
     "f16": F16, "bf16": BF16, "f32": F32, "f64": F64,
     "c64": C64, "complex": COMPLEX, "Complex": COMPLEX,
     "t2": T2, "ternary": T2,
+    "fix256": FIX256, "Fix256": FIX256,
+    "interval256": INTERVAL256, "Interval256": INTERVAL256,
     "str": STR, "bool": BOOL, "void": VOID, "any": ANY,
     "Result": RESULT, "NatResult": RESULT,
     "dict": DictT(ANY, ANY), "Dict": DictT(ANY, ANY),
@@ -1422,13 +1427,25 @@ BUILTINS: dict[str, FuncSig] = {
     "rfft":                  FuncSig([ANY], ANY, builtin=True, min_args=1, max_args=2),
     "irfft":                 FuncSig([ANY], ANY, builtin=True, min_args=1, max_args=2),
     "power_spectrum":        FuncSig([ANY], ANY, builtin=True, min_args=1, max_args=1),
+    # 256-Bit Fixed-Point and Interval Arithmetic (High Altitude Steps)
+    "Fix256":                FuncSig([ANY], FIX256, builtin=True, min_args=1, max_args=2),
+    "fix256":                FuncSig([ANY], FIX256, builtin=True, min_args=1, max_args=2),
+    "Interval256":           FuncSig([ANY, ANY], INTERVAL256, builtin=True, min_args=1, max_args=2),
+    "interval256":           FuncSig([ANY, ANY], INTERVAL256, builtin=True, min_args=1, max_args=2),
+    "interval256_step":      FuncSig([INTERVAL256, INTERVAL256, FIX256], INTERVAL256, builtin=True, min_args=3, max_args=3),
+    "interval256_width":     FuncSig([INTERVAL256], FIX256, builtin=True, min_args=1, max_args=1),
+    "interval256_mid":       FuncSig([INTERVAL256], FIX256, builtin=True, min_args=1, max_args=1),
+    "interval256_is_coherent": FuncSig([INTERVAL256, FIX256], BOOL, builtin=True, min_args=2, max_args=2),
     # Higher-Order Functions (Lambda / Functional Programming)
     "map":                   FuncSig([ANY, ANY], ListT(ANY), builtin=True, min_args=2, max_args=2, ret_builder=lambda ats: ListT(ats[0].ret if (isinstance(ats[0], FuncSig) and ats[0].ret != ANY) else (ats[1].elem if (len(ats) > 1 and isinstance(ats[1], (ListT, TensorT))) else ANY))),
     "filter":                FuncSig([ANY, ANY], ListT(ANY), builtin=True, min_args=2, max_args=2, ret_builder=lambda ats: ListT(ats[1].elem if (len(ats) > 1 and isinstance(ats[1], (ListT, TensorT))) else ANY)),
 }
 
 KNOWN_MODULES = {"math", "time"}
-MATH_FUNCS = {"sqrt", "exp", "sin", "cos", "ln", "floor", "tanh", "rfft", "irfft", "power_spectrum", "Complex"}
+MATH_FUNCS = {
+    "sqrt", "exp", "sin", "cos", "ln", "floor", "tanh", "rfft", "irfft", "power_spectrum", "Complex",
+    "Fix256", "fix256", "Interval256", "interval256", "interval256_step", "interval256_width", "interval256_mid", "interval256_is_coherent"
+}
 MATH_CONSTS = {"PI": F64, "E": F64}
 
 
@@ -1628,10 +1645,14 @@ class SemanticAnalyzer:
             return TupleT(tuple(self.resolve_type(e) for e in t.elems))
         return ListT(self.resolve_type(t.elem))
 
-    def analyze(self, program: Program) -> list[Diagnostic]:
+    def analyze(self, program: Program, _visited_modules: Optional[set[str]] = None) -> list[Diagnostic]:
+        if _visited_modules is None:
+            _visited_modules = set()
         for it in program.items:
             if isinstance(it, Import):
                 if it.module in KNOWN_MODULES:
+                    self.modules.add(it.module)
+                elif it.module in _visited_modules or it.module in self.modules:
                     self.modules.add(it.module)
                 else:
                     mod_path = _resolve_local_module_path(it.module)
@@ -1641,7 +1662,9 @@ class SemanticAnalyzer:
                                 mod_src = mf.read()
                             mod_prog = parse(mod_src)
                             sub_sem = SemanticAnalyzer()
-                            sub_sem.analyze(mod_prog)
+                            sub_visited = set(_visited_modules)
+                            sub_visited.add(it.module)
+                            sub_sem.analyze(mod_prog, _visited_modules=sub_visited)
                             for d in sub_sem.errors:
                                 self.report(f"in module '{it.module}': {d.msg}", it)
                             mod_funcs = {
@@ -2076,7 +2099,7 @@ class SemanticAnalyzer:
             if t != BOOL and t != ANY:
                 self.report(f"'not' requires bool, got {t}", node)
             return BOOL
-        ok = t == ANY or is_num(t) or (isinstance(t, (ListT, TensorT)) and base_num(t) is not None)
+        ok = t == ANY or is_num(t) or t in (FIX256, INTERVAL256) or (isinstance(t, (ListT, TensorT)) and base_num(t) is not None)
         if not ok:
             self.report(f"operator '{node.op}' is not defined for {t}", node)
             return ANY
@@ -2096,11 +2119,13 @@ class SemanticAnalyzer:
         if op in ("==", "!="):
             if l in (COMPLEX, C64) and r in (COMPLEX, C64):
                 return BOOL
+            if l in (FIX256, INTERVAL256) and r in (FIX256, INTERVAL256):
+                return BOOL
             if not (same(l, r) or (is_num(l) and is_num(r))):
                 self.report(f"cannot compare {l} with {r}", node)
             return BOOL
         if op in ("<", "<=", ">", ">="):
-            ok = (l == ANY or r == ANY or (is_num(l) and is_num(r)) or (l == STR and r == STR))
+            ok = (l == ANY or r == ANY or (is_num(l) and is_num(r)) or (l == STR and r == STR) or (l == FIX256 and r == FIX256))
             if not ok:
                 self.report(f"cannot compare {l} with {r}", node)
             return BOOL
@@ -2111,6 +2136,12 @@ class SemanticAnalyzer:
             return ANY
         if (l in (COMPLEX, C64) or r in (COMPLEX, C64)) and op in ("+", "-", "*", "/"):
             return COMPLEX
+        if (l == FIX256 or r == FIX256) and op in ("+", "-", "*", "/"):
+            if l in (FIX256, I64, F64) and r in (FIX256, I64, F64):
+                return FIX256
+        if (l == INTERVAL256 or r == INTERVAL256) and op in ("+", "-", "*", "/"):
+            if l in (INTERVAL256, FIX256, I64, F64) and r in (INTERVAL256, FIX256, I64, F64):
+                return INTERVAL256
         if is_num(l) and is_num(r):
             if op == "/":
                 return F64
@@ -2315,6 +2346,22 @@ class MathModule:
     @staticmethod
     def power_spectrum(*args, **kwargs):
         return power_spectrum_fn(*args, **kwargs)
+
+    @staticmethod
+    def Fix256(*args, **kwargs):
+        return fix256_fn(*args, **kwargs)
+
+    @staticmethod
+    def fix256(*args, **kwargs):
+        return fix256_fn(*args, **kwargs)
+
+    @staticmethod
+    def Interval256(*args, **kwargs):
+        return interval256_fn(*args, **kwargs)
+
+    @staticmethod
+    def interval256(*args, **kwargs):
+        return interval256_fn(*args, **kwargs)
 
 
 CURRENT_DEVICE = "cpu"
@@ -3153,6 +3200,20 @@ static inline void nat_print_mat_f64(const double* A, int64_t M, int64_t N) {
     }
     printf("]");
 }
+static inline void nat_print_vec_i64(const int64_t* v, int64_t n) {
+    printf("[");
+    for (int64_t i = 0; i < n; i++) printf("%lld%s", (long long)v[i], (i < n - 1) ? ", " : "");
+    printf("]");
+}
+static inline void nat_print_mat_i64(const int64_t* A, int64_t M, int64_t N) {
+    printf("[");
+    for (int64_t i = 0; i < M; i++) {
+        printf("[");
+        for (int64_t j = 0; j < N; j++) printf("%lld%s", (long long)A[i * N + j], (j < N - 1) ? ", " : "");
+        printf("]%s", (i < M - 1) ? ", " : "");
+    }
+    printf("]");
+}
 
 typedef struct {
     const char* val_str;
@@ -3232,6 +3293,816 @@ static inline const char* nat_read_file(const char* path) {
     return nat_unwrap_str(r);
 }
 
+/* ------------------------------------------------------------------------- */
+/* 6. 256-Bit Fixed-Point and Interval Arithmetic (High Altitude Steps)      */
+/* ------------------------------------------------------------------------- */
+
+#if defined(_MSC_VER) && (defined(_M_X64) || defined(_M_ARM64))
+#include <intrin.h>
+#endif
+
+#ifndef NAT_FIX256_DEFAULT_FRAC
+#define NAT_FIX256_DEFAULT_FRAC 64
+#endif
+
+typedef struct {
+    uint64_t limbs[4]; /* limbs[0]=least significant 64 bits, limbs[3]=most significant */
+    int32_t frac_bits; /* Default 64: Q192.64 */
+    int8_t sign;       /* +1 for >= 0, -1 for < 0 */
+} nat_fix256_t;
+
+typedef struct {
+    nat_fix256_t lo;
+    nat_fix256_t hi;
+} nat_interval256_t;
+
+static inline uint64_t nat_add_carry(uint64_t a, uint64_t b, uint64_t carry_in, uint64_t* carry_out) {
+    uint64_t s = a + carry_in;
+    uint64_t c1 = (s < a) ? 1ULL : 0ULL;
+    uint64_t res = s + b;
+    uint64_t c2 = (res < s) ? 1ULL : 0ULL;
+    *carry_out = c1 + c2;
+    return res;
+}
+
+static inline uint64_t nat_sub_borrow(uint64_t a, uint64_t b, uint64_t borrow_in, uint64_t* borrow_out) {
+    uint64_t s = a - borrow_in;
+    uint64_t b1 = (a < borrow_in) ? 1ULL : 0ULL;
+    uint64_t res = s - b;
+    uint64_t b2 = (s < b) ? 1ULL : 0ULL;
+    *borrow_out = b1 + b2;
+    return res;
+}
+
+static inline uint64_t nat_mul64(uint64_t u, uint64_t v, uint64_t* hi) {
+#if defined(_MSC_VER) && (defined(_M_X64) || defined(_M_ARM64))
+    return _umul128(u, v, hi);
+#elif defined(__SIZEOF_INT128__)
+    unsigned __int128 prod = (unsigned __int128)u * (unsigned __int128)v;
+    *hi = (uint64_t)(prod >> 64);
+    return (uint64_t)prod;
+#else
+    uint64_t u0 = u & 0xFFFFFFFFULL, u1 = u >> 32;
+    uint64_t v0 = v & 0xFFFFFFFFULL, v1 = v >> 32;
+    uint64_t p00 = u0 * v0;
+    uint64_t p01 = u0 * v1;
+    uint64_t p10 = u1 * v0;
+    uint64_t p11 = u1 * v1;
+    uint64_t mid = p01 + (p00 >> 32);
+    uint64_t mid_c = (mid < p01) ? 1ULL : 0ULL;
+    mid += p10;
+    if (mid < p10) mid_c++;
+    *hi = p11 + (mid_c << 32) + (mid >> 32);
+    return (mid << 32) | (p00 & 0xFFFFFFFFULL);
+#endif
+}
+
+static inline bool nat_u256_is_zero(const uint64_t a[4]) {
+    return (a[0] | a[1] | a[2] | a[3]) == 0ULL;
+}
+
+static inline int nat_u256_cmp(const uint64_t a[4], const uint64_t b[4]) {
+    for (int i = 3; i >= 0; i--) {
+        if (a[i] > b[i]) return 1;
+        if (a[i] < b[i]) return -1;
+    }
+    return 0;
+}
+
+static inline uint64_t nat_u256_add(const uint64_t a[4], const uint64_t b[4], uint64_t out[4]) {
+    uint64_t carry = 0;
+    for (int i = 0; i < 4; i++) {
+        uint64_t c = 0;
+        out[i] = nat_add_carry(a[i], b[i], carry, &c);
+        carry = c;
+    }
+    return carry;
+}
+
+static inline uint64_t nat_u256_sub(const uint64_t a[4], const uint64_t b[4], uint64_t out[4]) {
+    uint64_t borrow = 0;
+    for (int i = 0; i < 4; i++) {
+        uint64_t br = 0;
+        out[i] = nat_sub_borrow(a[i], b[i], borrow, &br);
+        borrow = br;
+    }
+    return borrow;
+}
+
+static inline void nat_u256_shift_left_1(uint64_t x[4]) {
+    uint64_t c0 = x[0] >> 63;
+    uint64_t c1 = x[1] >> 63;
+    uint64_t c2 = x[2] >> 63;
+    x[3] = (x[3] << 1) | c2;
+    x[2] = (x[2] << 1) | c1;
+    x[1] = (x[1] << 1) | c0;
+    x[0] = (x[0] << 1);
+}
+
+static inline void nat_u256_shift_left(const uint64_t in[4], int shift, uint64_t out[4]) {
+    if (shift <= 0) {
+        memcpy(out, in, 4 * sizeof(uint64_t));
+        return;
+    }
+    if (shift >= 256) {
+        memset(out, 0, 4 * sizeof(uint64_t));
+        return;
+    }
+    int w = shift / 64;
+    int b = shift % 64;
+    uint64_t tmp[4] = {0};
+    for (int i = 3; i >= 0; i--) {
+        int src = i - w;
+        if (src >= 0) {
+            uint64_t low = in[src];
+            uint64_t prev = (src > 0) ? in[src - 1] : 0ULL;
+            if (b == 0) {
+                tmp[i] = low;
+            } else {
+                tmp[i] = (low << b) | (prev >> (64 - b));
+            }
+        }
+    }
+    memcpy(out, tmp, 4 * sizeof(uint64_t));
+}
+
+static inline void nat_u256_shift_right(const uint64_t in[4], int shift, uint64_t out[4]) {
+    if (shift <= 0) {
+        memcpy(out, in, 4 * sizeof(uint64_t));
+        return;
+    }
+    if (shift >= 256) {
+        memset(out, 0, 4 * sizeof(uint64_t));
+        return;
+    }
+    int w = shift / 64;
+    int b = shift % 64;
+    uint64_t tmp[4] = {0};
+    for (int i = 0; i < 4; i++) {
+        int src = i + w;
+        if (src < 4) {
+            uint64_t low = in[src];
+            uint64_t high = (src + 1 < 4) ? in[src + 1] : 0ULL;
+            if (b == 0) {
+                tmp[i] = low;
+            } else {
+                tmp[i] = (low >> b) | (high << (64 - b));
+            }
+        }
+    }
+    memcpy(out, tmp, 4 * sizeof(uint64_t));
+}
+
+static inline uint64_t nat_u256_mul_64(const uint64_t a[4], uint64_t b, uint64_t out[4]) {
+    uint64_t carry = 0;
+    for (int i = 0; i < 4; i++) {
+        uint64_t hi = 0;
+        uint64_t lo = nat_mul64(a[i], b, &hi);
+        uint64_t c1 = 0;
+        uint64_t s = nat_add_carry(lo, carry, 0, &c1);
+        out[i] = s;
+        carry = hi + c1;
+    }
+    return carry;
+}
+
+static inline uint64_t nat_u256_add_64(uint64_t a[4], uint64_t b) {
+    uint64_t carry = b;
+    for (int i = 0; i < 4 && carry > 0; i++) {
+        uint64_t c = 0;
+        a[i] = nat_add_carry(a[i], carry, 0, &c);
+        carry = c;
+    }
+    return carry;
+}
+
+static inline void nat_u256_mul_full(const uint64_t a[4], const uint64_t b[4], uint64_t prod[8]) {
+    memset(prod, 0, 8 * sizeof(uint64_t));
+    for (int i = 0; i < 4; i++) {
+        uint64_t carry = 0;
+        for (int j = 0; j < 4; j++) {
+            uint64_t hi = 0;
+            uint64_t lo = nat_mul64(a[i], b[j], &hi);
+            uint64_t c1 = 0, c2 = 0;
+            uint64_t s1 = nat_add_carry(prod[i + j], lo, 0, &c1);
+            uint64_t s2 = nat_add_carry(s1, carry, 0, &c2);
+            prod[i + j] = s2;
+            carry = hi + c1 + c2;
+        }
+        for (int k = i + 4; k < 8 && carry > 0; k++) {
+            uint64_t c = 0;
+            prod[k] = nat_add_carry(prod[k], carry, 0, &c);
+            carry = c;
+        }
+    }
+}
+
+static inline void nat_u512_shift_right(const uint64_t in[8], int shift_bits, uint64_t out[4]) {
+    if (shift_bits <= 0) {
+        memcpy(out, in, 4 * sizeof(uint64_t));
+        return;
+    }
+    int w = shift_bits / 64;
+    int b = shift_bits % 64;
+    for (int i = 0; i < 4; i++) {
+        int idx = i + w;
+        uint64_t low = (idx < 8) ? in[idx] : 0ULL;
+        uint64_t high = (idx + 1 < 8) ? in[idx + 1] : 0ULL;
+        if (b == 0) {
+            out[i] = low;
+        } else {
+            out[i] = (low >> b) | (high << (64 - b));
+        }
+    }
+}
+
+static inline void nat_u256_divmod(const uint64_t num[4], const uint64_t den[4], uint64_t quot[4], uint64_t rem[4]) {
+    memset(quot, 0, 4 * sizeof(uint64_t));
+    memset(rem, 0, 4 * sizeof(uint64_t));
+    if (nat_u256_is_zero(den)) return;
+    for (int i = 255; i >= 0; i--) {
+        nat_u256_shift_left_1(rem);
+        int bit = (int)((num[i / 64] >> (i % 64)) & 1ULL);
+        rem[0] |= (uint64_t)bit;
+        if (nat_u256_cmp(rem, den) >= 0) {
+            nat_u256_sub(rem, den, rem);
+            quot[i / 64] |= (1ULL << (i % 64));
+        }
+    }
+}
+
+static inline void nat_u256_shift_left_to_512(const uint64_t in[4], int shift, uint64_t out[8]) {
+    memset(out, 0, 8 * sizeof(uint64_t));
+    if (shift < 0 || shift >= 512) return;
+    int w = shift / 64;
+    int b = shift % 64;
+    for (int i = 0; i < 4; i++) {
+        int idx = i + w;
+        if (idx < 8) {
+            if (b == 0) {
+                out[idx] |= in[i];
+            } else {
+                out[idx] |= (in[i] << b);
+                if (idx + 1 < 8) {
+                    out[idx + 1] |= (in[i] >> (64 - b));
+                }
+            }
+        }
+    }
+}
+
+static inline void nat_u512_div_256(const uint64_t num[8], const uint64_t den[4], uint64_t quot[4]) {
+    memset(quot, 0, 4 * sizeof(uint64_t));
+    if (nat_u256_is_zero(den)) return;
+    int top = 7;
+    while (top >= 0 && num[top] == 0) top--;
+    if (top < 0) return;
+    int top_bit = top * 64 + 63;
+    while (top_bit >= 0 && !((num[top_bit / 64] >> (top_bit % 64)) & 1ULL)) {
+        top_bit--;
+    }
+    uint64_t rem[4] = {0};
+    for (int i = top_bit; i >= 0; i--) {
+        nat_u256_shift_left_1(rem);
+        int bit = (int)((num[i / 64] >> (i % 64)) & 1ULL);
+        rem[0] |= (uint64_t)bit;
+        if (nat_u256_cmp(rem, den) >= 0) {
+            nat_u256_sub(rem, den, rem);
+            if (i < 256) {
+                quot[i / 64] |= (1ULL << (i % 64));
+            }
+        }
+    }
+}
+
+static inline nat_fix256_t nat_fix256_zero(void) {
+    nat_fix256_t r;
+    memset(&r, 0, sizeof(r));
+    r.frac_bits = NAT_FIX256_DEFAULT_FRAC;
+    r.sign = 1;
+    return r;
+}
+
+static inline nat_fix256_t nat_fix256_from_parts(int8_t sign, uint64_t l0, uint64_t l1, uint64_t l2, uint64_t l3, int32_t frac_bits) {
+    nat_fix256_t r;
+    r.limbs[0] = l0; r.limbs[1] = l1; r.limbs[2] = l2; r.limbs[3] = l3;
+    r.frac_bits = frac_bits > 0 ? frac_bits : NAT_FIX256_DEFAULT_FRAC;
+    r.sign = (sign >= 0) ? 1 : -1;
+    if (nat_u256_is_zero(r.limbs)) r.sign = 1;
+    return r;
+}
+
+static inline nat_fix256_t nat_fix256_from_i64(int64_t val, int32_t frac_bits) {
+    nat_fix256_t r = nat_fix256_zero();
+    if (frac_bits >= 0) r.frac_bits = frac_bits;
+    if (val < 0) {
+        r.sign = -1;
+        val = -val;
+    } else {
+        r.sign = 1;
+    }
+    uint64_t uval = (uint64_t)val;
+    uint64_t raw[4] = {uval, 0, 0, 0};
+    nat_u256_shift_left(raw, r.frac_bits, r.limbs);
+    return r;
+}
+
+static inline nat_fix256_t nat_fix256_from_f64(double val, int32_t frac_bits) {
+    nat_fix256_t r = nat_fix256_zero();
+    if (frac_bits >= 0) r.frac_bits = frac_bits;
+    if (val < 0.0) {
+        r.sign = -1;
+        val = -val;
+    } else {
+        r.sign = 1;
+    }
+    double scale = ldexp(1.0, r.frac_bits);
+    double scaled = val * scale;
+    double int_part = 0.0;
+    double frac_part = modf(scaled, &int_part);
+    if (frac_part >= 0.5) int_part += 1.0;
+    double cur = int_part;
+    for (int i = 0; i < 4; i++) {
+        double rem = fmod(cur, 18446744073709551616.0);
+        r.limbs[i] = (uint64_t)rem;
+        cur = floor(cur / 18446744073709551616.0);
+    }
+    return r;
+}
+
+static inline nat_fix256_t nat_fix256_from_str(const char* s, int32_t frac_bits) {
+    nat_fix256_t r = nat_fix256_zero();
+    if (frac_bits >= 0) r.frac_bits = frac_bits;
+    if (!s) return r;
+    while (*s == ' ' || *s == '\t') s++;
+    int8_t sgn = 1;
+    if (*s == '-') { sgn = -1; s++; }
+    else if (*s == '+') { s++; }
+
+    uint64_t int_val[4] = {0};
+    while (*s >= '0' && *s <= '9') {
+        nat_u256_mul_64(int_val, 10, int_val);
+        nat_u256_add_64(int_val, (uint64_t)(*s - '0'));
+        s++;
+    }
+
+    uint64_t frac_val[4] = {0};
+    uint64_t frac_den[4] = {1, 0, 0, 0};
+    if (*s == '.') {
+        s++;
+        while (*s >= '0' && *s <= '9') {
+            nat_u256_mul_64(frac_val, 10, frac_val);
+            nat_u256_add_64(frac_val, (uint64_t)(*s - '0'));
+            nat_u256_mul_64(frac_den, 10, frac_den);
+            s++;
+        }
+    }
+
+    nat_u256_shift_left(int_val, r.frac_bits, r.limbs);
+
+    if (!nat_u256_is_zero(frac_val)) {
+        uint64_t f_scaled[4] = {0};
+        nat_u256_shift_left(frac_val, r.frac_bits, f_scaled);
+        uint64_t f_part[4] = {0}, rem[4] = {0};
+        nat_u256_divmod(f_scaled, frac_den, f_part, rem);
+        nat_u256_add(r.limbs, f_part, r.limbs);
+    }
+
+    if (*s == 'e' || *s == 'E') {
+        s++;
+        int exp_sgn = 1;
+        if (*s == '-') { exp_sgn = -1; s++; }
+        else if (*s == '+') { s++; }
+        int exp_val = 0;
+        while (*s >= '0' && *s <= '9') {
+            exp_val = exp_val * 10 + (*s - '0');
+            s++;
+        }
+        if (exp_sgn > 0) {
+            for (int k = 0; k < exp_val; k++) {
+                nat_u256_mul_64(r.limbs, 10, r.limbs);
+            }
+        } else {
+            uint64_t ten[4] = {10, 0, 0, 0};
+            uint64_t q[4] = {0}, rem[4] = {0};
+            for (int k = 0; k < exp_val; k++) {
+                nat_u256_divmod(r.limbs, ten, q, rem);
+                memcpy(r.limbs, q, 4 * sizeof(uint64_t));
+            }
+        }
+    }
+
+    r.sign = sgn;
+    if (nat_u256_is_zero(r.limbs)) r.sign = 1;
+    return r;
+}
+
+static inline bool nat_fix256_is_zero(nat_fix256_t a) {
+    return nat_u256_is_zero(a.limbs);
+}
+
+static inline int nat_fix256_cmp(nat_fix256_t a, nat_fix256_t b) {
+    if (nat_fix256_is_zero(a) && nat_fix256_is_zero(b)) return 0;
+    if (a.sign != b.sign) return (a.sign > b.sign) ? 1 : -1;
+    int c = nat_u256_cmp(a.limbs, b.limbs);
+    return (a.sign > 0) ? c : -c;
+}
+
+static inline bool nat_fix256_eq(nat_fix256_t a, nat_fix256_t b) { return nat_fix256_cmp(a, b) == 0; }
+static inline bool nat_fix256_lt(nat_fix256_t a, nat_fix256_t b) { return nat_fix256_cmp(a, b) < 0; }
+static inline bool nat_fix256_le(nat_fix256_t a, nat_fix256_t b) { return nat_fix256_cmp(a, b) <= 0; }
+static inline bool nat_fix256_gt(nat_fix256_t a, nat_fix256_t b) { return nat_fix256_cmp(a, b) > 0; }
+static inline bool nat_fix256_ge(nat_fix256_t a, nat_fix256_t b) { return nat_fix256_cmp(a, b) >= 0; }
+
+static inline nat_fix256_t nat_fix256_neg(nat_fix256_t a) {
+    nat_fix256_t r = a;
+    if (!nat_fix256_is_zero(r)) r.sign = -r.sign;
+    return r;
+}
+
+static inline nat_fix256_t nat_fix256_abs(nat_fix256_t a) {
+    nat_fix256_t r = a;
+    r.sign = 1;
+    return r;
+}
+
+static inline nat_fix256_t nat_fix256_add(nat_fix256_t a, nat_fix256_t b) {
+    nat_fix256_t r = nat_fix256_zero();
+    r.frac_bits = a.frac_bits;
+    if (a.sign == b.sign) {
+        r.sign = a.sign;
+        nat_u256_add(a.limbs, b.limbs, r.limbs);
+    } else {
+        int c = nat_u256_cmp(a.limbs, b.limbs);
+        if (c >= 0) {
+            r.sign = a.sign;
+            nat_u256_sub(a.limbs, b.limbs, r.limbs);
+        } else {
+            r.sign = b.sign;
+            nat_u256_sub(b.limbs, a.limbs, r.limbs);
+        }
+    }
+    if (nat_u256_is_zero(r.limbs)) r.sign = 1;
+    return r;
+}
+
+static inline nat_fix256_t nat_fix256_sub(nat_fix256_t a, nat_fix256_t b) {
+    return nat_fix256_add(a, nat_fix256_neg(b));
+}
+
+static inline nat_fix256_t nat_fix256_mul(nat_fix256_t a, nat_fix256_t b) {
+    nat_fix256_t r = nat_fix256_zero();
+    r.frac_bits = a.frac_bits;
+    r.sign = a.sign * b.sign;
+    uint64_t prod[8] = {0};
+    nat_u256_mul_full(a.limbs, b.limbs, prod);
+    nat_u512_shift_right(prod, r.frac_bits, r.limbs);
+    if (nat_u256_is_zero(r.limbs)) r.sign = 1;
+    return r;
+}
+
+static inline nat_fix256_t nat_fix256_div(nat_fix256_t a, nat_fix256_t b) {
+    nat_fix256_t r = nat_fix256_zero();
+    r.frac_bits = a.frac_bits;
+    if (nat_fix256_is_zero(b)) return r;
+    r.sign = a.sign * b.sign;
+    uint64_t num[8];
+    nat_u256_shift_left_to_512(a.limbs, r.frac_bits, num);
+    nat_u512_div_256(num, b.limbs, r.limbs);
+    if (nat_u256_is_zero(r.limbs)) r.sign = 1;
+    return r;
+}
+
+static inline int64_t nat_fix256_to_i64(nat_fix256_t a) {
+    uint64_t int_part[4] = {0};
+    nat_u256_shift_right(a.limbs, a.frac_bits, int_part);
+    int64_t val = (int64_t)int_part[0];
+    return (a.sign < 0) ? -val : val;
+}
+
+static inline double nat_fix256_to_f64(nat_fix256_t a) {
+    double scale = ldexp(1.0, -a.frac_bits);
+    double total = 0.0;
+    double limb_scale = 1.0;
+    for (int i = 0; i < 4; i++) {
+        total += (double)a.limbs[i] * limb_scale;
+        limb_scale *= 18446744073709551616.0;
+    }
+    double res = total * scale;
+    return (a.sign < 0) ? -res : res;
+}
+
+static inline void nat_fix256_to_str(nat_fix256_t a, char* buf, size_t buf_size) {
+    if (!buf || buf_size < 4) return;
+    if (nat_fix256_is_zero(a)) {
+        snprintf(buf, buf_size, "0.000000");
+        return;
+    }
+    uint64_t int_part[4] = {0};
+    nat_u256_shift_right(a.limbs, a.frac_bits, int_part);
+
+    uint64_t frac_part[4] = {0};
+    uint64_t mask[4] = {0};
+    nat_u256_shift_left((const uint64_t[]){1, 0, 0, 0}, a.frac_bits, mask);
+    nat_u256_sub(mask, (const uint64_t[]){1, 0, 0, 0}, mask);
+    for (int i = 0; i < 4; i++) frac_part[i] = a.limbs[i] & mask[i];
+
+    char digits[128];
+    int digit_count = 0;
+    uint64_t ten[4] = {10, 0, 0, 0};
+
+    uint64_t cur[4];
+    memcpy(cur, int_part, 4 * sizeof(uint64_t));
+    if (nat_u256_is_zero(cur)) {
+        digits[digit_count++] = '0';
+    } else {
+        while (!nat_u256_is_zero(cur) && digit_count < 120) {
+            uint64_t q[4] = {0}, rem[4] = {0};
+            nat_u256_divmod(cur, ten, q, rem);
+            digits[digit_count++] = (char)('0' + rem[0]);
+            memcpy(cur, q, 4 * sizeof(uint64_t));
+        }
+    }
+
+    size_t out_idx = 0;
+    if (a.sign < 0 && out_idx + 1 < buf_size) buf[out_idx++] = '-';
+    for (int i = digit_count - 1; i >= 0 && out_idx + 1 < buf_size; i--) {
+        buf[out_idx++] = digits[i];
+    }
+    if (out_idx + 1 < buf_size) buf[out_idx++] = '.';
+
+    uint64_t cur_f[4];
+    memcpy(cur_f, frac_part, 4 * sizeof(uint64_t));
+    for (int step = 0; step < 6 && out_idx + 1 < buf_size; step++) {
+        nat_u256_mul_64(cur_f, 10, cur_f);
+        uint64_t d[4] = {0};
+        nat_u256_shift_right(cur_f, a.frac_bits, d);
+        buf[out_idx++] = (char)('0' + (d[0] % 10));
+        for (int i = 0; i < 4; i++) cur_f[i] &= mask[i];
+    }
+    buf[out_idx] = '\0';
+}
+
+static inline nat_interval256_t nat_interval256_create(nat_fix256_t lo, nat_fix256_t hi) {
+    nat_interval256_t iv;
+    if (nat_fix256_gt(lo, hi)) {
+        iv.lo = hi; iv.hi = lo;
+    } else {
+        iv.lo = lo; iv.hi = hi;
+    }
+    return iv;
+}
+
+static inline bool nat_interval256_contains(nat_interval256_t a, nat_fix256_t x) {
+    return nat_fix256_ge(x, a.lo) && nat_fix256_le(x, a.hi);
+}
+
+static inline nat_interval256_t nat_interval256_point(nat_fix256_t val) {
+    return nat_interval256_create(val, val);
+}
+
+static inline nat_interval256_t nat_interval256_from_val(nat_fix256_t val, nat_fix256_t radius) {
+    return nat_interval256_create(nat_fix256_sub(val, radius), nat_fix256_add(val, radius));
+}
+
+static inline nat_interval256_t nat_interval256_from_str(const char* lo_str, const char* hi_str, int32_t frac_bits) {
+    nat_fix256_t lo = nat_fix256_from_str(lo_str, frac_bits);
+    nat_fix256_t hi = nat_fix256_from_str(hi_str, frac_bits);
+    return nat_interval256_create(lo, hi);
+}
+
+static inline nat_interval256_t nat_interval256_add(nat_interval256_t a, nat_interval256_t b) {
+    return nat_interval256_create(nat_fix256_add(a.lo, b.lo), nat_fix256_add(a.hi, b.hi));
+}
+
+static inline nat_interval256_t nat_interval256_sub(nat_interval256_t a, nat_interval256_t b) {
+    return nat_interval256_create(nat_fix256_sub(a.lo, b.hi), nat_fix256_sub(a.hi, b.lo));
+}
+
+static inline nat_interval256_t nat_interval256_mul(nat_interval256_t a, nat_interval256_t b) {
+    nat_fix256_t p1 = nat_fix256_mul(a.lo, b.lo);
+    nat_fix256_t p2 = nat_fix256_mul(a.lo, b.hi);
+    nat_fix256_t p3 = nat_fix256_mul(a.hi, b.lo);
+    nat_fix256_t p4 = nat_fix256_mul(a.hi, b.hi);
+    nat_fix256_t min_p = p1, max_p = p1;
+    if (nat_fix256_lt(p2, min_p)) min_p = p2;
+    if (nat_fix256_gt(p2, max_p)) max_p = p2;
+    if (nat_fix256_lt(p3, min_p)) min_p = p3;
+    if (nat_fix256_gt(p3, max_p)) max_p = p3;
+    if (nat_fix256_lt(p4, min_p)) min_p = p4;
+    if (nat_fix256_gt(p4, max_p)) max_p = p4;
+    return nat_interval256_create(min_p, max_p);
+}
+
+static inline nat_interval256_t nat_interval256_mul_scalar(nat_interval256_t a, nat_fix256_t s) {
+    if (nat_fix256_ge(s, nat_fix256_zero())) {
+        return nat_interval256_create(nat_fix256_mul(a.lo, s), nat_fix256_mul(a.hi, s));
+    } else {
+        return nat_interval256_create(nat_fix256_mul(a.hi, s), nat_fix256_mul(a.lo, s));
+    }
+}
+
+static inline nat_interval256_t nat_interval256_div_scalar(nat_interval256_t a, nat_fix256_t s) {
+    if (nat_fix256_is_zero(s)) {
+        return nat_interval256_create(nat_fix256_zero(), nat_fix256_zero());
+    }
+    if (nat_fix256_ge(s, nat_fix256_zero())) {
+        return nat_interval256_create(nat_fix256_div(a.lo, s), nat_fix256_div(a.hi, s));
+    } else {
+        return nat_interval256_create(nat_fix256_div(a.hi, s), nat_fix256_div(a.lo, s));
+    }
+}
+
+static inline nat_interval256_t nat_interval256_div(nat_interval256_t a, nat_interval256_t b) {
+    if (nat_interval256_contains(b, nat_fix256_zero())) {
+        return nat_interval256_create(nat_fix256_zero(), nat_fix256_zero());
+    }
+    nat_fix256_t p1 = nat_fix256_div(a.lo, b.lo);
+    nat_fix256_t p2 = nat_fix256_div(a.lo, b.hi);
+    nat_fix256_t p3 = nat_fix256_div(a.hi, b.lo);
+    nat_fix256_t p4 = nat_fix256_div(a.hi, b.hi);
+    nat_fix256_t min_p = p1, max_p = p1;
+    if (nat_fix256_lt(p2, min_p)) min_p = p2;
+    if (nat_fix256_gt(p2, max_p)) max_p = p2;
+    if (nat_fix256_lt(p3, min_p)) min_p = p3;
+    if (nat_fix256_gt(p3, max_p)) max_p = p3;
+    if (nat_fix256_lt(p4, min_p)) min_p = p4;
+    if (nat_fix256_gt(p4, max_p)) max_p = p4;
+    return nat_interval256_create(min_p, max_p);
+}
+
+static inline nat_interval256_t nat_interval256_neg(nat_interval256_t a) {
+    return nat_interval256_create(nat_fix256_neg(a.hi), nat_fix256_neg(a.lo));
+}
+
+static inline nat_fix256_t nat_interval256_width(nat_interval256_t a) {
+    return nat_fix256_sub(a.hi, a.lo);
+}
+
+static inline nat_fix256_t nat_interval256_mid(nat_interval256_t a) {
+    nat_fix256_t sum = nat_fix256_add(a.lo, a.hi);
+    nat_fix256_t two = nat_fix256_from_i64(2, a.lo.frac_bits);
+    return nat_fix256_div(sum, two);
+}
+
+static inline bool nat_interval256_is_coherent(nat_interval256_t a, nat_fix256_t max_width) {
+    nat_fix256_t w = nat_interval256_width(a);
+    return nat_fix256_le(w, max_width);
+}
+
+static inline nat_interval256_t nat_interval256_step(nat_interval256_t pos, nat_interval256_t vel, nat_fix256_t dt) {
+    nat_interval256_t delta = nat_interval256_mul_scalar(vel, dt);
+    return nat_interval256_add(pos, delta);
+}
+
+static inline nat_interval256_t nat_interval256_simulate_steps_val(nat_interval256_t pos, nat_interval256_t vel, nat_fix256_t dt, int64_t num_steps) {
+    nat_interval256_t delta = nat_interval256_mul_scalar(vel, dt);
+    for (int64_t i = 0; i < num_steps; i++) {
+        pos = nat_interval256_add(pos, delta);
+    }
+    return pos;
+}
+
+static inline void nat_interval256_to_str(nat_interval256_t a, char* buf, size_t buf_size) {
+    if (!buf || buf_size < 8) return;
+    char b_lo[128], b_hi[128];
+    nat_fix256_to_str(a.lo, b_lo, sizeof(b_lo));
+    nat_fix256_to_str(a.hi, b_hi, sizeof(b_hi));
+    snprintf(buf, buf_size, "[%s, %s]", b_lo, b_hi);
+}
+
+static inline const char* nat_fix256_as_str(nat_fix256_t a) {
+    static char bufs[8][128];
+    static int idx = 0;
+    char* b = bufs[(idx++) & 7];
+    nat_fix256_to_str(a, b, 128);
+    return b;
+}
+
+static inline const char* nat_interval256_as_str(nat_interval256_t a) {
+    static char bufs[8][256];
+    static int idx = 0;
+    char* b = bufs[(idx++) & 7];
+    nat_interval256_to_str(a, b, 256);
+    return b;
+}
+
+static inline void nat_print_fix256(nat_fix256_t a) {
+    printf("%s", nat_fix256_as_str(a));
+}
+
+static inline void nat_print_interval256(nat_interval256_t a) {
+    printf("%s", nat_interval256_as_str(a));
+}
+
+/* NAT_API exported C kernels for ctypes FFI */
+NAT_API void nat_c_fix256_from_str(const char* s, int32_t frac_bits, nat_fix256_t* out) {
+    if (out) *out = nat_fix256_from_str(s, frac_bits);
+}
+
+NAT_API void nat_c_fix256_to_str(const nat_fix256_t* a, char* buf, size_t buf_size) {
+    if (a && buf) nat_fix256_to_str(*a, buf, buf_size);
+}
+
+NAT_API void nat_c_fix256_from_i64(int64_t val, int32_t frac_bits, nat_fix256_t* out) {
+    if (out) *out = nat_fix256_from_i64(val, frac_bits);
+}
+
+NAT_API void nat_c_fix256_from_f64(double val, int32_t frac_bits, nat_fix256_t* out) {
+    if (out) *out = nat_fix256_from_f64(val, frac_bits);
+}
+
+NAT_API void nat_c_fix256_to_f64(const nat_fix256_t* a, double* out) {
+    if (a && out) *out = nat_fix256_to_f64(*a);
+}
+
+NAT_API void nat_c_fix256_add(const nat_fix256_t* a, const nat_fix256_t* b, nat_fix256_t* out) {
+    if (a && b && out) *out = nat_fix256_add(*a, *b);
+}
+
+NAT_API void nat_c_fix256_sub(const nat_fix256_t* a, const nat_fix256_t* b, nat_fix256_t* out) {
+    if (a && b && out) *out = nat_fix256_sub(*a, *b);
+}
+
+NAT_API void nat_c_fix256_mul(const nat_fix256_t* a, const nat_fix256_t* b, nat_fix256_t* out) {
+    if (a && b && out) *out = nat_fix256_mul(*a, *b);
+}
+
+NAT_API void nat_c_fix256_div(const nat_fix256_t* a, const nat_fix256_t* b, nat_fix256_t* out) {
+    if (a && b && out) *out = nat_fix256_div(*a, *b);
+}
+
+NAT_API int32_t nat_c_fix256_cmp(const nat_fix256_t* a, const nat_fix256_t* b) {
+    if (!a || !b) return 0;
+    return (int32_t)nat_fix256_cmp(*a, *b);
+}
+
+NAT_API void nat_c_interval256_create(const nat_fix256_t* lo, const nat_fix256_t* hi, nat_interval256_t* out) {
+    if (lo && hi && out) *out = nat_interval256_create(*lo, *hi);
+}
+
+NAT_API void nat_c_interval256_add(const nat_interval256_t* a, const nat_interval256_t* b, nat_interval256_t* out) {
+    if (a && b && out) *out = nat_interval256_add(*a, *b);
+}
+
+NAT_API void nat_c_interval256_sub(const nat_interval256_t* a, const nat_interval256_t* b, nat_interval256_t* out) {
+    if (a && b && out) *out = nat_interval256_sub(*a, *b);
+}
+
+NAT_API void nat_c_interval256_mul(const nat_interval256_t* a, const nat_interval256_t* b, nat_interval256_t* out) {
+    if (a && b && out) *out = nat_interval256_mul(*a, *b);
+}
+
+NAT_API void nat_c_interval256_mul_scalar(const nat_interval256_t* a, const nat_fix256_t* s, nat_interval256_t* out) {
+    if (a && s && out) *out = nat_interval256_mul_scalar(*a, *s);
+}
+
+NAT_API void nat_c_interval256_step(const nat_interval256_t* pos, const nat_interval256_t* vel, const nat_fix256_t* dt, nat_interval256_t* out) {
+    if (pos && vel && dt && out) *out = nat_interval256_step(*pos, *vel, *dt);
+}
+
+NAT_API void nat_c_interval256_width(const nat_interval256_t* a, nat_fix256_t* out) {
+    if (a && out) *out = nat_interval256_width(*a);
+}
+
+NAT_API void nat_c_interval256_mid(const nat_interval256_t* a, nat_fix256_t* out) {
+    if (a && out) *out = nat_interval256_mid(*a);
+}
+
+NAT_API bool nat_c_interval256_contains(const nat_interval256_t* a, const nat_fix256_t* x) {
+    if (!a || !x) return false;
+    return nat_interval256_contains(*a, *x);
+}
+
+NAT_API bool nat_c_interval256_is_coherent(const nat_interval256_t* a, const nat_fix256_t* max_width) {
+    if (!a || !max_width) return false;
+    return nat_interval256_is_coherent(*a, *max_width);
+}
+
+NAT_API void nat_c_interval256_to_str(const nat_interval256_t* a, char* buf, size_t buf_size) {
+    if (a && buf) nat_interval256_to_str(*a, buf, buf_size);
+}
+
+NAT_API void nat_c_interval256_simulate_steps(nat_interval256_t* pos, const nat_interval256_t* vel, const nat_fix256_t* dt, int64_t num_steps) {
+    if (!pos || !vel || !dt || num_steps <= 0) return;
+    nat_interval256_t delta = nat_interval256_mul_scalar(*vel, *dt);
+    for (int64_t i = 0; i < num_steps; i++) {
+        *pos = nat_interval256_add(*pos, delta);
+    }
+}
+
+NAT_API void nat_c_interval256_div(const nat_interval256_t* a, const nat_interval256_t* b, nat_interval256_t* out) {
+    if (a && b && out) *out = nat_interval256_div(*a, *b);
+}
+
+NAT_API void nat_c_interval256_div_scalar(const nat_interval256_t* a, const nat_fix256_t* s, nat_interval256_t* out) {
+    if (a && s && out) *out = nat_interval256_div_scalar(*a, *s);
+}
+
+NAT_API void nat_c_interval256_neg(const nat_interval256_t* a, nat_interval256_t* out) {
+    if (a && out) *out = nat_interval256_neg(*a);
+}
+
 #endif /* NATIVA_RT_H */
 """
 
@@ -3254,6 +4125,21 @@ def ensure_nativa_rt_header() -> str:
     except Exception:
         pass
     return rt_path
+
+
+class C_NatFix256(ctypes.Structure):
+    _fields_ = [
+        ("limbs", ctypes.c_uint64 * 4),
+        ("frac_bits", ctypes.c_int32),
+        ("sign", ctypes.c_int8),
+    ]
+
+
+class C_NatInterval256(ctypes.Structure):
+    _fields_ = [
+        ("lo", C_NatFix256),
+        ("hi", C_NatFix256),
+    ]
 
 
 class AOTKernelEngine:
@@ -3314,12 +4200,32 @@ class AOTKernelEngine:
                 for vc in vcvars_candidates:
                     if os.path.exists(vc):
                         bat = os.path.join(cache_dir, "_build_aot.bat")
-                        with open(bat, "w") as bf:
-                            bf.write(f'@echo off\ncall "{vc}" >nul 2>&1\ncl.exe /LD /O2 /openmp /nologo "{c_src_path}" /Fe:"{dll_path}"\n')
-                        proc = subprocess.run([bat], capture_output=True, text=True)
-                        if proc.returncode == 0 and os.path.exists(dll_path):
-                            compiled_ok = True
-                            break
+                        obj_path = os.path.join(cache_dir, "aot_kernels.obj")
+                        with open(bat, "w", encoding="utf-8") as bf:
+                            bf.write(f'@echo off\ncall "{vc}" >nul 2>&1\ncl.exe /LD /O2 /openmp /nologo "{c_src_path}" /Fe:"{dll_path}" /Fo:"{obj_path}"\n')
+                        try:
+                            proc = subprocess.run([bat], capture_output=True, text=True)
+                            if proc.returncode == 0 and os.path.exists(dll_path):
+                                compiled_ok = True
+                                break
+                        finally:
+                            if os.path.exists(bat):
+                                try:
+                                    os.remove(bat)
+                                except OSError:
+                                    pass
+                            for extra_ext in (".obj", ".exp", ".lib"):
+                                extra = os.path.splitext(dll_path)[0] + extra_ext
+                                if os.path.exists(extra):
+                                    try:
+                                        os.remove(extra)
+                                    except OSError:
+                                        pass
+                            if os.path.exists(obj_path):
+                                try:
+                                    os.remove(obj_path)
+                                except OSError:
+                                    pass
 
             if not compiled_ok:
                 gcc = shutil.which("gcc") or shutil.which("clang")
@@ -3398,6 +4304,83 @@ class AOTKernelEngine:
             ctypes.c_int64
         ]
         dll.nat_c_softmax.restype = None
+
+        if hasattr(dll, "nat_c_fix256_from_str"):
+            dll.nat_c_fix256_from_str.argtypes = [ctypes.c_char_p, ctypes.c_int32, ctypes.c_void_p]
+            dll.nat_c_fix256_from_str.restype = None
+
+            dll.nat_c_fix256_to_str.argtypes = [ctypes.c_void_p, ctypes.c_char_p, ctypes.c_size_t]
+            dll.nat_c_fix256_to_str.restype = None
+
+            dll.nat_c_fix256_from_i64.argtypes = [ctypes.c_int64, ctypes.c_int32, ctypes.c_void_p]
+            dll.nat_c_fix256_from_i64.restype = None
+
+            dll.nat_c_fix256_from_f64.argtypes = [ctypes.c_double, ctypes.c_int32, ctypes.c_void_p]
+            dll.nat_c_fix256_from_f64.restype = None
+
+            dll.nat_c_fix256_to_f64.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_double)]
+            dll.nat_c_fix256_to_f64.restype = None
+
+            dll.nat_c_fix256_add.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p]
+            dll.nat_c_fix256_add.restype = None
+
+            dll.nat_c_fix256_sub.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p]
+            dll.nat_c_fix256_sub.restype = None
+
+            dll.nat_c_fix256_mul.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p]
+            dll.nat_c_fix256_mul.restype = None
+
+            dll.nat_c_fix256_div.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p]
+            dll.nat_c_fix256_div.restype = None
+
+            dll.nat_c_fix256_cmp.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+            dll.nat_c_fix256_cmp.restype = ctypes.c_int32
+
+            dll.nat_c_interval256_create.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p]
+            dll.nat_c_interval256_create.restype = None
+
+            dll.nat_c_interval256_add.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p]
+            dll.nat_c_interval256_add.restype = None
+
+            dll.nat_c_interval256_sub.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p]
+            dll.nat_c_interval256_sub.restype = None
+
+            dll.nat_c_interval256_mul.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p]
+            dll.nat_c_interval256_mul.restype = None
+
+            dll.nat_c_interval256_mul_scalar.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p]
+            dll.nat_c_interval256_mul_scalar.restype = None
+
+            dll.nat_c_interval256_step.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p]
+            dll.nat_c_interval256_step.restype = None
+
+            dll.nat_c_interval256_width.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+            dll.nat_c_interval256_width.restype = None
+
+            dll.nat_c_interval256_mid.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+            dll.nat_c_interval256_mid.restype = None
+
+            dll.nat_c_interval256_contains.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+            dll.nat_c_interval256_contains.restype = ctypes.c_bool
+
+            dll.nat_c_interval256_is_coherent.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+            dll.nat_c_interval256_is_coherent.restype = ctypes.c_bool
+
+            dll.nat_c_interval256_to_str.argtypes = [ctypes.c_void_p, ctypes.c_char_p, ctypes.c_size_t]
+            dll.nat_c_interval256_to_str.restype = None
+
+            dll.nat_c_interval256_simulate_steps.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_int64]
+            dll.nat_c_interval256_simulate_steps.restype = None
+
+            if hasattr(dll, "nat_c_interval256_div"):
+                dll.nat_c_interval256_div.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p]
+                dll.nat_c_interval256_div.restype = None
+
+                dll.nat_c_interval256_div_scalar.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p]
+                dll.nat_c_interval256_div_scalar.restype = None
+
+                dll.nat_c_interval256_neg.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+                dll.nat_c_interval256_neg.restype = None
 
 
 @dataclass
@@ -4226,7 +5209,7 @@ def fwht(a):
     n = p2
     h = 1
     while h < n:
-        a = a.reshape(-1, 2, h)
+        a = a.reshape((-1, 2, h))
         x = a[:, 0, :].copy()
         y = a[:, 1, :].copy()
         a[:, 0, :] = x + y
@@ -4979,7 +5962,7 @@ def _get_mmap(path: str) -> tuple[mmap.mmap, int, dict]:
         try:
             header = json.loads(header_json_bytes.decode("utf-8"))
         except Exception as e:
-            raise ValueError(f"Malformed safetensors JSON header in '{resolved}': {e}")
+            raise ValueError(f"Malformed safetensors JSON header in '{resolved}': {e}") from e
         if not isinstance(header, dict):
             raise ValueError(f"Invalid safetensors header (expected JSON object) in '{resolved}'")
 
@@ -5228,6 +6211,460 @@ class NatComplex:
 
 def complex_fn(real: Any = 0.0, imag: Any = 0.0) -> NatComplex:
     return NatComplex(float(real), float(imag))
+
+
+class NatFix256:
+    """256-bit fixed-point arithmetic type (default Q192.64) for high-altitude/cosmic scale steps."""
+    def __init__(self, val: Any = 0, frac_bits: int = 64):
+        self.frac_bits = int(frac_bits) if frac_bits is not None else 64
+        if isinstance(val, NatFix256):
+            self.limbs = list(val.limbs)
+            self.sign = val.sign
+            self.frac_bits = val.frac_bits
+        elif isinstance(val, C_NatFix256):
+            self.limbs = [val.limbs[0], val.limbs[1], val.limbs[2], val.limbs[3]]
+            self.sign = int(val.sign)
+            self.frac_bits = int(val.frac_bits)
+        elif isinstance(val, str):
+            dll = AOTKernelEngine.get_dll()
+            if dll and hasattr(dll, "nat_c_fix256_from_str"):
+                c_out = C_NatFix256()
+                dll.nat_c_fix256_from_str(val.encode("utf-8"), self.frac_bits, ctypes.byref(c_out))
+                self.limbs = [c_out.limbs[0], c_out.limbs[1], c_out.limbs[2], c_out.limbs[3]]
+                self.sign = int(c_out.sign)
+            else:
+                self._from_str_py(val)
+        elif isinstance(val, int):
+            dll = AOTKernelEngine.get_dll()
+            if dll and hasattr(dll, "nat_c_fix256_from_i64") and -0x8000000000000000 <= val <= 0x7FFFFFFFFFFFFFFF:
+                c_out = C_NatFix256()
+                dll.nat_c_fix256_from_i64(ctypes.c_int64(val), self.frac_bits, ctypes.byref(c_out))
+                self.limbs = [c_out.limbs[0], c_out.limbs[1], c_out.limbs[2], c_out.limbs[3]]
+                self.sign = int(c_out.sign)
+            else:
+                self._from_int_py(val)
+        elif isinstance(val, float):
+            dll = AOTKernelEngine.get_dll()
+            if dll and hasattr(dll, "nat_c_fix256_from_f64"):
+                c_out = C_NatFix256()
+                dll.nat_c_fix256_from_f64(ctypes.c_double(val), self.frac_bits, ctypes.byref(c_out))
+                self.limbs = [c_out.limbs[0], c_out.limbs[1], c_out.limbs[2], c_out.limbs[3]]
+                self.sign = int(c_out.sign)
+            else:
+                self._from_float_py(val)
+        else:
+            self.limbs = [0, 0, 0, 0]
+            self.sign = 1
+
+    def _from_int_py(self, val: int):
+        self.sign = -1 if val < 0 else 1
+        mag = (abs(val) << self.frac_bits)
+        self.limbs = [
+            mag & 0xFFFFFFFFFFFFFFFF,
+            (mag >> 64) & 0xFFFFFFFFFFFFFFFF,
+            (mag >> 128) & 0xFFFFFFFFFFFFFFFF,
+            (mag >> 192) & 0xFFFFFFFFFFFFFFFF,
+        ]
+
+    def _from_float_py(self, val: float):
+        self.sign = -1 if val < 0 else 1
+        scaled = int(round(abs(val) * (1 << self.frac_bits)))
+        self.limbs = [
+            scaled & 0xFFFFFFFFFFFFFFFF,
+            (scaled >> 64) & 0xFFFFFFFFFFFFFFFF,
+            (scaled >> 128) & 0xFFFFFFFFFFFFFFFF,
+            (scaled >> 192) & 0xFFFFFFFFFFFFFFFF,
+        ]
+
+    def _from_str_py(self, s: str):
+        s = s.strip()
+        self.sign = 1
+        if s.startswith("-"):
+            self.sign = -1
+            s = s[1:]
+        elif s.startswith("+"):
+            s = s[1:]
+        from decimal import Decimal
+        d = Decimal(s)
+        scaled = int(round(d * (Decimal(1 << self.frac_bits))))
+        mag = abs(scaled)
+        self.limbs = [
+            mag & 0xFFFFFFFFFFFFFFFF,
+            (mag >> 64) & 0xFFFFFFFFFFFFFFFF,
+            (mag >> 128) & 0xFFFFFFFFFFFFFFFF,
+            (mag >> 192) & 0xFFFFFFFFFFFFFFFF,
+        ]
+
+    def to_c(self) -> C_NatFix256:
+        c = C_NatFix256()
+        c.limbs[0] = self.limbs[0]
+        c.limbs[1] = self.limbs[1]
+        c.limbs[2] = self.limbs[2]
+        c.limbs[3] = self.limbs[3]
+        c.frac_bits = self.frac_bits
+        c.sign = self.sign
+        return c
+
+    @classmethod
+    def from_c(cls, c: C_NatFix256) -> "NatFix256":
+        r = cls(0, c.frac_bits)
+        r.limbs = [c.limbs[0], c.limbs[1], c.limbs[2], c.limbs[3]]
+        r.sign = int(c.sign)
+        return r
+
+    @property
+    def raw_magnitude(self) -> int:
+        return self.limbs[0] | (self.limbs[1] << 64) | (self.limbs[2] << 128) | (self.limbs[3] << 192)
+
+    @property
+    def raw_value(self) -> int:
+        return self.sign * self.raw_magnitude
+
+    def to_str(self) -> str:
+        dll = AOTKernelEngine.get_dll()
+        if dll and hasattr(dll, "nat_c_fix256_to_str"):
+            buf = ctypes.create_string_buffer(128)
+            c = self.to_c()
+            dll.nat_c_fix256_to_str(ctypes.byref(c), buf, 128)
+            return buf.value.decode("utf-8")
+        int_part = self.raw_magnitude >> self.frac_bits
+        mask = (1 << self.frac_bits) - 1
+        frac_part = self.raw_magnitude & mask
+        res = f"-{int_part}" if self.sign < 0 else f"{int_part}"
+        if self.frac_bits > 0:
+            frac_dec = int(round((frac_part * 1000000) / (1 << self.frac_bits)))
+            res += f".{frac_dec:06d}"
+        return res
+
+    def to_f64(self) -> float:
+        dll = AOTKernelEngine.get_dll()
+        if dll and hasattr(dll, "nat_c_fix256_to_f64"):
+            out = ctypes.c_double(0.0)
+            c = self.to_c()
+            dll.nat_c_fix256_to_f64(ctypes.byref(c), ctypes.byref(out))
+            return out.value
+        return self.raw_value / (1 << self.frac_bits)
+
+    def to_i64(self) -> int:
+        return self.sign * (self.raw_magnitude >> self.frac_bits)
+
+    def __repr__(self) -> str:
+        return self.to_str()
+
+    def __str__(self) -> str:
+        return self.to_str()
+
+    def __neg__(self) -> "NatFix256":
+        r = NatFix256(self)
+        if r.raw_magnitude != 0:
+            r.sign = -r.sign
+        return r
+
+    def __abs__(self) -> "NatFix256":
+        r = NatFix256(self)
+        r.sign = 1
+        return r
+
+    def __add__(self, other: Any) -> "NatFix256":
+        b = other if isinstance(other, NatFix256) else NatFix256(other, self.frac_bits)
+        dll = AOTKernelEngine.get_dll()
+        if dll and hasattr(dll, "nat_c_fix256_add"):
+            ca, cb, cout = self.to_c(), b.to_c(), C_NatFix256()
+            dll.nat_c_fix256_add(ctypes.byref(ca), ctypes.byref(cb), ctypes.byref(cout))
+            return NatFix256.from_c(cout)
+        val = self.raw_value + b.raw_value
+        r = NatFix256(0, self.frac_bits)
+        r.sign = -1 if val < 0 else 1
+        mag = abs(val)
+        r.limbs = [mag & 0xFFFFFFFFFFFFFFFF, (mag >> 64) & 0xFFFFFFFFFFFFFFFF, (mag >> 128) & 0xFFFFFFFFFFFFFFFF, (mag >> 192) & 0xFFFFFFFFFFFFFFFF]
+        return r
+
+    def __radd__(self, other: Any) -> "NatFix256":
+        return self.__add__(other)
+
+    def __sub__(self, other: Any) -> "NatFix256":
+        b = other if isinstance(other, NatFix256) else NatFix256(other, self.frac_bits)
+        dll = AOTKernelEngine.get_dll()
+        if dll and hasattr(dll, "nat_c_fix256_sub"):
+            ca, cb, cout = self.to_c(), b.to_c(), C_NatFix256()
+            dll.nat_c_fix256_sub(ctypes.byref(ca), ctypes.byref(cb), ctypes.byref(cout))
+            return NatFix256.from_c(cout)
+        val = self.raw_value - b.raw_value
+        r = NatFix256(0, self.frac_bits)
+        r.sign = -1 if val < 0 else 1
+        mag = abs(val)
+        r.limbs = [mag & 0xFFFFFFFFFFFFFFFF, (mag >> 64) & 0xFFFFFFFFFFFFFFFF, (mag >> 128) & 0xFFFFFFFFFFFFFFFF, (mag >> 192) & 0xFFFFFFFFFFFFFFFF]
+        return r
+
+    def __rsub__(self, other: Any) -> "NatFix256":
+        a = other if isinstance(other, NatFix256) else NatFix256(other, self.frac_bits)
+        return a.__sub__(self)
+
+    def __mul__(self, other: Any) -> "NatFix256":
+        b = other if isinstance(other, NatFix256) else NatFix256(other, self.frac_bits)
+        dll = AOTKernelEngine.get_dll()
+        if dll and hasattr(dll, "nat_c_fix256_mul"):
+            ca, cb, cout = self.to_c(), b.to_c(), C_NatFix256()
+            dll.nat_c_fix256_mul(ctypes.byref(ca), ctypes.byref(cb), ctypes.byref(cout))
+            return NatFix256.from_c(cout)
+        val = (self.raw_value * b.raw_value) >> self.frac_bits
+        r = NatFix256(0, self.frac_bits)
+        r.sign = -1 if val < 0 else 1
+        mag = abs(val)
+        r.limbs = [mag & 0xFFFFFFFFFFFFFFFF, (mag >> 64) & 0xFFFFFFFFFFFFFFFF, (mag >> 128) & 0xFFFFFFFFFFFFFFFF, (mag >> 192) & 0xFFFFFFFFFFFFFFFF]
+        return r
+
+    def __rmul__(self, other: Any) -> "NatFix256":
+        return self.__mul__(other)
+
+    def __truediv__(self, other: Any) -> "NatFix256":
+        b = other if isinstance(other, NatFix256) else NatFix256(other, self.frac_bits)
+        dll = AOTKernelEngine.get_dll()
+        if dll and hasattr(dll, "nat_c_fix256_div"):
+            ca, cb, cout = self.to_c(), b.to_c(), C_NatFix256()
+            dll.nat_c_fix256_div(ctypes.byref(ca), ctypes.byref(cb), ctypes.byref(cout))
+            return NatFix256.from_c(cout)
+        if b.raw_magnitude == 0:
+            return NatFix256(0, self.frac_bits)
+        val = (self.raw_value << self.frac_bits) // b.raw_value
+        r = NatFix256(0, self.frac_bits)
+        r.sign = -1 if val < 0 else 1
+        mag = abs(val)
+        r.limbs = [mag & 0xFFFFFFFFFFFFFFFF, (mag >> 64) & 0xFFFFFFFFFFFFFFFF, (mag >> 128) & 0xFFFFFFFFFFFFFFFF, (mag >> 192) & 0xFFFFFFFFFFFFFFFF]
+        return r
+
+    def __rtruediv__(self, other: Any) -> "NatFix256":
+        a = other if isinstance(other, NatFix256) else NatFix256(other, self.frac_bits)
+        return a.__truediv__(self)
+
+    def _cmp(self, other: Any) -> int:
+        b = other if isinstance(other, NatFix256) else NatFix256(other, self.frac_bits)
+        dll = AOTKernelEngine.get_dll()
+        if dll and hasattr(dll, "nat_c_fix256_cmp"):
+            ca, cb = self.to_c(), b.to_c()
+            return int(dll.nat_c_fix256_cmp(ctypes.byref(ca), ctypes.byref(cb)))
+        va, vb = self.raw_value, b.raw_value
+        return 1 if va > vb else (-1 if va < vb else 0)
+
+    def __eq__(self, other: Any) -> bool:
+        return self._cmp(other) == 0
+
+    def __lt__(self, other: Any) -> bool:
+        return self._cmp(other) < 0
+
+    def __le__(self, other: Any) -> bool:
+        return self._cmp(other) <= 0
+
+    def __gt__(self, other: Any) -> bool:
+        return self._cmp(other) > 0
+
+    def __ge__(self, other: Any) -> bool:
+        return self._cmp(other) >= 0
+
+
+class NatInterval256:
+    """Rigorous 256-bit interval arithmetic [lo, hi] for coherence verification in extreme steps."""
+    def __init__(self, lo: Any = 0, hi: Any = None):
+        if isinstance(lo, NatInterval256):
+            self.lo = NatFix256(lo.lo)
+            self.hi = NatFix256(lo.hi)
+        elif isinstance(lo, C_NatInterval256):
+            self.lo = NatFix256.from_c(lo.lo)
+            self.hi = NatFix256.from_c(lo.hi)
+        else:
+            self.lo = lo if isinstance(lo, NatFix256) else NatFix256(lo)
+            self.hi = self.lo if hi is None else (hi if isinstance(hi, NatFix256) else NatFix256(hi))
+            if self.lo > self.hi:
+                self.lo, self.hi = self.hi, self.lo
+
+    def to_c(self) -> C_NatInterval256:
+        c = C_NatInterval256()
+        c.lo = self.lo.to_c()
+        c.hi = self.hi.to_c()
+        return c
+
+    @classmethod
+    def from_c(cls, c: C_NatInterval256) -> "NatInterval256":
+        return cls(NatFix256.from_c(c.lo), NatFix256.from_c(c.hi))
+
+    def to_str(self) -> str:
+        dll = AOTKernelEngine.get_dll()
+        if dll and hasattr(dll, "nat_c_interval256_to_str"):
+            buf = ctypes.create_string_buffer(256)
+            c = self.to_c()
+            dll.nat_c_interval256_to_str(ctypes.byref(c), buf, 256)
+            return buf.value.decode("utf-8")
+        return f"[{self.lo.to_str()}, {self.hi.to_str()}]"
+
+    def __repr__(self) -> str:
+        return self.to_str()
+
+    def __str__(self) -> str:
+        return self.to_str()
+
+    def __add__(self, other: Any) -> "NatInterval256":
+        b = other if isinstance(other, NatInterval256) else NatInterval256(other)
+        dll = AOTKernelEngine.get_dll()
+        if dll and hasattr(dll, "nat_c_interval256_add"):
+            ca, cb, cout = self.to_c(), b.to_c(), C_NatInterval256()
+            dll.nat_c_interval256_add(ctypes.byref(ca), ctypes.byref(cb), ctypes.byref(cout))
+            return NatInterval256.from_c(cout)
+        return NatInterval256(self.lo + b.lo, self.hi + b.hi)
+
+    def __sub__(self, other: Any) -> "NatInterval256":
+        b = other if isinstance(other, NatInterval256) else NatInterval256(other)
+        dll = AOTKernelEngine.get_dll()
+        if dll and hasattr(dll, "nat_c_interval256_sub"):
+            ca, cb, cout = self.to_c(), b.to_c(), C_NatInterval256()
+            dll.nat_c_interval256_sub(ctypes.byref(ca), ctypes.byref(cb), ctypes.byref(cout))
+            return NatInterval256.from_c(cout)
+        return NatInterval256(self.lo - b.hi, self.hi - b.lo)
+
+    def __mul__(self, other: Any) -> "NatInterval256":
+        if isinstance(other, (int, float, NatFix256)):
+            s = other if isinstance(other, NatFix256) else NatFix256(other)
+            dll = AOTKernelEngine.get_dll()
+            if dll and hasattr(dll, "nat_c_interval256_mul_scalar"):
+                ca, cs, cout = self.to_c(), s.to_c(), C_NatInterval256()
+                dll.nat_c_interval256_mul_scalar(ctypes.byref(ca), ctypes.byref(cs), ctypes.byref(cout))
+                return NatInterval256.from_c(cout)
+            return NatInterval256(self.lo * s, self.hi * s) if s >= 0 else NatInterval256(self.hi * s, self.lo * s)
+        b = other if isinstance(other, NatInterval256) else NatInterval256(other)
+        dll = AOTKernelEngine.get_dll()
+        if dll and hasattr(dll, "nat_c_interval256_mul"):
+            ca, cb, cout = self.to_c(), b.to_c(), C_NatInterval256()
+            dll.nat_c_interval256_mul(ctypes.byref(ca), ctypes.byref(cb), ctypes.byref(cout))
+            return NatInterval256.from_c(cout)
+        p = [self.lo * b.lo, self.lo * b.hi, self.hi * b.lo, self.hi * b.hi]
+        return NatInterval256(min(p), max(p))
+
+    def __radd__(self, other: Any) -> "NatInterval256":
+        return self.__add__(other)
+
+    def __rsub__(self, other: Any) -> "NatInterval256":
+        a = other if isinstance(other, NatInterval256) else NatInterval256(other)
+        return a.__sub__(self)
+
+    def __rmul__(self, other: Any) -> "NatInterval256":
+        return self.__mul__(other)
+
+    def __neg__(self) -> "NatInterval256":
+        dll = AOTKernelEngine.get_dll()
+        if dll and hasattr(dll, "nat_c_interval256_neg"):
+            ca, cout = self.to_c(), C_NatInterval256()
+            dll.nat_c_interval256_neg(ctypes.byref(ca), ctypes.byref(cout))
+            return NatInterval256.from_c(cout)
+        return NatInterval256(-self.hi, -self.lo)
+
+    def __truediv__(self, other: Any) -> "NatInterval256":
+        if isinstance(other, (int, float, NatFix256)):
+            s = other if isinstance(other, NatFix256) else NatFix256(other)
+            dll = AOTKernelEngine.get_dll()
+            if dll and hasattr(dll, "nat_c_interval256_div_scalar"):
+                ca, cs, cout = self.to_c(), s.to_c(), C_NatInterval256()
+                dll.nat_c_interval256_div_scalar(ctypes.byref(ca), ctypes.byref(cs), ctypes.byref(cout))
+                return NatInterval256.from_c(cout)
+            if s.raw_magnitude == 0:
+                return NatInterval256(0, 0)
+            return NatInterval256(self.lo / s, self.hi / s) if s >= 0 else NatInterval256(self.hi / s, self.lo / s)
+        b = other if isinstance(other, NatInterval256) else NatInterval256(other)
+        dll = AOTKernelEngine.get_dll()
+        if dll and hasattr(dll, "nat_c_interval256_div"):
+            ca, cb, cout = self.to_c(), b.to_c(), C_NatInterval256()
+            dll.nat_c_interval256_div(ctypes.byref(ca), ctypes.byref(cb), ctypes.byref(cout))
+            return NatInterval256.from_c(cout)
+        if b.contains(0):
+            return NatInterval256(0, 0)
+        p = [self.lo / b.lo, self.lo / b.hi, self.hi / b.lo, self.hi / b.hi]
+        return NatInterval256(min(p), max(p))
+
+    def __rtruediv__(self, other: Any) -> "NatInterval256":
+        a = other if isinstance(other, NatInterval256) else NatInterval256(other)
+        return a.__truediv__(self)
+
+    def width(self) -> NatFix256:
+        dll = AOTKernelEngine.get_dll()
+        if dll and hasattr(dll, "nat_c_interval256_width"):
+            ca, cout = self.to_c(), C_NatFix256()
+            dll.nat_c_interval256_width(ctypes.byref(ca), ctypes.byref(cout))
+            return NatFix256.from_c(cout)
+        return self.hi - self.lo
+
+    def mid(self) -> NatFix256:
+        dll = AOTKernelEngine.get_dll()
+        if dll and hasattr(dll, "nat_c_interval256_mid"):
+            ca, cout = self.to_c(), C_NatFix256()
+            dll.nat_c_interval256_mid(ctypes.byref(ca), ctypes.byref(cout))
+            return NatFix256.from_c(cout)
+        return (self.lo + self.hi) / 2
+
+    def contains(self, x: Any) -> bool:
+        fx = x if isinstance(x, NatFix256) else NatFix256(x)
+        dll = AOTKernelEngine.get_dll()
+        if dll and hasattr(dll, "nat_c_interval256_contains"):
+            ca, cx = self.to_c(), fx.to_c()
+            return bool(dll.nat_c_interval256_contains(ctypes.byref(ca), ctypes.byref(cx)))
+        return self.lo <= fx <= self.hi
+
+    def is_coherent(self, max_width: Any) -> bool:
+        mw = max_width if isinstance(max_width, NatFix256) else NatFix256(max_width)
+        dll = AOTKernelEngine.get_dll()
+        if dll and hasattr(dll, "nat_c_interval256_is_coherent"):
+            ca, cmw = self.to_c(), mw.to_c()
+            return bool(dll.nat_c_interval256_is_coherent(ctypes.byref(ca), ctypes.byref(cmw)))
+        return self.width() <= mw
+
+    def step(self, vel: Any, dt: Any) -> "NatInterval256":
+        v = vel if isinstance(vel, NatInterval256) else NatInterval256(vel)
+        t = dt if isinstance(dt, NatFix256) else NatFix256(dt)
+        dll = AOTKernelEngine.get_dll()
+        if dll and hasattr(dll, "nat_c_interval256_step"):
+            cp, cv, ct, cout = self.to_c(), v.to_c(), t.to_c(), C_NatInterval256()
+            dll.nat_c_interval256_step(ctypes.byref(cp), ctypes.byref(cv), ctypes.byref(ct), ctypes.byref(cout))
+            return NatInterval256.from_c(cout)
+        return self + (v * t)
+
+    def simulate_steps(self, vel: Any, dt: Any, num_steps: int) -> "NatInterval256":
+        v = vel if isinstance(vel, NatInterval256) else NatInterval256(vel)
+        t = dt if isinstance(dt, NatFix256) else NatFix256(dt)
+        dll = AOTKernelEngine.get_dll()
+        if dll and hasattr(dll, "nat_c_interval256_simulate_steps"):
+            cp, cv, ct = self.to_c(), v.to_c(), t.to_c()
+            dll.nat_c_interval256_simulate_steps(ctypes.byref(cp), ctypes.byref(cv), ctypes.byref(ct), ctypes.c_int64(num_steps))
+            return NatInterval256.from_c(cp)
+        cur = self
+        step_delta = v * t
+        for _ in range(num_steps):
+            cur = cur + step_delta
+        return cur
+
+
+def fix256_fn(val: Any = 0, frac_bits: int = 64) -> NatFix256:
+    return NatFix256(val, frac_bits)
+
+
+def interval256_fn(lo: Any = 0, hi: Any = None) -> NatInterval256:
+    return NatInterval256(lo, hi)
+
+
+def interval256_step_fn(pos: Any, vel: Any, dt: Any) -> NatInterval256:
+    iv_pos = pos if isinstance(pos, NatInterval256) else NatInterval256(pos)
+    return iv_pos.step(vel, dt)
+
+
+def interval256_width_fn(iv: Any) -> NatFix256:
+    iv_obj = iv if isinstance(iv, NatInterval256) else NatInterval256(iv)
+    return iv_obj.width()
+
+
+def interval256_mid_fn(iv: Any) -> NatFix256:
+    iv_obj = iv if isinstance(iv, NatInterval256) else NatInterval256(iv)
+    return iv_obj.mid()
+
+
+def interval256_is_coherent_fn(iv: Any, max_width: Any) -> bool:
+    iv_obj = iv if isinstance(iv, NatInterval256) else NatInterval256(iv)
+    return iv_obj.is_coherent(max_width)
 
 
 def rfft_fn(x: Any, n: Optional[int] = None) -> Any:
@@ -5602,6 +7039,14 @@ BUILTIN_IMPLS: dict[str, Callable] = {
     "rfft": rfft_fn,
     "irfft": irfft_fn,
     "power_spectrum": power_spectrum_fn,
+    "Fix256": fix256_fn,
+    "fix256": fix256_fn,
+    "Interval256": interval256_fn,
+    "interval256": interval256_fn,
+    "interval256_step": interval256_step_fn,
+    "interval256_width": interval256_width_fn,
+    "interval256_mid": interval256_mid_fn,
+    "interval256_is_coherent": interval256_is_coherent_fn,
     "map": lambda fn, it: [fn(x.item() if hasattr(x, "item") else x) for x in it],
     "filter": lambda fn, it: [x.item() if hasattr(x, "item") else x for x in it if fn(x.item() if hasattr(x, "item") else x)],
 }
@@ -5714,6 +7159,7 @@ class Interpreter:
         self.frame_bases: list[int] = [0]
         self.last_scope: dict[str, Any] = {}
         self.cur_node: Optional[Node] = None
+        self._loading_modules: set[str] = set()
         self.init_builtins()
 
     def _runtime_error(self, message: str, node: Optional[Node] = None) -> NatRuntimeError:
@@ -5739,32 +7185,40 @@ class Interpreter:
         return _ctor
 
     def _load_user_module(self, mod_name: str) -> None:
-        mod_path = _resolve_local_module_path(mod_name)
-        if mod_path is None:
-            raise RuntimeError(f"Module not found: '{mod_name}'")
-        with open(mod_path, "r", encoding="utf-8") as mf:
-            mod_src = mf.read()
-        mod_prog = parse(mod_src)
-        exports: dict[str, Any] = {}
-        for it in mod_prog.items:
-            if isinstance(it, Import) and it.module not in KNOWN_MODULES:
-                self._load_user_module(it.module)
-            elif isinstance(it, StructDecl):
-                ctor = self._make_struct_ctor(it)
-                exports[it.name] = ctor
-                if it.name not in self.globals:
-                    self.globals[it.name] = ctor
-            elif isinstance(it, Function) and it.name != "main":
-                exports[it.name] = it
-                if it.name not in self.globals:
-                    self.globals[it.name] = it
-            elif isinstance(it, ConstDecl):
-                val = self.eval_expr(it.value)
-                exports[it.name] = val
-                if it.name not in self.globals:
-                    self.globals[it.name] = val
-                    self.const_globals.add(it.name)
-        self.globals[mod_name] = NatUserModule(mod_name, exports)
+        if mod_name in self.globals and isinstance(self.globals[mod_name], NatUserModule):
+            return
+        if mod_name in self._loading_modules:
+            return
+        self._loading_modules.add(mod_name)
+        try:
+            mod_path = _resolve_local_module_path(mod_name)
+            if mod_path is None:
+                raise RuntimeError(f"Module not found: '{mod_name}'")
+            with open(mod_path, "r", encoding="utf-8") as mf:
+                mod_src = mf.read()
+            mod_prog = parse(mod_src)
+            exports: dict[str, Any] = {}
+            for it in mod_prog.items:
+                if isinstance(it, Import) and it.module not in KNOWN_MODULES:
+                    self._load_user_module(it.module)
+                elif isinstance(it, StructDecl):
+                    ctor = self._make_struct_ctor(it)
+                    exports[it.name] = ctor
+                    if it.name not in self.globals:
+                        self.globals[it.name] = ctor
+                elif isinstance(it, Function) and it.name != "main":
+                    exports[it.name] = it
+                    if it.name not in self.globals:
+                        self.globals[it.name] = it
+                elif isinstance(it, ConstDecl):
+                    val = self.eval_expr(it.value)
+                    exports[it.name] = val
+                    if it.name not in self.globals:
+                        self.globals[it.name] = val
+                        self.const_globals.add(it.name)
+            self.globals[mod_name] = NatUserModule(mod_name, exports)
+        finally:
+            self._loading_modules.remove(mod_name)
 
     def run(self, program: Program):
         self.const_globals.clear()
@@ -5784,6 +7238,11 @@ class Interpreter:
         return None
 
     def call_function(self, fn: Function, args: list[Any]) -> Any:
+        if len(args) != len(fn.params):
+            raise self._runtime_error(
+                f"function '{fn.name}' expects {len(fn.params)} argument(s), but received {len(args)}",
+                fn,
+            )
         local_scope = {}
         for p, arg in zip(fn.params, args):
             local_scope[p.name] = arg
@@ -6032,11 +7491,13 @@ class Interpreter:
                 right = self.eval_expr(e.right)
                 return self.eval_binary_op(e.op, left, right)
             if isinstance(e, Call):
-                fn = self.eval_expr(e.func) if not isinstance(e.func, Attr) else getattr(self.eval_expr(e.func.obj), e.func.name)
+                fn = self.eval_expr(e.func)
                 args = [self.eval_expr(a) for a in e.args]
                 if isinstance(fn, Function):
                     return self.call_function(fn, args)
-                return fn(*args)
+                if callable(fn):
+                    return fn(*args)
+                raise self._runtime_error(f"'{fn}' is not callable", e)
             if isinstance(e, FString):
                 out = []
                 for p in e.parts:
@@ -6122,636 +7583,7 @@ class Interpreter:
 
 
 # ============================================================================
-# BUILT-IN EXAMPLES
-# ============================================================================
-
-EXEMPLOS = {
-'exemplo': r'''# File: exemplo.nat
-fn soma(valores: [i64]) -> i64:
-    total = 0
-    for valor in valores:
-        total += valor
-    return total
-
-fn main():
-    numeros = [10, 20, 30, 40, 50]
-    resultado = soma(numeros)
-    print(f"Result: {resultado}")
-''',
-
-'riemann': r'''# riemann.nat
-# Experimental prototype: Riemann-Siegel formula main sum.
-const PI = 3.14159265358979323846
-
-fn theta(t: f64) -> f64:
-    return (
-        0.5 * t * ln(t / (2.0 * PI))
-        - 0.5 * t
-        - PI / 8.0
-        + 1.0 / (48.0 * t)
-        + 7.0 / (5760.0 * t * t * t)
-    )
-
-fn hardy_z_aprox(t: f64) -> f64:
-    N: i64 = to_i64(floor(sqrt(t / (2.0 * PI))))
-    fase = theta(t)
-    soma = 0.0
-    for n in 1..N + 1:
-        nf = to_f64(n)
-        soma += cos(fase - t * ln(nf)) / sqrt(nf)
-    return 2.0 * soma
-
-fn bissecao(a_in: f64, b_in: f64) -> f64:
-    a = a_in
-    b = b_in
-    fa = hardy_z_aprox(a)
-    for passo in 0..60:
-        meio = (a + b) / 2.0
-        fm = hardy_z_aprox(meio)
-        if fm == 0.0:
-            return meio
-        if fa * fm < 0.0:
-            b = meio
-        else:
-            a = meio
-            fa = fm
-    return (a + b) / 2.0
-
-fn main():
-    inicio = 10.0
-    fim = 100.0
-    passo = 0.25
-    anterior_t = inicio
-    anterior_z = hardy_z_aprox(anterior_t)
-    encontrados = 0
-    t = inicio + passo
-    while t <= fim:
-        z = hardy_z_aprox(t)
-        if anterior_z * z < 0.0:
-            raiz = bissecao(anterior_t, t)
-            print(f"Zero candidato: t = {raiz}")
-            encontrados += 1
-        anterior_t = t
-        anterior_z = z
-        t += passo
-    print(f"Candidatos encontrados: {encontrados}")
-''',
-
-'rede': r'''import math
-
-fn main():
-    entradas = [[0.0, 0.0], [0.0, 1.0], [1.0, 0.0], [1.0, 1.0]]
-    targets = [0.0, 1.0, 1.0, 1.0]
-    const lr = 0.1
-    w = [0.5, -0.2]
-
-    for epoca in 0..1000:
-        for i in 0..4:
-            soma = entradas[i] @ w
-            pred = 1.0 / (1.0 + math.exp(-soma))
-            erro = targets[i] - pred
-            w += lr * erro * entradas[i]
-
-    print(f"Final weights: {w}")
-    for i in 0..4:
-        soma = entradas[i] @ w
-        pred = 1.0 / (1.0 + math.exp(-soma))
-        print(f"Input {entradas[i]} -> Pred: {pred:.3f} (Target: {targets[i]})")
-''',
-
-'ia_tensor': r'''import math
-import time
-
-fn main():
-    A = [[1.0, 2.0], [3.0, 4.0]]
-    B = [[2.0, 0.0], [1.0, 2.0]]
-    C = A @ B
-    print(f"Matrix Multiplication C = A @ B: {C}")
-
-    s = sum(C)
-    m = mean(C)
-    print(f"Element sum: {s}, Mean: {m}")
-
-    ativ = relu(C - 5.0)
-    sig = sigmoid(C * 0.1)
-    print(f"ReLU(C - 5.0): {ativ}")
-    print(f"Sigmoid(C * 0.1): {sig}")
-
-    v = [10, 20, 30, 40, 50]
-    fatia = v[1..4]
-    print(f"Vector slice v[1..4]: {fatia}")
-''',
-
-'ternario': r'''# Ternary Computing (1.58 bits) and Ternary Matrices Example
-fn main():
-    # 1. Ternary Weights Matrix {-1, 0, +1} inspired by BitNet
-    W: tensor[t2] = [
-        [1,  0, -1,  1],
-        [-1, 1,  0, -1],
-        [0, -1,  1,  0]
-    ]
-
-    # Continuous f32 activation vector
-    x: [f32] = [0.8, -1.2, 2.5, 0.4]
-
-    # 2. Native Ternary Matrix Multiplication (Multiplication-free Add-only GEMM)
-    y = W @ x
-    print(f"Input activations: {x}")
-    print(f"Ternary Matmul Result (W @ x): {y}")
-
-    # 3. Dynamic ternary quantization of activations
-    ativacoes = [1.8, -0.3, 0.1, -1.5, 0.9, -0.1]
-    trits = quantize_ternary(ativacoes, 0.5)
-    print(f"Original activations: {ativacoes}")
-    print(f"Activations quantized to {{-1, 0, 1}}: {trits}")
-
-    # 4. Memory compression (Bit Packing: 2 bits per trit, 4 trits per byte)
-    compactado = pack_ternary(trits)
-    descompactado = unpack_ternary(compactado, len(trits))
-    print(f"Packed bytes (4 trits/byte): {compactado}")
-    print(f"Unpacked values: {descompactado}")
-''',
-}
-
-
-# ============================================================================
-# TESTES — parser e analisador semântico
-# ============================================================================
-
-def src(nome): return EXEMPLOS[nome.replace('.nat', '')]
-def E(s): return parse_expression(s)
-def body(codigo):
-    linhas = "\n".join("    " + l for l in codigo.strip("\n").split("\n"))
-    return parse("fn main():\n" + linhas + "\n").items[0].body
-
-
-class Exemplos(unittest.TestCase):
-    def test_exemplo(self):
-        p = parse(src("exemplo.nat"))
-        self.assertEqual([f.name for f in p.items], ["soma", "main"])
-        soma = p.items[0]
-        self.assertEqual(soma.params[0].type, TypeList(TypeName("i64")))
-        self.assertEqual(soma.ret, TypeName("i64"))
-        self.assertIsInstance(soma.body[1], For)
-        self.assertEqual(soma.body[1].body[0].op, "+=")
-
-    def test_riemann(self):
-        p = parse(src("riemann.nat"))
-        self.assertEqual([type(i).__name__ for i in p.items],
-                         ["ConstDecl", "Function", "Function", "Function", "Function"])
-        self.assertEqual([i.name for i in p.items[1:]],
-                         ["theta", "hardy_z_aprox", "bissecao", "main"])
-        z = p.items[2]
-        self.assertEqual(z.body[0], VarDecl("N", TypeName("i64"),
-            Call(Name("to_i64"), [Call(Name("floor"), [Call(Name("sqrt"), [
-                Binary("/", Name("t"), Binary("*", Float(2.0), Name("PI")))])])])))
-        laco = z.body[3]
-        self.assertEqual(laco.iter, Range(Int(1), Binary("+", Name("N"), Int(1)), False))
-        biss = p.items[3]
-        self.assertIsInstance(biss.body[3].body[3], If)
-        self.assertEqual(len(biss.body[3].body[3].orelse), 2)
-
-    def test_return_multilinha(self):
-        r = parse(src("riemann.nat")).items[1].body[0]
-        self.assertIsInstance(r, Return)
-        self.assertEqual(r.value.op, "+")
-
-
-class Expressoes(unittest.TestCase):
-    def test_precedencia(self):
-        self.assertEqual(E("1 + 2 * 3"), Binary("+", Int(1), Binary("*", Int(2), Int(3))))
-        self.assertEqual(E("(1 + 2) * 3"), Binary("*", Binary("+", Int(1), Int(2)), Int(3)))
-        self.assertEqual(E("a - b - c"), Binary("-", Binary("-", Name("a"), Name("b")), Name("c")))
-
-    def test_potencia(self):
-        self.assertEqual(E("2 ** 3 ** 2"), Binary("**", Int(2), Binary("**", Int(3), Int(2))))
-        self.assertEqual(E("-x ** 2"), Unary("-", Binary("**", Name("x"), Int(2))))
-        self.assertEqual(E("2 ** -1"), Binary("**", Int(2), Unary("-", Int(1))))
-
-    def test_logicos(self):
-        self.assertEqual(E("a or b and not c"),
-                         Binary("or", Name("a"), Binary("and", Name("b"), Unary("not", Name("c")))))
-        self.assertEqual(E("a + 1 < b * 2"),
-                         Binary("<", Binary("+", Name("a"), Int(1)), Binary("*", Name("b"), Int(2))))
-
-    def test_ranges(self):
-        self.assertEqual(E("0..N"), Range(Int(0), Name("N"), False))
-        self.assertEqual(E("1..=N + 1"), Range(Int(1), Binary("+", Name("N"), Int(1)), True))
-        self.assertEqual(E("1..5"), Range(Int(1), Int(5), False))
-
-    def test_postfixo(self):
-        self.assertEqual(E("math.sqrt(x)[0]"),
-                         Index(Call(Attr(Name("math"), "sqrt"), [Name("x")]), Int(0)))
-        self.assertEqual(E("f(a, b,)"), Call(Name("f"), [Name("a"), Name("b")]))
-
-    def test_literais(self):
-        self.assertEqual(E("1_000"), Int(1000))
-        self.assertEqual(E("1e3"), Float(1000.0))
-        self.assertEqual(E("2.5e-1"), Float(0.25))
-        self.assertEqual(E("[1, 2.0, true]"), ListLit([Int(1), Float(2.0), Bool(True)]))
-        self.assertEqual(E('"a\\tb"'), Str("a\tb"))
-
-    def test_fstring(self):
-        e = E('f"x={x:.2f} {{lit}} {a + 1}!"')
-        self.assertEqual(e, FString(["x=", FormatPart(Name("x"), ".2f"), " {lit} ",
-                                     FormatPart(Binary("+", Name("a"), Int(1)), None), "!"]))
-        self.assertEqual(E("f\"{d['k']}\""), FString([FormatPart(Index(Name("d"), Str("k")), None)]))
-
-
-class Comandos(unittest.TestCase):
-    def test_atribuicoes(self):
-        b = body("x = 1\nx += 2\nv[0] = 3\na.b = 2\nn: i64 = 0")
-        self.assertEqual(b, [Assign(Name("x"), "=", Int(1)), Assign(Name("x"), "+=", Int(2)),
-                             Assign(Index(Name("v"), Int(0)), "=", Int(3)), Assign(Attr(Name("a"), "b"), "=", Int(2)),
-                             VarDecl("n", TypeName("i64"), Int(0))])
-
-    def test_elif_else(self):
-        b = body("if a:\n    x = 1\nelif b:\n    x = 2\nelse:\n    x = 3")
-        self.assertEqual(len(b), 1)
-        self.assertIsInstance(b[0].orelse[0], If)
-        self.assertEqual(b[0].orelse[0].orelse, [Assign(Name("x"), "=", Int(3))])
-
-    def test_bloco_em_uma_linha(self):
-        b = body("if a: return 1\nelse: return 2")
-        self.assertEqual(b[0].body, [Return(Int(1))])
-        self.assertEqual(b[0].orelse, [Return(Int(2))])
-
-    def test_while_break_continue_pass(self):
-        b = body("while true:\n    if x:\n        break\n    continue\npass")
-        self.assertIsInstance(b[0].body[1], Continue)
-        self.assertIsInstance(b[1], Pass)
-
-    def test_return_vazio(self):
-        self.assertEqual(body("return"), [Return(None)])
-
-    def test_comentarios_e_linhas_em_branco(self):
-        b = body("# c1\nx = 1  # c2\n\n    # indentado demais, mas é só comentário\ny = 2")
-        self.assertEqual(len(b), 2)
-
-    def test_dedent_multiplo(self):
-        b = body("if a:\n    if b:\n        x = 1\ny = 2")
-        self.assertEqual(len(b), 2)
-
-    def test_top_level(self):
-        p = parse("import math\nimport a.b\nconst PI: f64 = 3.14\nfn f(a: i64, b: [f64],) -> [f64]:\n    pass\n")
-        self.assertEqual(p.items[0], Import("math"))
-        self.assertEqual(p.items[1], Import("a.b"))
-        self.assertEqual(p.items[2], ConstDecl("PI", TypeName("f64"), Float(3.14)))
-        self.assertEqual(len(p.items[3].params), 2)
-
-    def test_sem_newline_final(self):
-        parse("fn main():\n    x = 1")
-        parse("fn main():\r\n    x = 1\r\n")
-
-
-class Erros(unittest.TestCase):
-    def falha(self, codigo, trecho, linha=None, expr=False):
-        parse_fn = parse_expression if expr else parse
-        with self.assertRaises(NatError) as cm:
-            parse_fn(codigo)
-        self.assertIn(trecho, cm.exception.message)
-        if linha: self.assertEqual(cm.exception.line, linha)
-
-    def test_erros(self):
-        self.falha("fn f(x):\n    pass\n", "require a type", 1)
-        self.falha("fn f():\nx = 1\n", "expected an indented block", 2)
-        self.falha("fn f():\n    x = (1 + 2\n", "was not closed", 2)
-        self.falha("fn f():\n    x = 1)\n", "without matching opening bracket", 2)
-        self.falha("fn f():\n    a = 1\n  b = 2\n", "inconsistent indentation", 3)
-        self.falha("fn f():\n    a = 1\n        b = 2\n", "unexpected indentation", 3)
-        self.falha("fn f():\n\tx = 1\n", "tab", 2)
-        self.falha("fn f():\n    x = 1 2\n", "end of line", 2)
-        self.falha("fn f():\n    else:\n        pass\n", "without matching 'if'", 2)
-        self.falha("fn f():\n    f() = 1\n", "left-hand side", 2)
-        self.falha("fn f():\n    x = \n", "expected an expression", 2)
-        self.falha("fn f():\n    x = $\n", "unexpected character", 2)
-        self.falha("x = 1\n", "allowed at top level", 1)
-        self.falha('fn f():\n    s = "abc\n', "unterminated string", 2)
-        self.falha("fn f():\n    fn g():\n        pass\n", "only allowed at top level", 2)
-
-    def test_encadeamentos_proibidos(self):
-        self.falha("a < b < c", "cannot be chained", expr=True)
-        self.falha("1..2..3", "cannot be chained", expr=True)
-
-    def test_fstring_erros(self):
-        self.falha('f"{}"', "empty expression", expr=True)
-        self.falha('f"{x"', "without matching '}'", expr=True)
-        self.falha('f"x}"', "unmatched '}'", expr=True)
-        self.falha('f"{1 +}"', "in f-string", expr=True)
-
-    def test_mensagem_formatada(self):
-        s = "fn f():\n    x = (1\n"
-        with self.assertRaises(NatError) as cm: parse(s)
-        out = cm.exception.pretty(s, "t.nat")
-        self.assertIn("t.nat:2:9: error:", out)
-        self.assertIn("x = (1", out)
-
-
-def analisar(fonte):
-    d = SemanticAnalyzer().analyze(parse(fonte))
-    return ([x.msg for x in d if x.level in ("error", "erro")], [x.msg for x in d if x.level in ("warning", "aviso")])
-
-def M(corpo, antes=""):
-    linhas = "\n".join(("    " + l) if l.strip() else l for l in corpo.strip("\n").split("\n"))
-    return antes + "fn main():\n" + linhas + "\n"
-
-
-class SemBase(unittest.TestCase):
-    def ok(self, fonte):
-        e, _ = analisar(fonte)
-        self.assertEqual(e, [], e)
-
-    def erro(self, fonte, trecho):
-        e, _ = analisar(fonte)
-        self.assertTrue(any(trecho in x for x in e), f"expected '{trecho}' in {e}")
-
-    def aviso(self, fonte, trecho):
-        e, w = analisar(fonte)
-        self.assertEqual(e, [], e)
-        self.assertTrue(any(trecho in x for x in w), f"expected '{trecho}' in {w}")
-
-
-class SemExemplos(SemBase):
-    def test_exemplos_limpos(self):
-        for nome in ("exemplo", "riemann", "rede", "ia_tensor", "ternario"):
-            self.assertEqual(analisar(EXEMPLOS[nome]), ([], []), nome)
-
-
-class SemTipos(SemBase):
-    def test_tipo_estavel(self):
-        self.erro(M('x = 1\nx = "a"\nprint(x)'), "cannot be assigned")
-        self.erro(M("x = 1\nx = 2.5\nprint(x)"), "cannot be assigned")
-        self.ok(M("x = 1.0\nx = 2\nprint(x)"))
-
-    def test_divisao(self):
-        self.erro(M("n: i64 = 4 / 2\nprint(n)"), "declared as")
-        self.ok(M("a = 4 / 2\na = 1.5\nprint(a)"))
-        self.ok(M("n: i64 = 7 // 2\nprint(n)"))
-
-    def test_operadores(self):
-        self.erro(M('a = 1 + "x"\nprint(a)'), "is not defined for")
-        self.ok(M('s = "a" + "b"\nprint(s)'))
-        self.erro(M('print(1 < "a")'), "cannot compare")
-        self.erro(M('print(1 == "a")'), "cannot compare")
-
-    def test_logicos(self):
-        self.erro(M("print(1 and true)"), "'and' requires bool")
-        self.erro(M("print(not 1)"), "'not' requires bool")
-        self.erro(M("if 1:\n    pass"), "condition must be bool")
-        self.erro(M("while 1.5:\n    pass"), "condition must be bool")
-        self.ok(M("a = 1 < 2 and not false\nprint(a)"))
-
-    def test_listas(self):
-        self.ok(M("a = [1, 2.5]\nb: [f64] = a\nprint(b)"))
-        self.erro(M('a = [1, "x"]\nprint(a)'), "incompatible")
-        self.erro(M("a = [1.0]\nprint(a[0.5])"), "index must be i64")
-        self.erro(M("x = 5\nprint(x[0])"), "cannot be indexed")
-        self.erro(M("for i in 0..2.5:\n    pass"), "range bounds")
-        self.erro(M("for i in 5:\n    pass"), "cannot iterate over")
-        self.erro(M('v = [1.0, 2.0]\nv[1] = "a"\nprint(v)'), "cannot be assigned")
-        self.erro(M("a: [f64] = [1, 2]\nprint(a)"), "declared as")
-
-    def test_broadcasting(self):
-        self.ok(M("w = [1.0, 2.0]\nw += 2.0\nw = w * w + w\nw = 2.0 * w\nprint(w)"))
-        self.erro(M('w = [1.0]\nw += "a"\nprint(w)'), "is not defined for")
-
-    def test_composta(self):
-        self.erro(M("x = 1\nx += 2.5\nprint(x)"), "produces")
-        self.erro(M("y += 1"), "before being declared")
-
-    def test_sem_valor(self):
-        self.erro(M("x = print(1)"), "does not produce a value")
-
-    def test_result_unwrap(self):
-        self.ok(M('r = ok(42)\nx: i64 = r?\nprint(x)'))
-        self.ok(M('r = ok("teste")\ns: str = unwrap(r)\nprint(s)'))
-        self.ok(M('r = err("falha")\ns: str = unwrap_or(r, "padrao")\nprint(s)'))
-        self.ok(M('r: Result[str] = ok("ola")\ns: str = r?\nprint(s)'))
-        self.erro(M('r: Result[str] = ok("ola")\nx: i64 = r?\nprint(x)'), "declared as")
-        self.erro(M('x = 1\nr: Result[str] = ok("ola")\nx = r?\nprint(x)'), "cannot be assigned")
-        self.erro(M('s = read_file("a.txt")?\nprint(s)'), "requires a Result[T]")
-        self.erro(M('n = 5\nm = n?\nprint(m)'), "requires a Result[T]")
-
-    def test_tensor_matmul_broadcasting(self):
-        # Multiplicação matricial e broadcasting com tensores e ativações
-        self.ok(M("A = tensor([[1.0, 2.0], [3.0, 4.0]])\nx = tensor([0.5, -0.5])\ny = relu(A @ x + tensor([0.1, -0.1]))\nprint(y)"))
-        self.ok(M("W: tensor[t2] = random_ternary([4, 4], 1)\nx: [f32] = [1.0, 2.0, 3.0, 4.0]\ny: [f32] = sigmoid((W @ x) * 0.5)\nprint(y)"))
-
-
-class SemFuncoes(SemBase):
-    F = "fn f(a: i64) -> i64:\n    return a\n\n"
-
-    def test_aridade(self):
-        self.erro(M("print(sqrt(1.0, 2.0))"), "expects 1")
-        self.erro(M("print(sqrt())"), "expects 1")
-        self.ok(M("print(1, 2, 3)"))
-        self.ok(M("print()"))
-
-    def test_argumentos(self):
-        self.erro(M("print(f(2.5))", self.F), "argument 1")
-        self.ok(M("print(f(2))", self.F))
-        self.ok(M("print(g(2))", "fn g(a: f64) -> f64:\n    return a\n\n"))
-        self.erro(M("print(dot([1, 2], [1.0]))"), "argument 1")
-
-    def test_retorno(self):
-        self.erro("fn f() -> i64:\n    pass\n", "not all")
-        self.erro("fn f() -> i64:\n    if true:\n        return 1\n", "not all")
-        self.ok("fn f(x: bool) -> i64:\n    if x:\n        return 1\n    else:\n        return 2\n")
-        self.ok("fn f(x: bool) -> i64:\n    if x:\n        return 1\n    elif true:\n        return 2\n    else:\n        return 3\n")
-        self.erro("fn f():\n    return 1\n", "cannot return a value")
-        self.erro("fn f() -> i64:\n    return 1.5\n", "expected return type")
-        self.erro("fn f() -> i64:\n    return\n", "must return")
-        self.ok("fn f() -> f64:\n    return 1\n")
-
-    def test_hoisting(self):
-        self.ok("fn main():\n    print(f())\n\nfn f() -> i64:\n    return 1\n")
-
-    def test_nomes(self):
-        self.erro("fn sqrt():\n    pass\n", "is a built-in function")
-        self.erro("fn f():\n    pass\nfn f():\n    pass\n", "already defined")
-        self.erro(M("print = 1"), "already a function name")
-        self.erro(M("x = 1\nx()\nprint(x)"), "is a variable, not a function")
-        self.erro(M("print(f)", "fn f():\n    pass\n\n"), "is a function; call it with parentheses")
-        self.erro("fn f(x: foo):\n    pass\n", "unknown type")
-
-    def test_math(self):
-        self.ok(M("print(math.sqrt(4.0) + math.PI)", "import math\n\n"))
-        self.erro(M("print(math.sqrt(4.0))"), "is not imported")
-        self.erro(M("print(math.foo(1.0))", "import math\n\n"), "has no member")
-        self.erro("import xyz\n", "unknown module")
-
-    def test_break_continue(self):
-        self.erro(M("break"), "outside of a loop")
-        self.erro(M("continue"), "outside of a loop")
-        self.ok(M("while true:\n    if true:\n        break"))
-
-
-class SemEscopo(SemBase):
-    def test_shadowing(self):
-        self.erro(M("x = 1\nfor x in 0..3:\n    pass\nprint(x)"), "shadowing")
-        self.erro(M("x: i64 = 1\nx: i64 = 2\nprint(x)"), "shadowing")
-        self.erro("const N = 5\nfn f(N: i64):\n    pass\n", "shadowing")
-
-    def test_sem_falso_shadowing(self):
-        self.ok(M("if true:\n    a = 1\n    print(a)\nif true:\n    a = 2\n    print(a)"))
-        self.ok(M("for i in 0..3:\n    pass\nfor i in 0..3:\n    pass"))
-        self.ok("fn f(x: i64):\n    pass\nfn g(x: i64):\n    pass\n")
-
-    def test_escopo_de_bloco(self):
-        self.erro(M("if true:\n    t = 5\nprint(t)"), "not defined")
-        self.ok(M("t = 0\nif true:\n    t = 5\nprint(t)"))
-        self.erro(M("if true:\n    pass\nelse:\n    z = 1\n    print(z)\nprint(z)"), "not defined")
-        self.erro(M("for i in 0..3:\n    pass\nprint(i)"), "not defined")
-
-    def test_constantes(self):
-        self.erro(M("const k = 1\nk = 2"), "constant")
-        self.erro("const PI = 3.14\nfn main():\n    PI = 3.0\n", "constant")
-        self.ok(M("const x: f64 = 3\nprint(x)"))
-        self.erro(M('const x: i64 = "a"\nprint(x)'), "declared as")
-        self.ok("fn main():\n    print(PI)\n\nconst PI = 3.14\n")
-
-    def test_nao_definido(self):
-        self.erro(M("while true:\n    y = naoexiste\n    print(y)\n    break"), "not defined")
-        self.erro(M('print(f"{naoexiste}")'), "not defined")
-        self.erro(M("print(-naoexiste)"), "not defined")
-        self.erro(M("total = 1\nprint(totl)"), "did you mean 'total'")
-        self.erro(M("x = x + 1\nprint(x)"), "not defined")
-
-
-class SemAvisos(SemBase):
-    def test_typo(self):
-        self.aviso(M("total = 0\ntotl = total + 1\nprint(total)"), "possible typo for 'total'")
-
-    def test_nunca_usada(self):
-        self.aviso(M("x = 1"), "never used")
-        self.aviso(M("x = 1\nx += 1"), "never used")
-
-    def test_sem_falso_positivo(self):
-        self.assertEqual(analisar(M("valores = [1, 2]\nvalor = 3\nprint(valores, valor)"))[1], [])
-        self.assertEqual(analisar(M("for i in 0..3:\n    pass"))[1], [])
-        self.assertEqual(analisar("fn f(a: i64):\n    pass\n")[1], [])
-
-
-class SemAIETensores(SemBase):
-    def test_novos_tipos_ia(self):
-        self.ok(M("x: f32 = 1.0\ny: f16 = 2.0\nz: bf16 = 3.0\na: i32 = 10\nb: i8 = 1\nprint(x, y, z, a, b)"))
-
-    def test_tipo_tensor(self):
-        self.ok(M("t: tensor[f32] = [1.0, 2.0]\nprint(t)"))
-
-    def test_operador_matmul(self):
-        self.ok(M("A = [[1.0, 2.0], [3.0, 4.0]]\nB = [1.0, 2.0]\nC = A @ B\nprint(C)"))
-        self.ok(M("v1 = [1.0, 2.0]\nv2 = [3.0, 4.0]\ns = v1 @ v2\nprint(s)"))
-        self.erro(M("x = 1.0 @ 2.0"), "is not defined for")
-
-    def test_fatiamento(self):
-        self.ok(M("v = [10, 20, 30, 40]\nf = v[1..3]\nprint(f)"))
-        self.ok(M('s = "nativa"\nf = s[0..4]\nprint(f)'))
-
-    def test_builtins_ia(self):
-        self.ok(M("v = [1.0, -2.0, 3.0]\nr = relu(v)\ns = sigmoid(v)\nm = mean(v)\nsoma = sum(v)\nprint(r, s, m, soma)"))
-        self.ok(M("M = zeros([2, 3])\nsh = shape(M)\nprint(sh)"))
-        self.ok(M('s = "teste"\nprint(len(s))'))
-
-    def test_safetensors_semantica(self):
-        self.ok(M('k = safetensors_keys("teste.safetensors")\nprint(k)'))
-        self.ok(M('t = load_safetensors("teste.safetensors", "peso")\nprint(t)'))
-        self.ok(M('v = [1.0, 2.0]\nsave_safetensors("teste.safetensors", "peso", v)'))
-
-
-# --- Testes de Computação Ternária ---
-class SemTernario(SemBase):
-    def test_tipo_t2_e_ternary(self):
-        self.ok(M("w: t2 = 1\nw2: ternary = -1\nprint(w, w2)"))
-
-    def test_tensor_ternario_matmul(self):
-        self.ok(M("W: tensor[t2] = [[1, 0, -1], [0, 1, 0]]\nx: [f32] = [0.5, 1.0, 2.0]\ny = W @ x\nprint(y)"))
-
-    def test_primitivas_ternarias(self):
-        self.ok(M("v = [0.9, -0.4, 0.1]\nt = quantize_ternary(v, 0.5)\np = pack_ternary(t)\nu = unpack_ternary(p, 3)\nprint(t, p, u)"))
-
-
-class RuntimeExecucao(unittest.TestCase):
-    def _analyze_and_run(self, fonte: str) -> Interpreter:
-        prog = parse(fonte)
-        erros = [d.msg for d in SemanticAnalyzer().analyze(prog) if d.level in ("error", "erro")]
-        self.assertEqual(erros, [], f"Unexpected semantic errors: {erros}")
-        interp = Interpreter()
-        interp.run(prog)
-        return interp
-
-    def test_run_exemplo(self):
-        self._analyze_and_run(src("exemplo.nat"))
-
-    def test_run_rede_neural(self):
-        interp = self._analyze_and_run(src("rede.nat"))
-        w = interp.last_scope.get("w")
-        self.assertIsNotNone(w)
-        self.assertGreater(w[0], 2.0)
-        self.assertGreater(w[1], 2.0)
-
-    def test_run_ia_tensor(self):
-        self._analyze_and_run(src("ia_tensor.nat"))
-
-    def test_run_ternario(self):
-        self._analyze_and_run(src("ternario.nat"))
-
-    def test_rmsnorm_2d_por_linha(self):
-        x_np = np.array([[1.0, 2.0, 3.0, 4.0], [10.0, 20.0, 30.0, 40.0]], dtype=np.float32)
-        gamma_np = np.array([1.0, 0.5, 2.0, 1.5], dtype=np.float32)
-        eps = 1e-6
-        esperado = (x_np / np.sqrt(np.mean(x_np ** 2, axis=-1, keepdims=True) + eps)) * gamma_np
-        obtido = rmsnorm_fn(Tensor(x_np, dtype="f32"), Tensor(gamma_np, dtype="f32"), eps)
-        np.testing.assert_allclose(obtido.data, esperado, rtol=1e-5, atol=1e-6)
-        # Como a linha 1 é 10x a linha 0, após RMSNorm por linha ambas devem ser quase idênticas
-        np.testing.assert_allclose(obtido.data[0], obtido.data[1], rtol=1e-5, atol=1e-5)
-
-    def test_turbo_quant_roundtrip(self):
-        v = [1.0, 2.0, -1.5, 0.5]
-        q = turbo_quant_fn(v, 2)
-        rec = turbo_dequant_fn(q)
-        dot_est = turbo_dot_fn(v, q)
-        self.assertEqual(len(rec), 4)
-        self.assertGreater(dot_est, 0.0)
-
-    def test_pack_unpack_roundtrip(self):
-        trits = [1, -1, 0, 1, -1, 0, 0, 1, -1, 1]
-        packed = pack_ternary_fn(trits)
-        unpacked = unpack_ternary_fn(packed, len(trits))
-        self.assertEqual(trits, unpacked)
-
-    def test_pack_5trits_roundtrip(self):
-        trits = [1, -1, 0, 1, -1, 0, 0, 1, -1, 1, 1, -1, 0]
-        packed = pack_ternary_5trits_fn(trits)
-        unpacked = unpack_ternary_5trits_fn(packed, len(trits))
-        self.assertEqual(trits, unpacked)
-
-    def test_quantize_bitnet_canonical(self):
-        dados = [0.8, -0.4, 0.05, -0.9, 0.2]
-        gamma = tensor_absmean_fn(dados)
-        self.assertAlmostEqual(gamma, 0.47, places=2)
-        q = quantize_bitnet_fn(dados)
-        self.assertEqual(q, [1, -1, 0, -1, 0])
-
-    def test_safetensors_roundtrip(self):
-        import tempfile, os
-        with tempfile.NamedTemporaryFile(suffix=".safetensors", delete=False) as tf:
-            tmp_path = tf.name
-        try:
-            dados = [[1.5, -2.0, 3.25], [0.0, 4.5, -1.0]]
-            save_safetensors_fn(tmp_path, "camada_mlp", dados)
-            chaves = safetensors_keys_fn(tmp_path)
-            self.assertEqual(chaves, ["camada_mlp"])
-            carregado = load_safetensors_fn(tmp_path, "camada_mlp")
-            np.testing.assert_allclose(carregado, dados, rtol=1e-5)
-        finally:
-            close_safetensors_mmap(tmp_path)
-            if os.path.exists(tmp_path):
-                os.remove(tmp_path)
-
-
-# ============================================================================
-# TRANSPILADOR AOT PARA C99
+# C99 AHEAD-OF-TIME (AOT) TRANSPILER & NATIVE BACKEND
 # ============================================================================
 
 class CTranspiler:
@@ -6763,6 +7595,8 @@ class CTranspiler:
             "u64": "uint64_t", "u32": "uint32_t", "u16": "uint16_t", "u8": "uint8_t",
             "f64": "double", "f32": "double", "f16": "double", "bf16": "double",
             "t2": "int8_t", "ternary": "int8_t",
+            "fix256": "nat_fix256_t", "Fix256": "nat_fix256_t", "NatFix256": "nat_fix256_t",
+            "interval256": "nat_interval256_t", "Interval256": "nat_interval256_t", "NatInterval256": "nat_interval256_t",
             "c64": "NatComplex", "complex": "NatComplex", "Complex": "NatComplex",
             "Result": "NatResult", "NatResult": "NatResult",
             "KVCache": "NatKVCache", "NatKVCache": "NatKVCache",
@@ -7051,6 +7885,13 @@ class CTranspiler:
         if isinstance(expr, Attr):
             if expr.name in ("real", "imag", "magnitude", "power"):
                 return "double"
+            obj_inferred = self.var_types.get(expr.obj.id, "") if isinstance(expr.obj, Name) else self.infer_type(expr.obj)
+            if obj_inferred in ("nat_interval256_t", "NatInterval256", "Interval256", "interval256"):
+                if expr.name in ("lo", "hi"):
+                    return "nat_fix256_t"
+            if obj_inferred in ("nat_fix256_t", "NatFix256", "Fix256", "fix256"):
+                if expr.name in ("sign", "frac_bits"):
+                    return "int32_t"
             if isinstance(expr.obj, Name):
                 key = f"{expr.obj.id}.{expr.name}"
                 if key in self.var_types:
@@ -7130,6 +7971,10 @@ class CTranspiler:
             t_right = self.infer_type(expr.right)
             if t_left == "NatComplex" or t_right == "NatComplex":
                 return "NatComplex"
+            if t_left in ("nat_fix256_t", "NatFix256") or t_right in ("nat_fix256_t", "NatFix256"):
+                return "nat_fix256_t"
+            if t_left in ("nat_interval256_t", "NatInterval256") or t_right in ("nat_interval256_t", "NatInterval256"):
+                return "nat_interval256_t"
             if "double" in (t_left, t_right) or "float" in (t_left, t_right):
                 return "double"
             return t_left
@@ -7149,6 +7994,24 @@ class CTranspiler:
             desugared = self._desugar_hof(expr)
             if desugared is not expr:
                 return self.infer_type(desugared)
+            if isinstance(expr.func, Attr) and not (isinstance(expr.func.obj, Name) and expr.func.obj.id == "math"):
+                obj_t = self.infer_type(expr.func.obj)
+                mname = expr.func.name
+                if obj_t in ("nat_interval256_t", "NatInterval256", "Interval256", "interval256"):
+                    if mname in ("step", "simulate_steps"):
+                        return "nat_interval256_t"
+                    if mname in ("width", "mid"):
+                        return "nat_fix256_t"
+                    if mname in ("is_coherent", "contains"):
+                        return "bool"
+                if obj_t in ("nat_fix256_t", "NatFix256", "Fix256", "fix256"):
+                    if mname == "to_f64":
+                        return "double"
+                    if mname == "to_i64":
+                        return "int64_t"
+                    if mname == "to_str":
+                        return "const char*"
+
             fname = ""
             if isinstance(expr.func, Name):
                 fname = expr.func.id
@@ -7162,6 +8025,12 @@ class CTranspiler:
                     return "NatKVCache"
                 if fname == "Complex":
                     return "NatComplex"
+                if fname in ("Fix256", "fix256", "interval256_width", "interval256_mid"):
+                    return "nat_fix256_t"
+                if fname in ("Interval256", "interval256", "interval256_step"):
+                    return "nat_interval256_t"
+                if fname == "interval256_is_coherent":
+                    return "bool"
                 if fname in ("rmsnorm", "softmax", "apply_rope"):
                     return "double*"
                 if fname in ("silu", "relu", "sigmoid") and expr.args and self._expr_length(expr.args[0]) is not None:
@@ -7706,7 +8575,7 @@ class CTranspiler:
         if isinstance(val_expr, Index) and not isinstance(val_expr.index, Range):
             sh = self._expr_shape(val_expr.obj)
             if sh and len(sh) == 2:
-                M, K = sh
+                _M, K = sh
                 obj_code = self.emit_expr(val_expr.obj)
                 idx_code = self.emit_expr(val_expr.index)
                 obj_t = self.infer_type(val_expr.obj)
@@ -7842,7 +8711,7 @@ class CTranspiler:
             # Caso 3: 2D @ 2D (GEMM - Matriz por Matriz)
             if l_shape and r_shape and len(l_shape) == 2 and len(r_shape) == 2:
                 M, K = l_shape
-                K2, N = r_shape
+                _K2, N = r_shape
                 total = M * N
                 stmt = self._wrap_buffer_target(
                     name, "double", total, (M, N), const_p, ind,
@@ -7857,7 +8726,7 @@ class CTranspiler:
             # Caso 4: 1D @ 2D (GEMV Transposto - Vetor por Matriz)
             if l_shape and r_shape and len(l_shape) == 1 and len(r_shape) == 2:
                 M = l_shape[0]
-                M2, N = r_shape
+                _M2, N = r_shape
                 stmt = self._wrap_buffer_target(
                     name, "double", N, (N,), const_p, ind,
                     lambda tgt, cp: (
@@ -8132,7 +9001,7 @@ class CTranspiler:
                     t_val = self.emit_expr(item)
                     lines.append(f"{ind}{t_type} {t_name} = {t_val};")
                     temps.append((t_name, t_type, item))
-                for tgt, (t_name, t_type, item_expr) in zip(s.targets, temps):
+                for tgt, (t_name, t_type, _) in zip(s.targets, temps):
                     if isinstance(tgt, Name):
                         self.var_types[tgt.id] = t_type
                         if tgt.id in self.declared_vars:
@@ -8164,6 +9033,31 @@ class CTranspiler:
                     val = self.emit_expr(s.value)
                     return self._with_pre_stmts(f"{ind}{ctype} {name} = {val};")
                 val = self.emit_expr(s.value)
+                var_t = self.var_types.get(name, "")
+                if var_t in ("nat_fix256_t", "NatFix256"):
+                    if s.op == "+=": return self._with_pre_stmts(f"{ind}{name} = nat_fix256_add({name}, {val});")
+                    if s.op == "-=": return self._with_pre_stmts(f"{ind}{name} = nat_fix256_sub({name}, {val});")
+                    if s.op == "*=": return self._with_pre_stmts(f"{ind}{name} = nat_fix256_mul({name}, {val});")
+                    if s.op == "/=": return self._with_pre_stmts(f"{ind}{name} = nat_fix256_div({name}, {val});")
+                elif var_t in ("nat_interval256_t", "NatInterval256", "Interval256", "interval256"):
+                    if s.op == "+=": return self._with_pre_stmts(f"{ind}{name} = nat_interval256_add({name}, {val});")
+                    if s.op == "-=": return self._with_pre_stmts(f"{ind}{name} = nat_interval256_sub({name}, {val});")
+                    if s.op == "*=":
+                        val_t = self.infer_type(s.value)
+                        if val_t in ("nat_fix256_t", "NatFix256", "Fix256", "fix256", "double", "float", "int64_t", "int32_t"):
+                            r_fix = val if val_t in ("nat_fix256_t", "NatFix256", "Fix256", "fix256") else f"nat_fix256_from_f64((double)({val}), 64)"
+                            return self._with_pre_stmts(f"{ind}{name} = nat_interval256_mul_scalar({name}, {r_fix});")
+                        return self._with_pre_stmts(f"{ind}{name} = nat_interval256_mul({name}, {val});")
+                    if s.op == "/=":
+                        val_t = self.infer_type(s.value)
+                        if val_t in ("nat_fix256_t", "NatFix256", "Fix256", "fix256", "double", "float", "int64_t", "int32_t"):
+                            r_fix = val if val_t in ("nat_fix256_t", "NatFix256", "Fix256", "fix256") else f"nat_fix256_from_f64((double)({val}), 64)"
+                            return self._with_pre_stmts(f"{ind}{name} = nat_interval256_div_scalar({name}, {r_fix});")
+                        return self._with_pre_stmts(f"{ind}{name} = nat_interval256_div({name}, {val});")
+                elif var_t == "NatComplex":
+                    if s.op == "+=": return self._with_pre_stmts(f"{ind}{name} = nat_complex_add({name}, {val});")
+                    if s.op == "-=": return self._with_pre_stmts(f"{ind}{name} = nat_complex_sub({name}, {val});")
+                    if s.op == "*=": return self._with_pre_stmts(f"{ind}{name} = nat_complex_mul({name}, {val});")
                 return self._with_pre_stmts(f"{ind}{name} {s.op} {val};")
             if isinstance(tgt, Index):
                 arr = self.emit_expr(tgt.obj)
@@ -8320,6 +9214,11 @@ class CTranspiler:
 
         if isinstance(e, Unary):
             operand = self.emit_expr(e.operand)
+            op_t = self.infer_type(e.operand)
+            if op_t in ("nat_fix256_t", "NatFix256", "Fix256", "fix256") and e.op == "-":
+                return f"nat_fix256_neg({operand})"
+            if op_t in ("nat_interval256_t", "NatInterval256", "Interval256", "interval256") and e.op == "-":
+                return f"nat_interval256_neg({operand})"
             if e.op == "not":
                 return f"(!({operand}))"
             return f"({e.op}({operand}))"
@@ -8335,6 +9234,37 @@ class CTranspiler:
                 if e.op == "+": return f"nat_complex_add({l_c}, {r_c})"
                 if e.op == "-": return f"nat_complex_sub({l_c}, {r_c})"
                 if e.op == "*": return f"nat_complex_mul({l_c}, {r_c})"
+            if tl in ("nat_fix256_t", "NatFix256") or tr in ("nat_fix256_t", "NatFix256"):
+                l_f = l if tl in ("nat_fix256_t", "NatFix256") else f"nat_fix256_from_f64((double)({l}), 64)"
+                r_f = r if tr in ("nat_fix256_t", "NatFix256") else f"nat_fix256_from_f64((double)({r}), 64)"
+                if e.op == "+": return f"nat_fix256_add({l_f}, {r_f})"
+                if e.op == "-": return f"nat_fix256_sub({l_f}, {r_f})"
+                if e.op == "*": return f"nat_fix256_mul({l_f}, {r_f})"
+                if e.op == "/": return f"nat_fix256_div({l_f}, {r_f})"
+                if e.op == "==": return f"nat_fix256_eq({l_f}, {r_f})"
+                if e.op == "!=": return f"(!nat_fix256_eq({l_f}, {r_f}))"
+                if e.op == "<": return f"nat_fix256_lt({l_f}, {r_f})"
+                if e.op == "<=": return f"nat_fix256_le({l_f}, {r_f})"
+                if e.op == ">": return f"nat_fix256_gt({l_f}, {r_f})"
+                if e.op == ">=": return f"nat_fix256_ge({l_f}, {r_f})"
+            if tl in ("nat_interval256_t", "NatInterval256", "Interval256", "interval256") or tr in ("nat_interval256_t", "NatInterval256", "Interval256", "interval256"):
+                l_i = l if tl in ("nat_interval256_t", "NatInterval256", "Interval256", "interval256") else f"nat_interval256_point(nat_fix256_from_f64((double)({l}), 64))"
+                r_i = r if tr in ("nat_interval256_t", "NatInterval256", "Interval256", "interval256") else f"nat_interval256_point(nat_fix256_from_f64((double)({r}), 64))"
+                if e.op == "+": return f"nat_interval256_add({l_i}, {r_i})"
+                if e.op == "-": return f"nat_interval256_sub({l_i}, {r_i})"
+                if e.op == "*":
+                    if tr in ("nat_fix256_t", "NatFix256", "Fix256", "fix256", "double", "float", "int64_t", "int32_t"):
+                        r_fix = r if tr in ("nat_fix256_t", "NatFix256", "Fix256", "fix256") else f"nat_fix256_from_f64((double)({r}), 64)"
+                        return f"nat_interval256_mul_scalar({l_i}, {r_fix})"
+                    if tl in ("nat_fix256_t", "NatFix256", "Fix256", "fix256", "double", "float", "int64_t", "int32_t"):
+                        l_fix = l if tl in ("nat_fix256_t", "NatFix256", "Fix256", "fix256") else f"nat_fix256_from_f64((double)({l}), 64)"
+                        return f"nat_interval256_mul_scalar({r_i}, {l_fix})"
+                    return f"nat_interval256_mul({l_i}, {r_i})"
+                if e.op == "/":
+                    if tr in ("nat_fix256_t", "NatFix256", "Fix256", "fix256", "double", "float", "int64_t", "int32_t"):
+                        r_fix = r if tr in ("nat_fix256_t", "NatFix256", "Fix256", "fix256") else f"nat_fix256_from_f64((double)({r}), 64)"
+                        return f"nat_interval256_div_scalar({l_i}, {r_fix})"
+                    return f"nat_interval256_div({l_i}, {r_i})"
             if e.op == "and": return f"(({l}) && ({r}))"
             if e.op == "or": return f"(({l}) || ({r}))"
             if e.op == "**": return f"pow((double)({l}), (double)({r}))"
@@ -8365,7 +9295,7 @@ class CTranspiler:
         if isinstance(e, Index):
             sh = self._expr_shape(e.obj)
             if sh and len(sh) == 2 and not isinstance(e.index, Range):
-                M, K = sh
+                _M, K = sh
                 obj_code = self.emit_expr(e.obj)
                 idx = self.emit_expr(e.index)
                 return f"(({obj_code}) + ({idx}) * {K})"
@@ -8428,15 +9358,59 @@ class CTranspiler:
                     return f"nat_kvcache_update(&({obj_code}), {k_code}, {v_code}, 1LL)"
                 if mname in ("clear", "reset"):
                     return f"nat_kvcache_clear(&({obj_code}))"
+            if obj_t in ("nat_interval256_t", "NatInterval256", "Interval256", "interval256"):
+                if mname == "step" and len(c.args) >= 2:
+                    v_code = self.emit_expr(c.args[0])
+                    dt_code = self.emit_expr(c.args[1])
+                    dt_t = self.infer_type(c.args[1])
+                    if dt_t not in ("nat_fix256_t", "NatFix256", "Fix256", "fix256"):
+                        dt_code = f"nat_fix256_from_f64((double)({dt_code}), 64)"
+                    return f"nat_interval256_step({obj_code}, {v_code}, {dt_code})"
+                if mname == "simulate_steps" and len(c.args) >= 3:
+                    v_code = self.emit_expr(c.args[0])
+                    dt_code = self.emit_expr(c.args[1])
+                    dt_t = self.infer_type(c.args[1])
+                    if dt_t not in ("nat_fix256_t", "NatFix256", "Fix256", "fix256"):
+                        dt_code = f"nat_fix256_from_f64((double)({dt_code}), 64)"
+                    n_code = self.emit_expr(c.args[2])
+                    return f"nat_interval256_simulate_steps_val({obj_code}, {v_code}, {dt_code}, (int64_t)({n_code}))"
+                if mname == "width":
+                    return f"nat_interval256_width({obj_code})"
+                if mname == "mid":
+                    return f"nat_interval256_mid({obj_code})"
+                if mname == "is_coherent" and len(c.args) >= 1:
+                    mw_code = self.emit_expr(c.args[0])
+                    mw_t = self.infer_type(c.args[0])
+                    if mw_t not in ("nat_fix256_t", "NatFix256", "Fix256", "fix256"):
+                        mw_code = f"nat_fix256_from_f64((double)({mw_code}), 64)"
+                    return f"nat_interval256_is_coherent({obj_code}, {mw_code})"
+                if mname == "contains" and len(c.args) >= 1:
+                    x_code = self.emit_expr(c.args[0])
+                    x_t = self.infer_type(c.args[0])
+                    if x_t not in ("nat_fix256_t", "NatFix256", "Fix256", "fix256"):
+                        x_code = f"nat_fix256_from_f64((double)({x_code}), 64)"
+                    return f"nat_interval256_contains({obj_code}, {x_code})"
+            if obj_t in ("nat_fix256_t", "NatFix256", "Fix256", "fix256"):
+                if mname == "to_f64":
+                    return f"nat_fix256_to_f64({obj_code})"
+                if mname == "to_i64":
+                    return f"nat_fix256_to_i64({obj_code})"
 
         if isinstance(c.func, Name) and c.func.id == "print":
-            if len(c.args) == 1 and isinstance(c.args[0], Name) and c.args[0].id in self.var_shapes:
-                v_name = c.args[0].id
-                sh = self.var_shapes[v_name]
-                if len(sh) == 2:
-                    return f'nat_print_mat_f64({v_name}, {sh[0]}LL, {sh[1]}LL); printf("\\n");'
-                elif len(sh) == 1:
-                    return f'nat_print_vec_f64({v_name}, {sh[0]}LL); printf("\\n");'
+            if len(c.args) == 1:
+                arg = c.args[0]
+                v_name = arg.id if isinstance(arg, Name) else None
+                sh = self.var_shapes.get(v_name) if v_name and v_name in self.var_shapes else self._expr_shape(arg)
+                if sh:
+                    arg_code = self.emit_expr(arg)
+                    arg_t = self.var_types.get(v_name, "") if v_name and v_name in self.var_types else self.infer_type(arg)
+                    is_int = "int" in arg_t
+                    if len(sh) == 2:
+                        fn = "nat_print_mat_i64" if is_int else "nat_print_mat_f64"
+                        return f'{fn}({arg_code}, {sh[0]}LL, {sh[1]}LL); printf("\\n");'
+                    elif len(sh) == 1:
+                        fn = "nat_print_vec_i64" if is_int else "nat_print_vec_f64"
+                        return f'{fn}({arg_code}, {sh[0]}LL); printf("\\n");'
             if len(c.args) == 1 and isinstance(c.args[0], FString):
                 return self.emit_print_fstring(c.args[0])
             elif len(c.args) == 1 and isinstance(c.args[0], Str):
@@ -8452,6 +9426,10 @@ class CTranspiler:
                         parts.append(f'printf("%lld{sep}", (long long)({code}));')
                     elif itype == "NatComplex":
                         parts.append(f'printf("%f%+fi{sep}", ({code}).real, ({code}).imag);')
+                    elif itype in ("nat_fix256_t", "NatFix256", "Fix256", "fix256"):
+                        parts.append(f'printf("%s{sep}", nat_fix256_as_str({code}));')
+                    elif itype in ("nat_interval256_t", "NatInterval256", "Interval256", "interval256"):
+                        parts.append(f'printf("%s{sep}", nat_interval256_as_str({code}));')
                     elif itype in ("double", "float"):
                         parts.append(f'printf("%f{sep}", (double)({code}));')
                     elif itype == "const char*":
@@ -8481,6 +9459,72 @@ class CTranspiler:
             re = self.emit_expr(c.args[0]) if len(c.args) > 0 else "0.0"
             im = self.emit_expr(c.args[1]) if len(c.args) > 1 else "0.0"
             return f"nat_complex((double)({re}), (double)({im}))"
+        if fn_name in ("Fix256", "fix256"):
+            if not c.args:
+                return "nat_fix256_zero()"
+            arg0 = c.args[0]
+            fb = self.emit_expr(c.args[1]) if len(c.args) > 1 else "64"
+            arg_t = self.infer_type(arg0)
+            arg_code = self.emit_expr(arg0)
+            if isinstance(arg0, Str) or arg_t == "const char*":
+                return f"nat_fix256_from_str({arg_code}, {fb})"
+            elif "int" in arg_t:
+                return f"nat_fix256_from_i64((int64_t)({arg_code}), {fb})"
+            else:
+                return f"nat_fix256_from_f64((double)({arg_code}), {fb})"
+        if fn_name in ("Interval256", "interval256"):
+            if not c.args:
+                return "nat_interval256_create(nat_fix256_zero(), nat_fix256_zero())"
+            if len(c.args) == 1:
+                arg0 = c.args[0]
+                t0 = self.infer_type(arg0)
+                c0 = self.emit_expr(arg0)
+                if t0 not in ("nat_fix256_t", "NatFix256", "Fix256", "fix256"):
+                    if isinstance(arg0, Str) or t0 == "const char*":
+                        c0 = f"nat_fix256_from_str({c0}, 64)"
+                    elif "int" in t0:
+                        c0 = f"nat_fix256_from_i64((int64_t)({c0}), 64)"
+                    else:
+                        c0 = f"nat_fix256_from_f64((double)({c0}), 64)"
+                return f"nat_interval256_point({c0})"
+            else:
+                arg0, arg1 = c.args[0], c.args[1]
+                t0, t1 = self.infer_type(arg0), self.infer_type(arg1)
+                c0, c1 = self.emit_expr(arg0), self.emit_expr(arg1)
+                if t0 not in ("nat_fix256_t", "NatFix256", "Fix256", "fix256"):
+                    if isinstance(arg0, Str) or t0 == "const char*":
+                        c0 = f"nat_fix256_from_str({c0}, 64)"
+                    elif "int" in t0:
+                        c0 = f"nat_fix256_from_i64((int64_t)({c0}), 64)"
+                    else:
+                        c0 = f"nat_fix256_from_f64((double)({c0}), 64)"
+                if t1 not in ("nat_fix256_t", "NatFix256", "Fix256", "fix256"):
+                    if isinstance(arg1, Str) or t1 == "const char*":
+                        c1 = f"nat_fix256_from_str({c1}, 64)"
+                    elif "int" in t1:
+                        c1 = f"nat_fix256_from_i64((int64_t)({c1}), 64)"
+                    else:
+                        c1 = f"nat_fix256_from_f64((double)({c1}), 64)"
+                return f"nat_interval256_create({c0}, {c1})"
+        elif fn_name == "interval256_step":
+            pos_c = self.emit_expr(c.args[0])
+            vel_c = self.emit_expr(c.args[1])
+            dt_c = self.emit_expr(c.args[2])
+            dt_t = self.infer_type(c.args[2])
+            if dt_t not in ("nat_fix256_t", "NatFix256", "Fix256", "fix256"):
+                dt_c = f"nat_fix256_from_f64((double)({dt_c}), 64)"
+            return f"nat_interval256_step({pos_c}, {vel_c}, {dt_c})"
+        elif fn_name == "interval256_width":
+            return f"nat_interval256_width({self.emit_expr(c.args[0])})"
+        elif fn_name == "interval256_mid":
+            return f"nat_interval256_mid({self.emit_expr(c.args[0])})"
+        elif fn_name == "interval256_is_coherent":
+            iv_c = self.emit_expr(c.args[0])
+            mw_c = self.emit_expr(c.args[1])
+            mw_t = self.infer_type(c.args[1])
+            if mw_t not in ("nat_fix256_t", "NatFix256", "Fix256", "fix256"):
+                mw_c = f"nat_fix256_from_f64((double)({mw_c}), 64)"
+            return f"nat_interval256_is_coherent({iv_c}, {mw_c})"
         elif fn_name == "ln": fn_name = "nat_ln"
         elif fn_name == "relu": fn_name = "nat_relu"
         elif fn_name == "sigmoid": fn_name = "nat_sigmoid"
@@ -8503,9 +9547,17 @@ class CTranspiler:
             len_code = f"{a_len}LL" if a_len is not None else f"((int64_t)(sizeof({a_code}) / sizeof(({a_code})[0])))"
             return f"nat_argmax_f64({a_code}, {len_code})"
         elif fn_name == "to_i64":
-            return f"((int64_t)({self.emit_expr(c.args[0])}))"
+            arg_t = self.infer_type(c.args[0])
+            arg_code = self.emit_expr(c.args[0])
+            if arg_t in ("nat_fix256_t", "NatFix256", "Fix256", "fix256"):
+                return f"nat_fix256_to_i64({arg_code})"
+            return f"((int64_t)({arg_code}))"
         elif fn_name == "to_f64":
-            return f"((double)({self.emit_expr(c.args[0])}))"
+            arg_t = self.infer_type(c.args[0])
+            arg_code = self.emit_expr(c.args[0])
+            if arg_t in ("nat_fix256_t", "NatFix256", "Fix256", "fix256"):
+                return f"nat_fix256_to_f64({arg_code})"
+            return f"((double)({arg_code}))"
         elif fn_name == "len":
             if c.args:
                 arg = c.args[0]
@@ -8609,6 +9661,12 @@ class CTranspiler:
                     if itype in ("int64_t", "int32_t", "int16_t", "int8_t"):
                         fmt_parts.append("%lld")
                         args.append(f"(long long)({expr_code})")
+                    elif itype in ("nat_fix256_t", "NatFix256", "Fix256", "fix256"):
+                        fmt_parts.append("%s")
+                        args.append(f"nat_fix256_as_str({expr_code})")
+                    elif itype in ("nat_interval256_t", "NatInterval256", "Interval256", "interval256"):
+                        fmt_parts.append("%s")
+                        args.append(f"nat_interval256_as_str({expr_code})")
                     elif itype in ("double", "float"):
                         fmt_parts.append("%f")
                         args.append(f"(double)({expr_code})")
@@ -8649,8 +9707,9 @@ def compile_c_to_binary(c_path: str, exe_path: str) -> bool:
         if os.path.exists(vc):
             bat_dir = os.path.dirname(os.path.abspath(c_path))
             bat_path = os.path.join(bat_dir, "_nativa_build.bat")
-            bat_content = f'@echo off\ncall "{vc}" >nul 2>&1\ncl.exe /O2 /openmp /nologo /W3 "{c_path}" /Fe:"{exe_path}"\n'
-            with open(bat_path, "w", encoding="ascii", errors="ignore") as f:
+            obj_file = os.path.splitext(os.path.abspath(c_path))[0] + ".obj"
+            bat_content = f'@echo off\ncall "{vc}" >nul 2>&1\ncl.exe /O2 /openmp /nologo /W3 "{c_path}" /Fe:"{exe_path}" /Fo:"{obj_file}"\n'
+            with open(bat_path, "w", encoding="utf-8") as f:
                 f.write(bat_content)
             try:
                 res = subprocess.run([bat_path], capture_output=True, text=True)
@@ -8658,22 +9717,29 @@ def compile_c_to_binary(c_path: str, exe_path: str) -> bool:
                 if os.path.exists(bat_path):
                     try:
                         os.remove(bat_path)
-                    except Exception:
+                    except OSError:
                         pass
-            obj_file = c_path.replace(".c", ".obj")
-            if os.path.exists(obj_file):
-                try:
-                    os.remove(obj_file)
-                except Exception:
-                    pass
+                if os.path.exists(obj_file):
+                    try:
+                        os.remove(obj_file)
+                    except OSError:
+                        pass
             if res.returncode != 0:
                 print(res.stderr or res.stdout, file=sys.stderr)
             return res.returncode == 0
 
     cl = shutil.which("cl")
     if cl:
-        cmd = [cl, "/O2", "/openmp", "/nologo", "/W3", c_path, f"/Fe:{exe_path}"]
-        res = subprocess.run(cmd, capture_output=True, text=True)
+        obj_file = os.path.splitext(os.path.abspath(c_path))[0] + ".obj"
+        cmd = [cl, "/O2", "/openmp", "/nologo", "/W3", c_path, f"/Fe:{exe_path}", f"/Fo:{obj_file}"]
+        try:
+            res = subprocess.run(cmd, capture_output=True, text=True)
+        finally:
+            if os.path.exists(obj_file):
+                try:
+                    os.remove(obj_file)
+                except OSError:
+                    pass
         if res.returncode != 0:
             print(res.stderr or res.stdout, file=sys.stderr)
         return res.returncode == 0
@@ -8683,7 +9749,636 @@ def compile_c_to_binary(c_path: str, exe_path: str) -> bool:
 
 
 # ============================================================================
-# TESTES DE ESCOPO, LIMITES DO BACKEND C E TESTES DIFERENCIAIS
+# BUILT-IN EXAMPLES
+# ============================================================================
+
+EXEMPLOS = {
+'exemplo': r'''# File: exemplo.nat
+fn soma(valores: [i64]) -> i64:
+    total = 0
+    for valor in valores:
+        total += valor
+    return total
+
+fn main():
+    numeros = [10, 20, 30, 40, 50]
+    resultado = soma(numeros)
+    print(f"Result: {resultado}")
+''',
+
+'riemann': r'''# riemann.nat
+# Experimental prototype: Riemann-Siegel formula main sum.
+const PI = 3.14159265358979323846
+
+fn theta(t: f64) -> f64:
+    return (
+        0.5 * t * ln(t / (2.0 * PI))
+        - 0.5 * t
+        - PI / 8.0
+        + 1.0 / (48.0 * t)
+        + 7.0 / (5760.0 * t * t * t)
+    )
+
+fn hardy_z_aprox(t: f64) -> f64:
+    N: i64 = to_i64(floor(sqrt(t / (2.0 * PI))))
+    fase = theta(t)
+    soma = 0.0
+    for n in 1..N + 1:
+        nf = to_f64(n)
+        soma += cos(fase - t * ln(nf)) / sqrt(nf)
+    return 2.0 * soma
+
+fn bissecao(a_in: f64, b_in: f64) -> f64:
+    a = a_in
+    b = b_in
+    fa = hardy_z_aprox(a)
+    for passo in 0..60:
+        meio = (a + b) / 2.0
+        fm = hardy_z_aprox(meio)
+        if fm == 0.0:
+            return meio
+        if fa * fm < 0.0:
+            b = meio
+        else:
+            a = meio
+            fa = fm
+    return (a + b) / 2.0
+
+fn main():
+    inicio = 10.0
+    fim = 100.0
+    passo = 0.25
+    anterior_t = inicio
+    anterior_z = hardy_z_aprox(anterior_t)
+    encontrados = 0
+    t = inicio + passo
+    while t <= fim:
+        z = hardy_z_aprox(t)
+        if anterior_z * z < 0.0:
+            raiz = bissecao(anterior_t, t)
+            print(f"Zero candidato: t = {raiz}")
+            encontrados += 1
+        anterior_t = t
+        anterior_z = z
+        t += passo
+    print(f"Candidatos encontrados: {encontrados}")
+''',
+
+'rede': r'''import math
+
+fn main():
+    entradas = [[0.0, 0.0], [0.0, 1.0], [1.0, 0.0], [1.0, 1.0]]
+    targets = [0.0, 1.0, 1.0, 1.0]
+    const lr = 0.1
+    w = [0.5, -0.2]
+
+    for epoca in 0..1000:
+        for i in 0..4:
+            soma = entradas[i] @ w
+            pred = 1.0 / (1.0 + math.exp(-soma))
+            erro = targets[i] - pred
+            w += lr * erro * entradas[i]
+
+    print(f"Final weights: {w}")
+    for i in 0..4:
+        soma = entradas[i] @ w
+        pred = 1.0 / (1.0 + math.exp(-soma))
+        print(f"Input {entradas[i]} -> Pred: {pred:.3f} (Target: {targets[i]})")
+''',
+
+'ia_tensor': r'''import math
+import time
+
+fn main():
+    A = [[1.0, 2.0], [3.0, 4.0]]
+    B = [[2.0, 0.0], [1.0, 2.0]]
+    C = A @ B
+    print(f"Matrix Multiplication C = A @ B: {C}")
+
+    s = sum(C)
+    m = mean(C)
+    print(f"Element sum: {s}, Mean: {m}")
+
+    ativ = relu(C - 5.0)
+    sig = sigmoid(C * 0.1)
+    print(f"ReLU(C - 5.0): {ativ}")
+    print(f"Sigmoid(C * 0.1): {sig}")
+
+    v = [10, 20, 30, 40, 50]
+    fatia = v[1..4]
+    print(f"Vector slice v[1..4]: {fatia}")
+''',
+
+'ternario': r'''# Ternary Computing (1.58 bits) and Ternary Matrices Example
+fn main():
+    # 1. Ternary Weights Matrix {-1, 0, +1} inspired by BitNet
+    W: tensor[t2] = [
+        [1,  0, -1,  1],
+        [-1, 1,  0, -1],
+        [0, -1,  1,  0]
+    ]
+
+    # Continuous f32 activation vector
+    x: [f32] = [0.8, -1.2, 2.5, 0.4]
+
+    # 2. Native Ternary Matrix Multiplication (Multiplication-free Add-only GEMM)
+    y = W @ x
+    print(f"Input activations: {x}")
+    print(f"Ternary Matmul Result (W @ x): {y}")
+
+    # 3. Dynamic ternary quantization of activations
+    ativacoes = [1.8, -0.3, 0.1, -1.5, 0.9, -0.1]
+    trits = quantize_ternary(ativacoes, 0.5)
+    print(f"Original activations: {ativacoes}")
+    print(f"Activations quantized to {{-1, 0, 1}}: {trits}")
+
+    # 4. Memory compression (Bit Packing: 2 bits per trit, 4 trits per byte)
+    compactado = pack_ternary(trits)
+    descompactado = unpack_ternary(compactado, len(trits))
+    print(f"Packed bytes (4 trits/byte): {compactado}")
+    print(f"Unpacked values: {descompactado}")
+''',
+}
+
+
+# ============================================================================
+# REGRESSION TEST SUITES: FRONTEND & RUNTIME
+# ============================================================================
+
+def src(nome): return EXEMPLOS[nome.replace('.nat', '')]
+def E(s): return parse_expression(s)
+def body(codigo):
+    linhas = "\n".join("    " + l for l in codigo.strip("\n").split("\n"))
+    return parse("fn main():\n" + linhas + "\n").items[0].body
+
+
+class Exemplos(unittest.TestCase):
+    def test_exemplo(self):
+        p = parse(src("exemplo.nat"))
+        self.assertEqual([f.name for f in p.items], ["soma", "main"])
+        soma = p.items[0]
+        self.assertEqual(soma.params[0].type, TypeList(TypeName("i64")))
+        self.assertEqual(soma.ret, TypeName("i64"))
+        self.assertIsInstance(soma.body[1], For)
+        self.assertEqual(soma.body[1].body[0].op, "+=")
+
+    def test_riemann(self):
+        p = parse(src("riemann.nat"))
+        self.assertEqual([type(i).__name__ for i in p.items],
+                         ["ConstDecl", "Function", "Function", "Function", "Function"])
+        self.assertEqual([i.name for i in p.items[1:]],
+                         ["theta", "hardy_z_aprox", "bissecao", "main"])
+        z = p.items[2]
+        self.assertEqual(z.body[0], VarDecl("N", TypeName("i64"),
+            Call(Name("to_i64"), [Call(Name("floor"), [Call(Name("sqrt"), [
+                Binary("/", Name("t"), Binary("*", Float(2.0), Name("PI")))])])])))
+        laco = z.body[3]
+        self.assertEqual(laco.iter, Range(Int(1), Binary("+", Name("N"), Int(1)), False))
+        biss = p.items[3]
+        self.assertIsInstance(biss.body[3].body[3], If)
+        self.assertEqual(len(biss.body[3].body[3].orelse), 2)
+
+    def test_return_multilinha(self):
+        r = parse(src("riemann.nat")).items[1].body[0]
+        self.assertIsInstance(r, Return)
+        self.assertEqual(r.value.op, "+")
+
+
+class Expressoes(unittest.TestCase):
+    def test_precedencia(self):
+        self.assertEqual(E("1 + 2 * 3"), Binary("+", Int(1), Binary("*", Int(2), Int(3))))
+        self.assertEqual(E("(1 + 2) * 3"), Binary("*", Binary("+", Int(1), Int(2)), Int(3)))
+        self.assertEqual(E("a - b - c"), Binary("-", Binary("-", Name("a"), Name("b")), Name("c")))
+
+    def test_potencia(self):
+        self.assertEqual(E("2 ** 3 ** 2"), Binary("**", Int(2), Binary("**", Int(3), Int(2))))
+        self.assertEqual(E("-x ** 2"), Unary("-", Binary("**", Name("x"), Int(2))))
+        self.assertEqual(E("2 ** -1"), Binary("**", Int(2), Unary("-", Int(1))))
+
+    def test_logicos(self):
+        self.assertEqual(E("a or b and not c"),
+                         Binary("or", Name("a"), Binary("and", Name("b"), Unary("not", Name("c")))))
+        self.assertEqual(E("a + 1 < b * 2"),
+                         Binary("<", Binary("+", Name("a"), Int(1)), Binary("*", Name("b"), Int(2))))
+
+    def test_ranges(self):
+        self.assertEqual(E("0..N"), Range(Int(0), Name("N"), False))
+        self.assertEqual(E("1..=N + 1"), Range(Int(1), Binary("+", Name("N"), Int(1)), True))
+        self.assertEqual(E("1..5"), Range(Int(1), Int(5), False))
+
+    def test_postfixo(self):
+        self.assertEqual(E("math.sqrt(x)[0]"),
+                         Index(Call(Attr(Name("math"), "sqrt"), [Name("x")]), Int(0)))
+        self.assertEqual(E("f(a, b,)"), Call(Name("f"), [Name("a"), Name("b")]))
+
+    def test_literais(self):
+        self.assertEqual(E("1_000"), Int(1000))
+        self.assertEqual(E("1e3"), Float(1000.0))
+        self.assertEqual(E("2.5e-1"), Float(0.25))
+        self.assertEqual(E("[1, 2.0, true]"), ListLit([Int(1), Float(2.0), Bool(True)]))
+        self.assertEqual(E('"a\\tb"'), Str("a\tb"))
+
+    def test_fstring(self):
+        e = E('f"x={x:.2f} {{lit}} {a + 1}!"')
+        self.assertEqual(e, FString(["x=", FormatPart(Name("x"), ".2f"), " {lit} ",
+                                     FormatPart(Binary("+", Name("a"), Int(1)), None), "!"]))
+        self.assertEqual(E("f\"{d['k']}\""), FString([FormatPart(Index(Name("d"), Str("k")), None)]))
+
+
+class Comandos(unittest.TestCase):
+    def test_atribuicoes(self):
+        b = body("x = 1\nx += 2\nv[0] = 3\na.b = 2\nn: i64 = 0")
+        self.assertEqual(b, [Assign(Name("x"), "=", Int(1)), Assign(Name("x"), "+=", Int(2)),
+                             Assign(Index(Name("v"), Int(0)), "=", Int(3)), Assign(Attr(Name("a"), "b"), "=", Int(2)),
+                             VarDecl("n", TypeName("i64"), Int(0))])
+
+    def test_elif_else(self):
+        b = body("if a:\n    x = 1\nelif b:\n    x = 2\nelse:\n    x = 3")
+        self.assertEqual(len(b), 1)
+        self.assertIsInstance(b[0].orelse[0], If)
+        self.assertEqual(b[0].orelse[0].orelse, [Assign(Name("x"), "=", Int(3))])
+
+    def test_bloco_em_uma_linha(self):
+        b = body("if a: return 1\nelse: return 2")
+        self.assertEqual(b[0].body, [Return(Int(1))])
+        self.assertEqual(b[0].orelse, [Return(Int(2))])
+
+    def test_while_break_continue_pass(self):
+        b = body("while true:\n    if x:\n        break\n    continue\npass")
+        self.assertIsInstance(b[0].body[1], Continue)
+        self.assertIsInstance(b[1], Pass)
+
+    def test_return_vazio(self):
+        self.assertEqual(body("return"), [Return(None)])
+
+    def test_comentarios_e_linhas_em_branco(self):
+        b = body("# c1\nx = 1  # c2\n\n    # indentado demais, mas é só comentário\ny = 2")
+        self.assertEqual(len(b), 2)
+
+    def test_dedent_multiplo(self):
+        b = body("if a:\n    if b:\n        x = 1\ny = 2")
+        self.assertEqual(len(b), 2)
+
+    def test_top_level(self):
+        p = parse("import math\nimport a.b\nconst PI: f64 = 3.14\nfn f(a: i64, b: [f64],) -> [f64]:\n    pass\n")
+        self.assertEqual(p.items[0], Import("math"))
+        self.assertEqual(p.items[1], Import("a.b"))
+        self.assertEqual(p.items[2], ConstDecl("PI", TypeName("f64"), Float(3.14)))
+        self.assertEqual(len(p.items[3].params), 2)
+
+    def test_sem_newline_final(self):
+        parse("fn main():\n    x = 1")
+        parse("fn main():\r\n    x = 1\r\n")
+
+
+class Erros(unittest.TestCase):
+    def falha(self, codigo, trecho, linha=None, expr=False):
+        parse_fn = parse_expression if expr else parse
+        with self.assertRaises(NatError) as cm:
+            parse_fn(codigo)
+        self.assertIn(trecho, cm.exception.message)
+        if linha: self.assertEqual(cm.exception.line, linha)
+
+    def test_erros(self):
+        self.falha("fn f(x):\n    pass\n", "require a type", 1)
+        self.falha("fn f():\nx = 1\n", "expected an indented block", 2)
+        self.falha("fn f():\n    x = (1 + 2\n", "was not closed", 2)
+        self.falha("fn f():\n    x = 1)\n", "without matching opening bracket", 2)
+        self.falha("fn f():\n    a = 1\n  b = 2\n", "inconsistent indentation", 3)
+        self.falha("fn f():\n    a = 1\n        b = 2\n", "unexpected indentation", 3)
+        self.falha("fn f():\n\tx = 1\n", "tab", 2)
+        self.falha("fn f():\n    x = 1 2\n", "end of line", 2)
+        self.falha("fn f():\n    else:\n        pass\n", "without matching 'if'", 2)
+        self.falha("fn f():\n    f() = 1\n", "left-hand side", 2)
+        self.falha("fn f():\n    x = \n", "expected an expression", 2)
+        self.falha("fn f():\n    x = $\n", "unexpected character", 2)
+        self.falha("x = 1\n", "allowed at top level", 1)
+        self.falha('fn f():\n    s = "abc\n', "unterminated string", 2)
+        self.falha("fn f():\n    fn g():\n        pass\n", "only allowed at top level", 2)
+
+    def test_encadeamentos_proibidos(self):
+        self.falha("a < b < c", "cannot be chained", expr=True)
+        self.falha("1..2..3", "cannot be chained", expr=True)
+
+    def test_fstring_erros(self):
+        self.falha('f"{}"', "empty expression", expr=True)
+        self.falha('f"{x"', "without matching '}'", expr=True)
+        self.falha('f"x}"', "unmatched '}'", expr=True)
+        self.falha('f"{1 +}"', "in f-string", expr=True)
+
+    def test_mensagem_formatada(self):
+        s = "fn f():\n    x = (1\n"
+        with self.assertRaises(NatError) as cm: parse(s)
+        out = cm.exception.pretty(s, "t.nat")
+        self.assertIn("t.nat:2:9: error:", out)
+        self.assertIn("x = (1", out)
+
+
+def analisar(fonte):
+    d = SemanticAnalyzer().analyze(parse(fonte))
+    return ([x.msg for x in d if x.level in ("error", "erro")], [x.msg for x in d if x.level in ("warning", "aviso")])
+
+def M(corpo, antes=""):
+    linhas = "\n".join(("    " + l) if l.strip() else l for l in corpo.strip("\n").split("\n"))
+    return antes + "fn main():\n" + linhas + "\n"
+
+
+class SemBase(unittest.TestCase):
+    def ok(self, fonte):
+        e, _ = analisar(fonte)
+        self.assertEqual(e, [], e)
+
+    def erro(self, fonte, trecho):
+        e, _ = analisar(fonte)
+        self.assertTrue(any(trecho in x for x in e), f"expected '{trecho}' in {e}")
+
+    def aviso(self, fonte, trecho):
+        e, w = analisar(fonte)
+        self.assertEqual(e, [], e)
+        self.assertTrue(any(trecho in x for x in w), f"expected '{trecho}' in {w}")
+
+
+class SemExemplos(SemBase):
+    def test_exemplos_limpos(self):
+        for nome in ("exemplo", "riemann", "rede", "ia_tensor", "ternario"):
+            self.assertEqual(analisar(EXEMPLOS[nome]), ([], []), nome)
+
+
+class SemTipos(SemBase):
+    def test_tipo_estavel(self):
+        self.erro(M('x = 1\nx = "a"\nprint(x)'), "cannot be assigned")
+        self.erro(M("x = 1\nx = 2.5\nprint(x)"), "cannot be assigned")
+        self.ok(M("x = 1.0\nx = 2\nprint(x)"))
+
+    def test_divisao(self):
+        self.erro(M("n: i64 = 4 / 2\nprint(n)"), "declared as")
+        self.ok(M("a = 4 / 2\na = 1.5\nprint(a)"))
+        self.ok(M("n: i64 = 7 // 2\nprint(n)"))
+
+    def test_operadores(self):
+        self.erro(M('a = 1 + "x"\nprint(a)'), "is not defined for")
+        self.ok(M('s = "a" + "b"\nprint(s)'))
+        self.erro(M('print(1 < "a")'), "cannot compare")
+        self.erro(M('print(1 == "a")'), "cannot compare")
+
+    def test_logicos(self):
+        self.erro(M("print(1 and true)"), "'and' requires bool")
+        self.erro(M("print(not 1)"), "'not' requires bool")
+        self.erro(M("if 1:\n    pass"), "condition must be bool")
+        self.erro(M("while 1.5:\n    pass"), "condition must be bool")
+        self.ok(M("a = 1 < 2 and not false\nprint(a)"))
+
+    def test_listas(self):
+        self.ok(M("a = [1, 2.5]\nb: [f64] = a\nprint(b)"))
+        self.erro(M('a = [1, "x"]\nprint(a)'), "incompatible")
+        self.erro(M("a = [1.0]\nprint(a[0.5])"), "index must be i64")
+        self.erro(M("x = 5\nprint(x[0])"), "cannot be indexed")
+        self.erro(M("for i in 0..2.5:\n    pass"), "range bounds")
+        self.erro(M("for i in 5:\n    pass"), "cannot iterate over")
+        self.erro(M('v = [1.0, 2.0]\nv[1] = "a"\nprint(v)'), "cannot be assigned")
+        self.erro(M("a: [f64] = [1, 2]\nprint(a)"), "declared as")
+
+    def test_broadcasting(self):
+        self.ok(M("w = [1.0, 2.0]\nw += 2.0\nw = w * w + w\nw = 2.0 * w\nprint(w)"))
+        self.erro(M('w = [1.0]\nw += "a"\nprint(w)'), "is not defined for")
+
+    def test_composta(self):
+        self.erro(M("x = 1\nx += 2.5\nprint(x)"), "produces")
+        self.erro(M("y += 1"), "before being declared")
+
+    def test_sem_valor(self):
+        self.erro(M("x = print(1)"), "does not produce a value")
+
+    def test_result_unwrap(self):
+        self.ok(M('r = ok(42)\nx: i64 = r?\nprint(x)'))
+        self.ok(M('r = ok("teste")\ns: str = unwrap(r)\nprint(s)'))
+        self.ok(M('r = err("falha")\ns: str = unwrap_or(r, "padrao")\nprint(s)'))
+        self.ok(M('r: Result[str] = ok("ola")\ns: str = r?\nprint(s)'))
+        self.erro(M('r: Result[str] = ok("ola")\nx: i64 = r?\nprint(x)'), "declared as")
+        self.erro(M('x = 1\nr: Result[str] = ok("ola")\nx = r?\nprint(x)'), "cannot be assigned")
+        self.erro(M('s = read_file("a.txt")?\nprint(s)'), "requires a Result[T]")
+        self.erro(M('n = 5\nm = n?\nprint(m)'), "requires a Result[T]")
+
+    def test_tensor_matmul_broadcasting(self):
+        # Multiplicação matricial e broadcasting com tensores e ativações
+        self.ok(M("A = tensor([[1.0, 2.0], [3.0, 4.0]])\nx = tensor([0.5, -0.5])\ny = relu(A @ x + tensor([0.1, -0.1]))\nprint(y)"))
+        self.ok(M("W: tensor[t2] = random_ternary([4, 4], 1)\nx: [f32] = [1.0, 2.0, 3.0, 4.0]\ny: [f32] = sigmoid((W @ x) * 0.5)\nprint(y)"))
+
+
+class SemFuncoes(SemBase):
+    F = "fn f(a: i64) -> i64:\n    return a\n\n"
+
+    def test_aridade(self):
+        self.erro(M("print(sqrt(1.0, 2.0))"), "expects 1")
+        self.erro(M("print(sqrt())"), "expects 1")
+        self.ok(M("print(1, 2, 3)"))
+        self.ok(M("print()"))
+
+    def test_argumentos(self):
+        self.erro(M("print(f(2.5))", self.F), "argument 1")
+        self.ok(M("print(f(2))", self.F))
+        self.ok(M("print(g(2))", "fn g(a: f64) -> f64:\n    return a\n\n"))
+        self.erro(M("print(dot([1, 2], [1.0]))"), "argument 1")
+
+    def test_retorno(self):
+        self.erro("fn f() -> i64:\n    pass\n", "not all")
+        self.erro("fn f() -> i64:\n    if true:\n        return 1\n", "not all")
+        self.ok("fn f(x: bool) -> i64:\n    if x:\n        return 1\n    else:\n        return 2\n")
+        self.ok("fn f(x: bool) -> i64:\n    if x:\n        return 1\n    elif true:\n        return 2\n    else:\n        return 3\n")
+        self.erro("fn f():\n    return 1\n", "cannot return a value")
+        self.erro("fn f() -> i64:\n    return 1.5\n", "expected return type")
+        self.erro("fn f() -> i64:\n    return\n", "must return")
+        self.ok("fn f() -> f64:\n    return 1\n")
+
+    def test_hoisting(self):
+        self.ok("fn main():\n    print(f())\n\nfn f() -> i64:\n    return 1\n")
+
+    def test_nomes(self):
+        self.erro("fn sqrt():\n    pass\n", "is a built-in function")
+        self.erro("fn f():\n    pass\nfn f():\n    pass\n", "already defined")
+        self.erro(M("print = 1"), "already a function name")
+        self.erro(M("x = 1\nx()\nprint(x)"), "is a variable, not a function")
+        self.erro(M("print(f)", "fn f():\n    pass\n\n"), "is a function; call it with parentheses")
+        self.erro("fn f(x: foo):\n    pass\n", "unknown type")
+
+    def test_math(self):
+        self.ok(M("print(math.sqrt(4.0) + math.PI)", "import math\n\n"))
+        self.erro(M("print(math.sqrt(4.0))"), "is not imported")
+        self.erro(M("print(math.foo(1.0))", "import math\n\n"), "has no member")
+        self.erro("import xyz\n", "unknown module")
+
+    def test_break_continue(self):
+        self.erro(M("break"), "outside of a loop")
+        self.erro(M("continue"), "outside of a loop")
+        self.ok(M("while true:\n    if true:\n        break"))
+
+
+class SemEscopo(SemBase):
+    def test_shadowing(self):
+        self.erro(M("x = 1\nfor x in 0..3:\n    pass\nprint(x)"), "shadowing")
+        self.erro(M("x: i64 = 1\nx: i64 = 2\nprint(x)"), "shadowing")
+        self.erro("const N = 5\nfn f(N: i64):\n    pass\n", "shadowing")
+
+    def test_sem_falso_shadowing(self):
+        self.ok(M("if true:\n    a = 1\n    print(a)\nif true:\n    a = 2\n    print(a)"))
+        self.ok(M("for i in 0..3:\n    pass\nfor i in 0..3:\n    pass"))
+        self.ok("fn f(x: i64):\n    pass\nfn g(x: i64):\n    pass\n")
+
+    def test_escopo_de_bloco(self):
+        self.erro(M("if true:\n    t = 5\nprint(t)"), "not defined")
+        self.ok(M("t = 0\nif true:\n    t = 5\nprint(t)"))
+        self.erro(M("if true:\n    pass\nelse:\n    z = 1\n    print(z)\nprint(z)"), "not defined")
+        self.erro(M("for i in 0..3:\n    pass\nprint(i)"), "not defined")
+
+    def test_constantes(self):
+        self.erro(M("const k = 1\nk = 2"), "constant")
+        self.erro("const PI = 3.14\nfn main():\n    PI = 3.0\n", "constant")
+        self.ok(M("const x: f64 = 3\nprint(x)"))
+        self.erro(M('const x: i64 = "a"\nprint(x)'), "declared as")
+        self.ok("fn main():\n    print(PI)\n\nconst PI = 3.14\n")
+
+    def test_nao_definido(self):
+        self.erro(M("while true:\n    y = naoexiste\n    print(y)\n    break"), "not defined")
+        self.erro(M('print(f"{naoexiste}")'), "not defined")
+        self.erro(M("print(-naoexiste)"), "not defined")
+        self.erro(M("total = 1\nprint(totl)"), "did you mean 'total'")
+        self.erro(M("x = x + 1\nprint(x)"), "not defined")
+
+
+class SemAvisos(SemBase):
+    def test_typo(self):
+        self.aviso(M("total = 0\ntotl = total + 1\nprint(total)"), "possible typo for 'total'")
+
+    def test_nunca_usada(self):
+        self.aviso(M("x = 1"), "never used")
+        self.aviso(M("x = 1\nx += 1"), "never used")
+
+    def test_sem_falso_positivo(self):
+        self.assertEqual(analisar(M("valores = [1, 2]\nvalor = 3\nprint(valores, valor)"))[1], [])
+        self.assertEqual(analisar(M("for i in 0..3:\n    pass"))[1], [])
+        self.assertEqual(analisar("fn f(a: i64):\n    pass\n")[1], [])
+
+
+class SemAIETensores(SemBase):
+    def test_novos_tipos_ia(self):
+        self.ok(M("x: f32 = 1.0\ny: f16 = 2.0\nz: bf16 = 3.0\na: i32 = 10\nb: i8 = 1\nprint(x, y, z, a, b)"))
+
+    def test_tipo_tensor(self):
+        self.ok(M("t: tensor[f32] = [1.0, 2.0]\nprint(t)"))
+
+    def test_operador_matmul(self):
+        self.ok(M("A = [[1.0, 2.0], [3.0, 4.0]]\nB = [1.0, 2.0]\nC = A @ B\nprint(C)"))
+        self.ok(M("v1 = [1.0, 2.0]\nv2 = [3.0, 4.0]\ns = v1 @ v2\nprint(s)"))
+        self.erro(M("x = 1.0 @ 2.0"), "is not defined for")
+
+    def test_fatiamento(self):
+        self.ok(M("v = [10, 20, 30, 40]\nf = v[1..3]\nprint(f)"))
+        self.ok(M('s = "nativa"\nf = s[0..4]\nprint(f)'))
+
+    def test_builtins_ia(self):
+        self.ok(M("v = [1.0, -2.0, 3.0]\nr = relu(v)\ns = sigmoid(v)\nm = mean(v)\nsoma = sum(v)\nprint(r, s, m, soma)"))
+        self.ok(M("M = zeros([2, 3])\nsh = shape(M)\nprint(sh)"))
+        self.ok(M('s = "teste"\nprint(len(s))'))
+
+    def test_safetensors_semantica(self):
+        self.ok(M('k = safetensors_keys("teste.safetensors")\nprint(k)'))
+        self.ok(M('t = load_safetensors("teste.safetensors", "peso")\nprint(t)'))
+        self.ok(M('v = [1.0, 2.0]\nsave_safetensors("teste.safetensors", "peso", v)'))
+
+
+# --- Testes de Computação Ternária ---
+class SemTernario(SemBase):
+    def test_tipo_t2_e_ternary(self):
+        self.ok(M("w: t2 = 1\nw2: ternary = -1\nprint(w, w2)"))
+
+    def test_tensor_ternario_matmul(self):
+        self.ok(M("W: tensor[t2] = [[1, 0, -1], [0, 1, 0]]\nx: [f32] = [0.5, 1.0, 2.0]\ny = W @ x\nprint(y)"))
+
+    def test_primitivas_ternarias(self):
+        self.ok(M("v = [0.9, -0.4, 0.1]\nt = quantize_ternary(v, 0.5)\np = pack_ternary(t)\nu = unpack_ternary(p, 3)\nprint(t, p, u)"))
+
+
+class RuntimeExecucao(unittest.TestCase):
+    def _analyze_and_run(self, fonte: str) -> Interpreter:
+        prog = parse(fonte)
+        erros = [d.msg for d in SemanticAnalyzer().analyze(prog) if d.level in ("error", "erro")]
+        self.assertEqual(erros, [], f"Unexpected semantic errors: {erros}")
+        interp = Interpreter()
+        interp.run(prog)
+        return interp
+
+    def test_run_exemplo(self):
+        self._analyze_and_run(src("exemplo.nat"))
+
+    def test_run_rede_neural(self):
+        interp = self._analyze_and_run(src("rede.nat"))
+        w = interp.last_scope.get("w")
+        self.assertIsNotNone(w)
+        self.assertGreater(w[0], 2.0)
+        self.assertGreater(w[1], 2.0)
+
+    def test_run_ia_tensor(self):
+        self._analyze_and_run(src("ia_tensor.nat"))
+
+    def test_run_ternario(self):
+        self._analyze_and_run(src("ternario.nat"))
+
+    def test_rmsnorm_2d_por_linha(self):
+        x_np = np.array([[1.0, 2.0, 3.0, 4.0], [10.0, 20.0, 30.0, 40.0]], dtype=np.float32)
+        gamma_np = np.array([1.0, 0.5, 2.0, 1.5], dtype=np.float32)
+        eps = 1e-6
+        esperado = (x_np / np.sqrt(np.mean(x_np ** 2, axis=-1, keepdims=True) + eps)) * gamma_np
+        obtido = rmsnorm_fn(Tensor(x_np, dtype="f32"), Tensor(gamma_np, dtype="f32"), eps)
+        np.testing.assert_allclose(obtido.data, esperado, rtol=1e-5, atol=1e-6)
+        # Como a linha 1 é 10x a linha 0, após RMSNorm por linha ambas devem ser quase idênticas
+        np.testing.assert_allclose(obtido.data[0], obtido.data[1], rtol=1e-5, atol=1e-5)
+
+    def test_turbo_quant_roundtrip(self):
+        v = [1.0, 2.0, -1.5, 0.5]
+        q = turbo_quant_fn(v, 2)
+        rec = turbo_dequant_fn(q)
+        dot_est = turbo_dot_fn(v, q)
+        self.assertEqual(len(rec), 4)
+        self.assertGreater(dot_est, 0.0)
+
+    def test_pack_unpack_roundtrip(self):
+        trits = [1, -1, 0, 1, -1, 0, 0, 1, -1, 1]
+        packed = pack_ternary_fn(trits)
+        unpacked = unpack_ternary_fn(packed, len(trits))
+        self.assertEqual(trits, unpacked)
+
+    def test_pack_5trits_roundtrip(self):
+        trits = [1, -1, 0, 1, -1, 0, 0, 1, -1, 1, 1, -1, 0]
+        packed = pack_ternary_5trits_fn(trits)
+        unpacked = unpack_ternary_5trits_fn(packed, len(trits))
+        self.assertEqual(trits, unpacked)
+
+    def test_quantize_bitnet_canonical(self):
+        dados = [0.8, -0.4, 0.05, -0.9, 0.2]
+        gamma = tensor_absmean_fn(dados)
+        self.assertAlmostEqual(gamma, 0.47, places=2)
+        q = quantize_bitnet_fn(dados)
+        self.assertEqual(q, [1, -1, 0, -1, 0])
+
+    def test_safetensors_roundtrip(self):
+        import tempfile, os
+        with tempfile.NamedTemporaryFile(suffix=".safetensors", delete=False) as tf:
+            tmp_path = tf.name
+        try:
+            dados = [[1.5, -2.0, 3.25], [0.0, 4.5, -1.0]]
+            save_safetensors_fn(tmp_path, "camada_mlp", dados)
+            chaves = safetensors_keys_fn(tmp_path)
+            self.assertEqual(chaves, ["camada_mlp"])
+            carregado = load_safetensors_fn(tmp_path, "camada_mlp")
+            np.testing.assert_allclose(carregado, dados, rtol=1e-5)
+        finally:
+            close_safetensors_mmap(tmp_path)
+            if os.path.exists(tmp_path):
+                os.remove(tmp_path)
+
+
+# ============================================================================
+# REGRESSION TEST SUITES: SCOPE, C99 AOT BACKEND & DIFFERENTIAL
 # ============================================================================
 
 class TesteCoerenciaSemanticoRuntime(unittest.TestCase):
@@ -8847,6 +10542,14 @@ class TesteEscopoInterpretador(unittest.TestCase):
         pretty = err.pretty(code, "teste.nat")
         self.assertIn("teste.nat:4:11: error: Undefined variable: x", pretty)
         self.assertIn("^", pretty)
+
+    def test_funcao_aridade_incorreta(self):
+        code = "fn soma2(a: i64, b: i64) -> i64:\n    return a + b\n\nfn main():\n    x = soma2(1)\n"
+        prog = parse(code)
+        interp = Interpreter()
+        with self.assertRaises(NatRuntimeError) as cm:
+            interp.run(prog)
+        self.assertIn("expects 2 argument(s), but received 1", str(cm.exception))
 
 
 class TesteLimitesCTranspiler(unittest.TestCase):
@@ -9028,6 +10731,17 @@ fn main():
         print(f"pos={pos} tok={next_tok} logit0={logits[0]:.5f} logit1={logits[1]:.5f}")
 '''
         interp_out, c_out, _ = self._run_differential(source, "diff_mini_llm")
+        self.assertEqual(interp_out, c_out)
+
+    def test_c99_print_vetor_matriz_inteiros(self):
+        source = """
+fn main():
+    v = [1, 2, 3, 4]
+    print(v)
+    m = [[10, 20], [30, 40]]
+    print(m)
+"""
+        interp_out, c_out, _ = self._run_differential(source, "diff_print_int_arrays")
         self.assertEqual(interp_out, c_out)
 
 
@@ -9294,6 +11008,33 @@ fn main():
         finally:
             if os.path.exists(mod_path):
                 os.remove(mod_path)
+
+    def test_import_modulos_circulares(self):
+        mod_a = "_temp_mod_circ_a"
+        mod_b = "_temp_mod_circ_b"
+        path_a = os.path.join(os.path.dirname(os.path.abspath(__file__)), f"{mod_a}.nat")
+        path_b = os.path.join(os.path.dirname(os.path.abspath(__file__)), f"{mod_b}.nat")
+        try:
+            with open(path_a, "w", encoding="utf-8") as f:
+                f.write(f"import {mod_b}\nfn func_a() -> i64:\n    return 42\n")
+            with open(path_b, "w", encoding="utf-8") as f:
+                f.write(f"import {mod_a}\nfn func_b() -> i64:\n    return 99\n")
+            src = f"""
+import {mod_a}
+import {mod_b}
+
+fn main():
+    a = func_a()
+    b = func_b()
+    res = a + b
+"""
+            interp = self._run_checked(src)
+            self.assertEqual(interp.last_scope["res"], 141)
+        finally:
+            if os.path.exists(path_a):
+                os.remove(path_a)
+            if os.path.exists(path_b):
+                os.remove(path_b)
 
     def test_list_comprehensions_basico_e_aninhado(self):
         src = """
@@ -9634,8 +11375,168 @@ fn main():
         self.assertLess(loss_fim, 0.15)
 
 
+class TesteAritmeticaFix256Intervalar(unittest.TestCase):
+    """Testes para aritmética de ponto fixo de 256 bits e aritmética intervalar em coordenadas extremas (ex: 10^50)."""
+
+    def test_perda_coerencia_f64_vs_fix256(self):
+        # Em IEEE 754 f64 (double), na altitude x = 10^50, passos delta < 10^34 sofrem perda total de coerência
+        f_pos = 1e50
+        delta = 10.0
+        f_next = f_pos + delta
+        # Comprovação de falha no double (perda de coerência catastrófica)
+        self.assertEqual(f_next - f_pos, 0.0, "Em double float f64, 1e50 + 10.0 - 1e50 deve arredondar para 0.0")
+
+        # Em NatFix256 (256-bit fixed point Q192.64):
+        pos = NatFix256("100000000000000000000000000000000000000000000000000")
+        step_val = NatFix256(10)
+        curr = pos
+        for _ in range(1000):
+            curr = curr + step_val
+        diff = curr - pos
+        self.assertEqual(diff.to_i64(), 10000)
+        self.assertEqual(diff.to_f64(), 10000.0)
+        self.assertEqual(curr.to_str(), "100000000000000000000000000000000000000000000010000.000000")
+
+    def test_aritmetica_intervalar_coerencia(self):
+        pos_init = NatFix256("100000000000000000000000000000000000000000000000000")
+        pos_iv = NatInterval256(pos_init - NatFix256(1), pos_init + NatFix256(1))
+        self.assertEqual(pos_iv.width().to_f64(), 2.0)
+
+        vel_iv = NatInterval256(NatFix256(10) - NatFix256("0.1"), NatFix256(10) + NatFix256("0.1"))
+        self.assertEqual(vel_iv.width().to_f64(), 0.2)
+
+        dt = NatFix256(1)
+        sim_pos = pos_iv.simulate_steps(vel_iv, dt, 100)
+        # Largura final esperada: 2.0 + 100 * 0.2 = 22.0
+        self.assertAlmostEqual(sim_pos.width().to_f64(), 22.0, places=4)
+        self.assertTrue(sim_pos.is_coherent(NatFix256(25)))
+        self.assertFalse(sim_pos.is_coherent(NatFix256(20)))
+
+    def test_aot_ctypes_signatures(self):
+        dll = AOTKernelEngine.get_dll()
+        self.assertIsNotNone(dll, "AOT DLL do Nativa runtime deve estar disponível e compilada")
+        self.assertTrue(hasattr(dll, "nat_c_fix256_add"))
+        self.assertTrue(hasattr(dll, "nat_c_interval256_step"))
+
+        c_a = C_NatFix256()
+        c_b = C_NatFix256()
+        c_out = C_NatFix256()
+        dll.nat_c_fix256_from_str(b"100000000000000000000000000000000000000000000000000", 64, ctypes.byref(c_a))
+        dll.nat_c_fix256_from_i64(50, 64, ctypes.byref(c_b))
+        dll.nat_c_fix256_add(ctypes.byref(c_a), ctypes.byref(c_b), ctypes.byref(c_out))
+
+        buf = ctypes.create_string_buffer(128)
+        dll.nat_c_fix256_to_str(ctypes.byref(c_out), buf, 128)
+        self.assertEqual(buf.value.decode("utf-8"), "100000000000000000000000000000000000000000000000050.000000")
+
+    def test_transpilacao_c_e2e_fix256(self):
+        src = """fn main():
+    pos: fix256 = Fix256("100000000000000000000000000000000000000000000000000")
+    delta: fix256 = Fix256(25)
+    pos = pos + delta
+    half_pos: fix256 = pos / Fix256(2)
+    iv: interval256 = Interval256(pos, pos + Fix256(10))
+    w: fix256 = iv.width()
+    coh: bool = iv.is_coherent(Fix256(15))
+    iv_small: interval256 = Interval256(Fix256(10), Fix256(20))
+    iv_half: interval256 = iv_small / 2
+    iv_neg: interval256 = -iv_half
+    print("w:", w)
+    print("coh:", coh)
+    print("half_pos:", half_pos)
+    print("iv_half:", iv_half)
+    print("iv_neg:", iv_neg)
+"""
+        prog = parse(src)
+        sem = SemanticAnalyzer()
+        sem.analyze(prog)
+        self.assertEqual(sem.errors, [], f"Erros semânticos: {sem.errors}")
+
+        interp = Interpreter()
+        interp.run(prog)
+
+        transpiler = CTranspiler(prog)
+        c_code = transpiler.transpile()
+        self.assertIn("nat_fix256_add", c_code)
+        self.assertIn("nat_interval256_create", c_code)
+        self.assertIn("nat_interval256_div_scalar", c_code)
+        self.assertIn("nat_interval256_neg", c_code)
+
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmpdir:
+            c_file = os.path.join(tmpdir, "test_fix256.c")
+            exe_file = os.path.join(tmpdir, "test_fix256.exe")
+            with open(c_file, "w", encoding="utf-8") as f:
+                f.write(c_code)
+            ok = compile_c_to_binary(c_file, exe_file)
+            self.assertTrue(ok, "Compilação C99 do programa com Fix256/Interval256 deve ser bem-sucedida")
+            res = subprocess.run([exe_file], capture_output=True, text=True)
+            self.assertEqual(res.returncode, 0)
+            self.assertIn("w: 10.000000", res.stdout)
+            self.assertIn("coh: true", res.stdout)
+            self.assertIn("half_pos: 50000000000000000000000000000000000000000000000012.500000", res.stdout)
+            self.assertIn("iv_half: [5.000000, 10.000000]", res.stdout)
+            self.assertIn("iv_neg: [-10.000000, -5.000000]", res.stdout)
+
+    def test_edge_cases_fix256(self):
+        # Valores negativos
+        neg = NatFix256(-42)
+        pos = NatFix256(42)
+        zero = neg + pos
+        self.assertEqual(zero.to_i64(), 0)
+        self.assertEqual(zero.to_f64(), 0.0)
+
+        # Multiplicação e Divisão
+        v = NatFix256(100)
+        half = NatFix256(2)
+        res_div = v / half
+        self.assertEqual(res_div.to_i64(), 50)
+        res_mul = res_div * half
+        self.assertEqual(res_mul.to_i64(), 100)
+
+        # Divisão em alta altitude (10^50 e 10^40) sem truncamento
+        pos50 = NatFix256("100000000000000000000000000000000000000000000000000")
+        half50 = pos50 / 2
+        self.assertEqual(half50.to_str(), "50000000000000000000000000000000000000000000000000.000000")
+        pos40 = NatFix256("1000000000000000000000000000000000000000")
+        half40 = pos40 / 2
+        self.assertEqual(half40.to_str(), "500000000000000000000000000000000000000.000000")
+
+        # Reverse division (int / Fix256)
+        r_div = 100 / NatFix256(4)
+        self.assertEqual(r_div.to_i64(), 25)
+
+        # Interval contains
+        iv = NatInterval256(NatFix256(10), NatFix256(20))
+        self.assertTrue(iv.contains(NatFix256(15)))
+        self.assertTrue(iv.contains(NatFix256(10)))
+        self.assertTrue(iv.contains(NatFix256(20)))
+        self.assertFalse(iv.contains(NatFix256(5)))
+        self.assertFalse(iv.contains(NatFix256(25)))
+
+        # Operações intervalares estendidas: divisão, negação, operadores reversos
+        div_scal = iv / 2
+        self.assertEqual(div_scal.lo.to_f64(), 5.0)
+        self.assertEqual(div_scal.hi.to_f64(), 10.0)
+
+        div_iv = iv / NatInterval256(2, 5)
+        self.assertAlmostEqual(div_iv.lo.to_f64(), 2.0, places=4)
+        self.assertAlmostEqual(div_iv.hi.to_f64(), 10.0, places=4)
+
+        neg_iv = -iv
+        self.assertEqual(neg_iv.lo.to_f64(), -20.0)
+        self.assertEqual(neg_iv.hi.to_f64(), -10.0)
+
+        self.assertEqual((10 + iv).lo.to_f64(), 20.0)
+        self.assertEqual((2 * iv).hi.to_f64(), 40.0)
+
+        # Ponto médio (mid) em alta altitude (10^50)
+        iv50 = NatInterval256(pos50, pos50 + NatFix256(10))
+        self.assertEqual(iv50.mid().to_str(), "100000000000000000000000000000000000000000000000005.000000")
+
+
 # ============================================================================
-# LINHA DE COMANDO
+# COMMAND-LINE INTERFACE (CLI) & ENTRY POINT
 # ============================================================================
 
 def run_tests() -> int:
@@ -9811,6 +11712,9 @@ def main(argv: Optional[list[str]] = None) -> int:
     elif args.arquivo in EXEMPLOS:
         source = EXEMPLOS[args.arquivo]
     else:
+        if not os.path.isfile(args.arquivo):
+            print(f"[ERROR] File not found: '{args.arquivo}'", file=sys.stderr)
+            return 1
         with open(args.arquivo, encoding="utf-8") as fh:
             source = fh.read()
 

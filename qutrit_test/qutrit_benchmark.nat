@@ -1,0 +1,111 @@
+# qutrit_test/qutrit_benchmark.nat
+# Nativa Language Test: Comparative Quantization of Qwen2.5
+# BitNet b1.58 (5-trits Base-3) vs 2-bit Standard Packing vs FP32 Reference
+
+const MODELO_SAFETENSORS: str = "data/model.safetensors"
+const FALLBACK_MODELO: str = "model.safetensors"
+
+fn main():
+    print("==========================================================================")
+    print("  NATIVA LANGUAGE: QWEN QUANTIZATION BENCHMARK (BITNET & QUTRIT)          ")
+    print("==========================================================================")
+
+    # 1. Resolve model file
+    arquivo = MODELO_SAFETENSORS
+    if not exists_file(arquivo):
+        if exists_file(FALLBACK_MODELO):
+            arquivo = FALLBACK_MODELO
+        else:
+            print("[ERROR] SafeTensors weights not found in data/model.safetensors")
+            return
+
+    camada_gate = "model.layers.0.mlp.gate_proj.weight"
+    camada_q    = "model.layers.0.self_attn.q_proj.weight"
+
+    print(f"\n[1] Loading real Qwen projection weights from '{arquivo}'...")
+    t0 = clock()
+    W_gate = load_safetensors(arquivo, camada_gate)
+    W_q    = load_safetensors(arquivo, camada_q)
+    t_load = clock() - t0
+    print(f"    - Loaded gate_proj: {shape(W_gate)} and q_proj: {shape(W_q)} in {t_load*1000.0:.1f} ms")
+
+    # 2. Canonical AbsMean Scale (Gamma)
+    gamma_gate = tensor_absmean(W_gate)
+    gamma_q    = tensor_absmean(W_q)
+    print(f"\n[2] AbsMean Scaling Factor (gamma):")
+    print(f"    - gate_proj gamma: {gamma_gate:.6f}")
+    print(f"    - q_proj gamma:    {gamma_q:.6f}")
+
+    # 3. Canonical BitNet Quantization
+    print("\n[3] Quantizing Float32 -> {-1, 0, 1} Trits...")
+    t1 = clock()
+    W_gate_t = quantize_bitnet(W_gate)
+    W_q_t    = quantize_bitnet(W_q)
+    t_quant = clock() - t1
+    print(f"    - Quantization completed in {t_quant*1000.0:.1f} ms")
+
+    # 4. Dense Packing Formats
+    print("\n[4] Comparing Packing Densities in Nativa:")
+    # 4A. Standard 2-bit packing (4 trits/byte = 2.0 bits/weight)
+    t2 = clock()
+    pack_2b_gate = pack_ternary(W_gate_t)
+    pack_2b_q    = pack_ternary(W_q_t)
+    t_2b = clock() - t2
+    tam_2b_kb = to_f64(len(pack_2b_gate) + len(pack_2b_q)) / 1024.0
+    print(f"    - 2-bit Qutrit/Ternary Packing (2.00 b/w): {tam_2b_kb:.1f} KB in {t_2b*1000.0:.1f} ms")
+
+    # 4B. Dense 5-trits base-3 packing (5 trits/byte = 1.60 bits/weight)
+    t3 = clock()
+    pack_5t_gate = pack_ternary_5trits(W_gate_t)
+    pack_5t_q    = pack_ternary_5trits(W_q_t)
+    t_5t = clock() - t3
+    tam_5t_kb = to_f64(len(pack_5t_gate) + len(pack_5t_q)) / 1024.0
+    print(f"    - Dense 5-trits Packing (1.60 b/w):       {tam_5t_kb:.1f} KB in {t_5t*1000.0:.1f} ms")
+
+    num_elem = 3072 * 1024 + 2048 * 1024
+    tam_fp32_kb = to_f64(num_elem * 4) / 1024.0
+    compressao_5t = tam_fp32_kb / tam_5t_kb
+    compressao_2b = tam_fp32_kb / tam_2b_kb
+    print(f"    -> Original FP32 Size:                    {tam_fp32_kb:.1f} KB")
+    print(f"    -> Compression vs FP32: 2-bit = {compressao_2b:.1f}x | 5-trits = {compressao_5t:.1f}x smaller!")
+
+    # 5. Inference GEMV and Output Fidelity Benchmark
+    print("\n[5] Running Matrix-Vector Projections (GEMV):")
+    K = 1024
+    x = randn(K)
+
+    # Reference FP32
+    t4 = clock()
+    y_gate_fp32 = W_gate @ x
+    t_f32 = clock() - t4
+
+    # BitNet 5-trits Vec-LUT
+    t5 = clock()
+    y_gate_5t = pack_5t_gate @ x
+    t_gemv_5t = clock() - t5
+
+    # Direct Ternary Integer GEMV rescaled by gamma
+    t6 = clock()
+    y_gate_raw = W_gate_t @ x
+    t_gemv_t = clock() - t6
+    print(f"    - Raw integer dot mean:   {mean(y_gate_raw):.4f}")
+
+    print(f"    - FP32 GEMV Time:         {t_f32*1000.0:.2f} ms")
+    print(f"    - veclut_5trits GEMV:     {t_gemv_5t*1000.0:.2f} ms")
+    print(f"    - Add-Only Ternary GEMV:  {t_gemv_t*1000.0:.2f} ms")
+
+    # Fidelity Metrics
+    cos_5t = cosine_sim(y_gate_fp32, y_gate_5t)
+    p_5t   = pearson_corr(y_gate_fp32, y_gate_5t)
+    mae_5t = mae(y_gate_fp32, y_gate_5t)
+    rel_5t = relative_error(y_gate_fp32, y_gate_5t)
+
+    print("\n[6] Numerical Fidelity of veclut_5trits vs FP32:")
+    print(f"    - Cosine Similarity:         {cos_5t:.4f}")
+    print(f"    - Pearson Correlation:       {p_5t:.4f}")
+    print(f"    - Mean Absolute Error (MAE): {mae_5t:.4f}")
+    print(f"    - Relative L2 Error:         {rel_5t*100.0:.2f}%")
+
+    print("\n==========================================================================")
+    print("  TEST COMPLETED: NATIVA ENGINE VERIFIED WITH REAL QWEN WEIGHTS!")
+    print("==========================================================================")

@@ -1,0 +1,130 @@
+{
+  "model": "Qwen2.5-1.5B-Instruct-INT4 (NATQ4)",
+  "accuracy_percent": 80.0,
+  "correct_count": 8,
+  "total_cases": 10,
+  "avg_latency_ms": 18590.9,
+  "avg_speed_tok_s": 0.3,
+  "cases": [
+    {
+      "id": "TRD-01",
+      "name": "PETR4 — Consolidação em Resistência",
+      "category": "Trading & B3",
+      "expected": "manter_neutro",
+      "winner": "manter_neutro",
+      "is_correct": true,
+      "latency_ms": 20429.1,
+      "tokens": 5,
+      "speed": 15.14,
+      "raw": "manterneutro"
+    },
+    {
+      "id": "TRD-02",
+      "name": "VALE3 — Detecção de Bull Trap",
+      "category": "Trading & B3",
+      "expected": "alerta_bull_trap",
+      "winner": "compra_rompimento",
+      "is_correct": false,
+      "latency_ms": 19686.2,
+      "tokens": 5,
+      "speed": 15.18,
+      "raw": "comprarompimento"
+    },
+    {
+      "id": "RISK-01",
+      "name": "Gestão de Risco — Drawdown Diário Limite",
+      "category": "Risco Financeiro",
+      "expected": "estancar_risco",
+      "winner": "estancar_risco",
+      "is_correct": true,
+      "latency_ms": 19826.9,
+      "tokens": 5,
+      "speed": 14.24,
+      "raw": "estancarrisco"
+    },
+    {
+      "id": "FIN-01",
+      "name": "Conciliação — Cobrança Duplicada Gateway",
+      "category": "Risco Financeiro",
+      "expected": "estorno_automatico",
+      "winner": "estorno_automatico",
+      "is_correct": true,
+      "latency_ms": 19248.3,
+      "tokens": 4,
+      "speed": 15.4,
+      "raw": "estornoautomatico"
+    },
+    {
+      "id": "INFRA-01",
+      "name": "SRE — Saturação de Conexões em Produção",
+      "category": "Infra & SRE",
+      "expected": "acionamento_sre_critico",
+      "winner": "indefinido",
+      "is_correct": false,
+      "latency_ms": 19259.4,
+      "tokens": 8,
+      "speed": 14.13,
+      "raw": "\"acionamentosrecritivo\""
+    },
+    {
+      "id": "SEC-01",
+      "name": "Defesa — Ataque Card Testing via Tor",
+      "category": "Segurança",
+      "expected": "bloqueio_imediato_waf",
+      "winner": "bloqueio_imediato_waf",
+      "is_correct": true,
+      "latency_ms": 17386.9,
+      "tokens": 8,
+      "speed": 14.7,
+      "raw": "bloqueioimediatowaf"
+    },
+    {
+      "id": "CASE-01",
+      "name": "Estorno de Cobrança Duplicada",
+      "category": "Suporte / Financeiro",
+      "expected": "aprovar_estorno",
+      "winner": "aprovar_estorno",
+      "is_correct": true,
+      "latency_ms": 19789.0,
+      "tokens": 4,
+      "speed": 13.91,
+      "raw": "aprovarestorno"
+    },
+    {
+      "id": "CASE-02",
+      "name": "Detecção de Risco de Churn",
+      "category": "Customer Success",
+      "expected": "alto_risco",
+      "winner": "alto_risco",
+      "is_correct": true,
+      "latency_ms": 16234.3,
+      "tokens": 3,
+      "speed": 14.86,
+      "raw": "altorisco"
+    },
+    {
+      "id": "CASE-03",
+      "name": "Alerta Crítico de Banco de Dados",
+      "category": "Infraestrutura",
+      "expected": "incidente_critico",
+      "winner": "incidente_critico",
+      "is_correct": true,
+      "latency_ms": 16825.2,
+      "tokens": 4,
+      "speed": 14.89,
+      "raw": "incidenteCritico"
+    },
+    {
+      "id": "CASE-04",
+      "name": "Tentativa de Fraude / Abuso de Cartão",
+      "category": "Segurança / Antifraude",
+      "expected": "bloqueio_fraude",
+      "winner": "bloqueio_fraude",
+      "is_correct": true,
+      "latency_ms": 17224.0,
+      "tokens": 5,
+      "speed": 15.3,
+      "raw": "bloqueiofraude"
+    }
+  ]
+}

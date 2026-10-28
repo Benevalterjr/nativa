@@ -1,0 +1,103 @@
+# models/meu_llm12.nat — LLM 12 camadas nativo (escrito direto com struct + ListComp)
+# 3.7M params | MHA 4 Cabecas | RoPE | SwiGLU | RMSNorm | SafeTensors
+
+struct Camada:
+    n1: tensor[f32]
+    n2: tensor[f32]
+    wq: tensor[f32]
+    wk: tensor[f32]
+    wv: tensor[f32]
+    wo: tensor[f32]
+    wg: tensor[f32]
+    wu: tensor[f32]
+    wd: tensor[f32]
+
+fn carregar_camada(arq: str, i: i64) -> Camada:
+    return Camada(
+        load_safetensors(arq, f"layers.{i}.n1"),
+        load_safetensors(arq, f"layers.{i}.n2"),
+        load_safetensors(arq, f"layers.{i}.wq.weight"),
+        load_safetensors(arq, f"layers.{i}.wk.weight"),
+        load_safetensors(arq, f"layers.{i}.wv.weight"),
+        load_safetensors(arq, f"layers.{i}.wo.weight"),
+        load_safetensors(arq, f"layers.{i}.gate.weight"),
+        load_safetensors(arq, f"layers.{i}.up.weight"),
+        load_safetensors(arq, f"layers.{i}.down.weight")
+    )
+
+fn passo_token(tid: i64, pos: i64, emb: tensor[f32], camadas: [Camada], caches: [[KVCache]], norm_f: tensor[f32]) -> tensor[f32]:
+    x = emb[tid]
+    for i in 0..12:
+        c = camadas[i]
+        kv = caches[i]
+        xn = rmsnorm(x, c.n1)
+        q_all = xn @ c.wq
+        k_all = xn @ c.wk
+        v_all = xn @ c.wv
+        heads = []
+        for h in 0..4:
+            ini = h * 32
+            fim = ini + 32
+            qh = apply_rope(q_all[ini..fim], pos)
+            kh = apply_rope(k_all[ini..fim], pos)
+            vh = v_all[ini..fim]
+            kv[h].update([kh], [vh])
+            ah = sdpa([qh], kv[h].k, kv[h].v)
+            heads.append(ah[0])
+        att = concat(heads)
+        x = x + (att @ c.wo)
+        xn = rmsnorm(x, c.n2)
+        x = x + ((silu(xn @ c.wg) * (xn @ c.wu)) @ c.wd)
+    return rmsnorm(x, norm_f)
+
+fn main():
+    print("==========================================================================")
+    print("  EXECUTANDO MODELO NATIVA 12 CAMADAS (3.7M PARAMS) COM LIST COMPREHENSION")
+    print("  MHA 4 Cabecas | RoPE | SwiGLU | RMSNorm | SafeTensors")
+    print("==========================================================================")
+    arquivo = "data/meu_llm12.safetensors"
+    max_seq = 512
+    tok = Tokenizer("data/meu_tok.json")
+    prompt = "Nativa e uma linguagem para IA"
+    tokens = encode(tok, prompt)
+    prompt_len = len(tokens)
+    n_new = 25
+
+    print(f"Prompt: '{prompt}' ({prompt_len} tokens)")
+    print(f"Tokens do prompt: {tokens}")
+
+    print("[*] Carregando pesos SafeTensors via List Comprehension...")
+    emb     = load_safetensors(arquivo, "emb.weight")
+    norm_f  = load_safetensors(arquivo, "norm.weight")
+    lm_head = load_safetensors(arquivo, "lm_head.weight")
+    camadas = [carregar_camada(arquivo, i) for i in 0..12]
+
+    print("[*] Inicializando 48 KV Caches (12x4) via List Comprehension 2D...")
+    caches = [[KVCache(max_seq, 32) for _ in 0..4] for _ in 0..12]
+
+    print("[*] Executando Prefill do Contexto...")
+    t0 = clock()
+    x = zeros([128])
+    for t in 0..prompt_len:
+        x = passo_token(tokens[t], t, emb, camadas, caches, norm_f)
+    t_prefill = clock() - t0
+    print(f"    Prefill concluido em {t_prefill * 1000.0:.2f} ms")
+
+    print(f"[*] Gerando {n_new} novos tokens...")
+    t_gen = clock()
+    novos = []
+    for step in 0..n_new:
+        pos = prompt_len + step
+        logits = x @ lm_head
+        nid = sample(logits, 0.8, 0.9)
+        novos.append(nid)
+        x = passo_token(nid, pos, emb, camadas, caches, norm_f)
+
+    total_time = clock() - t_gen
+    speed = 0.0
+    if total_time > 0.0:
+        speed = n_new / total_time
+    print(f"    Geracao concluida em {total_time * 1000.0:.2f} ms ({speed:.2f} tok/s)")
+    print(f"Tokens gerados: {novos}")
+    texto_gerado = decode(tok, novos)
+    print(f"Texto gerado: '{texto_gerado}'")

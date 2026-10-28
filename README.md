@@ -34,8 +34,8 @@ It combines a clean, Python-inspired syntax with a dual execution model:
 | Feature | Description |
 |---------|-------------|
 | **Real model support** | Full inference of Qwen2.5-0.5B (24 layers, 490M parameters) |
-| **Custom quant format** | `.natq4` (Q4x4) + interactive chat |
-| **BitNet b1.58** | Native ternary type (`t2`), 5-trits-per-byte packing, add-only matmul |
+| **Production INT4 Format** | `.natq4` (Q4x4 Lean, 4.50 bits/weight) with fused MLP SwiGLU, 4-row tiling, and full tail support |
+| **BitNet b1.58 (Experimental)** | Native ternary type (`t2`), 2-bit SIMD and 5-trits packing for models trained natively in 1.58 bits |
 | **Zero-copy loading** | SafeTensors via `mmap` (loads hundreds of MB in milliseconds) |
 | **KV Cache Arena** | Contiguous pre-allocated memory (large speedup on autoregressive generation) |
 | **AOT C99** | Compiles to native executables with OpenMP and runtime CPU dispatch |
@@ -104,6 +104,7 @@ python nativa.py bench --all
 
 - 📊 [English Benchmark Report](BENCHMARKS_EN.md) — Throughput, PPL, and zero-shot reasoning evaluation.
 - 📊 [Relatório de Benchmarks em Português](BENCHMARKS.md) — Avaliação auditável completa.
+- 📋 [Q4x4 Lean Specification & Gatekeeping Protocol](docs/SPEC_Q4X4_LEAN_AND_GATEKEEPING.md) — Especificação técnica do baseline congelado, diagnóstico de banda e protocolo de gatekeeping.
 
 ---
 
@@ -207,8 +208,8 @@ Ela combina uma sintaxe limpa inspirada em Python com um modelo de execução du
 | Recurso | Descrição |
 |---------|-----------|
 | **Suporte a modelo real** | Inferência completa do Qwen2.5-0.5B (24 camadas, 490M parâmetros) |
-| **Formato de quantização** | `.natq4` (Q4x4) + chat interativo |
-| **BitNet b1.58** | Tipo ternário nativo (`t2`), empacotamento de 5 trits/byte, matmul add-only |
+| **Formato de Produção INT4** | `.natq4` (Q4x4 Lean, 4.50 bits/peso) com MLP SwiGLU fundido, tiling de 4 linhas e suporte a caudas |
+| **BitNet b1.58 (Experimental)** | Tipo ternário nativo (`t2`), suporte SIMD 2-bit e 5-trits para modelos treinados nativamente em 1.58 bits |
 | **Carregamento zero-copy** | SafeTensors via `mmap` (centenas de MB em milissegundos) |
 | **KV Cache com Arena** | Memória contígua pré-alocada (grande aceleração na geração) |
 | **AOT C99** | Compila para executáveis nativos com OpenMP e despacho de CPU |
