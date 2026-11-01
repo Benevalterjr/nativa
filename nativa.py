@@ -1381,7 +1381,7 @@ BUILTINS: dict[str, FuncSig] = {
     "safetensors_keys": FuncSig([STR], ListT(STR), builtin=True, min_args=1, max_args=1),
     "save_safetensors": FuncSig([STR, STR, ANY], VOID, builtin=True, min_args=3, max_args=3),
     # Canonical BitNet b1.58 (AbsMean Scaling & Dense Base-3 Packing 5 trits/byte)
-    "quantize_bitnet":       FuncSig([ANY], TensorT(T2), builtin=True, min_args=1, max_args=1, ret_builder=_quant_ret),
+    "quantize_bitnet":       FuncSig([ANY], TensorT(T2), builtin=True, min_args=1, max_args=2, ret_builder=_quant_ret),
     "tensor_absmean":        FuncSig([ANY], F64, builtin=True, min_args=1, max_args=1),
     "pack_ternary_5trits":   FuncSig([ANY], ListT(I64), builtin=True, min_args=1, max_args=1),
     "unpack_ternary_5trits": FuncSig([ANY, I64], ListT(I64), builtin=True, min_args=2, max_args=2),
@@ -4584,14 +4584,69 @@ class Tensor:
         t.scale = self.scale
         return t
 
-    def quantize_bitnet(self) -> "Tensor":
-        gamma = float(np.mean(np.abs(self.data)))
-        scaled = self.data / (gamma + 1e-7)
-        rounded = np.clip(np.round(scaled), -1, 1).astype(np.int8)
-        t = Tensor(rounded, dtype="t2", device=self.device)
-        t.scale = 1.0
-        t.gamma = gamma
-        return t
+    def quantize_bitnet(self, group_size: Optional[int] = 128) -> "Tensor":
+        arr = self.data
+        if group_size is None or group_size <= 0:
+            gamma = float(np.mean(np.abs(arr)))
+            scaled = arr / (gamma + 1e-7)
+            rounded = np.clip(np.round(scaled), -1, 1).astype(np.int8)
+            t = Tensor(rounded, dtype="t2", device=self.device)
+            t.scale = 1.0
+            t.gamma = gamma
+            t.group_size = None
+            return t
+
+        if arr.ndim == 2:
+            M, K = arr.shape
+            pad_k = (group_size - (K % group_size)) % group_size
+            w_padded = np.pad(arr, ((0, 0), (0, pad_k))) if pad_k > 0 else arr
+            num_groups = w_padded.shape[1] // group_size
+            w_grouped = w_padded.reshape(M, num_groups, group_size)
+            gamma = np.mean(np.abs(w_grouped), axis=-1, keepdims=True)
+            scale = 1.0 / (gamma + 1e-7)
+            w_trits = np.clip(np.round(w_grouped * scale), -1, 1).astype(np.int8)
+            w_trits = w_trits.reshape(M, -1)
+            if pad_k > 0:
+                w_trits = w_trits[:, :K]
+            t = Tensor(w_trits, dtype="t2", device=self.device)
+            t.scale = 1.0
+            t.gamma = gamma.squeeze(-1)
+            t.group_size = group_size
+            return t
+        elif arr.ndim == 1:
+            K = len(arr)
+            if K <= group_size:
+                gamma = float(np.mean(np.abs(arr)))
+                scaled = arr / (gamma + 1e-7)
+                rounded = np.clip(np.round(scaled), -1, 1).astype(np.int8)
+                t = Tensor(rounded, dtype="t2", device=self.device)
+                t.scale = 1.0
+                t.gamma = gamma
+                t.group_size = group_size
+                return t
+            pad_k = (group_size - (K % group_size)) % group_size
+            padded = np.pad(arr, (0, pad_k)) if pad_k > 0 else arr
+            num_groups = len(padded) // group_size
+            w_grouped = padded.reshape(num_groups, group_size)
+            gamma = np.mean(np.abs(w_grouped), axis=-1, keepdims=True)
+            scale = 1.0 / (gamma + 1e-7)
+            w_trits = np.clip(np.round(w_grouped * scale), -1, 1).astype(np.int8).ravel()
+            if pad_k > 0:
+                w_trits = w_trits[:K]
+            t = Tensor(w_trits, dtype="t2", device=self.device)
+            t.scale = 1.0
+            t.gamma = gamma.squeeze(-1)
+            t.group_size = group_size
+            return t
+        else:
+            gamma = float(np.mean(np.abs(arr)))
+            scaled = arr / (gamma + 1e-7)
+            rounded = np.clip(np.round(scaled), -1, 1).astype(np.int8)
+            t = Tensor(rounded, dtype="t2", device=self.device)
+            t.scale = 1.0
+            t.gamma = gamma
+            t.group_size = None
+            return t
 
     def pack_5trits(self) -> "Tensor":
         arr = self.data
@@ -4610,6 +4665,7 @@ class Tensor:
                 t = Tensor(out_bytes.ravel(), dtype="t2_packed_5t", device=self.device)
                 t.scale = self.scale
                 t.gamma = getattr(self, "gamma", 1.0)
+                t.group_size = getattr(self, "group_size", None)
                 t._orig_shape = (M, K)
                 return t
             pad_k = bytes_per_row * 5 - K
@@ -4620,6 +4676,7 @@ class Tensor:
             t = Tensor(packed, dtype="t2_packed_5t", device=self.device)
             t.scale = self.scale
             t.gamma = getattr(self, "gamma", 1.0)
+            t.group_size = getattr(self, "group_size", None)
             t._orig_shape = (M, K)
             return t
         else:
@@ -4627,6 +4684,7 @@ class Tensor:
             t = Tensor(packed, dtype="t2_packed_5t", device=self.device)
             t.scale = self.scale
             t.gamma = getattr(self, "gamma", 1.0)
+            t.group_size = getattr(self, "group_size", None)
             return t
 
     def unpack_5trits(self, length: int) -> "Tensor":
@@ -4682,14 +4740,15 @@ class Tensor:
                 m = self.shape[0] if len(self.shape) > 1 else (len(self.data) // ((k + 4) // 5))
 
             gamma_val = getattr(self, "gamma", 1.0)
+            group_size_val = getattr(self, "group_size", None)
             if x_arr.ndim <= 1:
-                res = gemv_vec_lut_fn(self.data, x_arr, m, k, gamma=gamma_val)
+                res = gemv_vec_lut_fn(self.data, x_arr, m, k, gamma=gamma_val, group_size=group_size_val)
                 out = Tensor(res, dtype="f32", device=self.device)
             else:
                 cols = []
                 for j in range(x_arr.shape[1]):
                     col_j = x_arr[:, j]
-                    res_j = gemv_vec_lut_fn(self.data, col_j, m, k, gamma=gamma_val)
+                    res_j = gemv_vec_lut_fn(self.data, col_j, m, k, gamma=gamma_val, group_size=group_size_val)
                     col_data = res_j.data if isinstance(res_j, Tensor) else np.asarray(res_j)
                     cols.append(col_data)
                 res_mat = np.column_stack(cols)
@@ -4709,14 +4768,15 @@ class Tensor:
                 m = other.shape[0] if len(other.shape) > 1 else (len(other.data) // ((k + 4) // 5))
 
             gamma_val = getattr(other, "gamma", 1.0)
+            group_size_val = getattr(other, "group_size", None)
             if x_arr.ndim <= 1:
-                res = gemv_vec_lut_fn(other.data, x_arr, m, k, gamma=gamma_val)
+                res = gemv_vec_lut_fn(other.data, x_arr, m, k, gamma=gamma_val, group_size=group_size_val)
                 out = Tensor(res, dtype="f32", device=other.device)
             else:
                 cols = []
                 for j in range(x_arr.shape[1]):
                     col_j = x_arr[:, j]
-                    res_j = gemv_vec_lut_fn(other.data, col_j, m, k, gamma=gamma_val)
+                    res_j = gemv_vec_lut_fn(other.data, col_j, m, k, gamma=gamma_val, group_size=group_size_val)
                     col_data = res_j.data if isinstance(res_j, Tensor) else np.asarray(res_j)
                     cols.append(col_data)
                 res_mat = np.column_stack(cols)
@@ -4958,15 +5018,57 @@ def tensor_absmean_fn(x: Any) -> float:
     return float(np.mean(np.abs(arr)))
 
 
-def quantize_bitnet_fn(x: Any) -> Any:
-    """Canonical BitNet b1.58 quantizer: Clip(Round(W / (gamma + eps)), -1, 1)."""
+def quantize_bitnet_fn(x: Any, group_size: Optional[int] = 128) -> Any:
+    """Canonical & Group-wise BitNet b1.58 quantizer: Clip(Round(W / (gamma + eps)), -1, 1).
+    Supports group-wise scaling (default group_size=128) along the reduction dimension.
+    """
     if isinstance(x, Tensor):
-        return x.quantize_bitnet()
+        return x.quantize_bitnet(group_size=group_size)
     arr = np.asarray(x, dtype=float)
-    gamma = float(np.mean(np.abs(arr)))
-    eps = 1e-7
-    scaled = arr / (gamma + eps)
-    rounded = np.clip(np.round(scaled), -1, 1).astype(np.int8)
+    if arr.ndim == 0:
+        gamma = float(abs(arr.item()))
+        val = int(np.clip(np.round(arr.item() / (gamma + 1e-7)), -1, 1))
+        return val
+    if group_size is None or group_size <= 0:
+        gamma = float(np.mean(np.abs(arr)))
+        eps = 1e-7
+        scaled = arr / (gamma + eps)
+        rounded = np.clip(np.round(scaled), -1, 1).astype(np.int8)
+    elif arr.ndim == 1:
+        K = len(arr)
+        if K <= group_size:
+            gamma = float(np.mean(np.abs(arr)))
+            scaled = arr / (gamma + 1e-7)
+            rounded = np.clip(np.round(scaled), -1, 1).astype(np.int8)
+        else:
+            pad_k = (group_size - (K % group_size)) % group_size
+            padded = np.pad(arr, (0, pad_k)) if pad_k > 0 else arr
+            grouped = padded.reshape(-1, group_size)
+            gamma = np.mean(np.abs(grouped), axis=-1, keepdims=True)
+            w_trits = np.clip(np.round(grouped / (gamma + 1e-7)), -1, 1).astype(np.int8).ravel()
+            rounded = w_trits[:K] if pad_k > 0 else w_trits
+    elif arr.ndim == 2:
+        M, K = arr.shape
+        pad_k = (group_size - (K % group_size)) % group_size
+        padded = np.pad(arr, ((0, 0), (0, pad_k))) if pad_k > 0 else arr
+        num_groups = padded.shape[1] // group_size
+        grouped = padded.reshape(M, num_groups, group_size)
+        gamma = np.mean(np.abs(grouped), axis=-1, keepdims=True)
+        w_trits = np.clip(np.round(grouped / (gamma + 1e-7)), -1, 1).astype(np.int8)
+        w_trits = w_trits.reshape(M, -1)
+        rounded = w_trits[:, :K] if pad_k > 0 else w_trits
+    else:
+        orig_shape = arr.shape
+        flat_2d = arr.reshape(-1, orig_shape[-1])
+        M_f, K_f = flat_2d.shape
+        pad_k = (group_size - (K_f % group_size)) % group_size
+        padded = np.pad(flat_2d, ((0, 0), (0, pad_k))) if pad_k > 0 else flat_2d
+        grouped = padded.reshape(M_f, -1, group_size)
+        gamma = np.mean(np.abs(grouped), axis=-1, keepdims=True)
+        w_trits = np.clip(np.round(grouped / (gamma + 1e-7)), -1, 1).astype(np.int8)
+        w_trits = w_trits.reshape(M_f, -1)[:, :K_f] if pad_k > 0 else w_trits.reshape(M_f, -1)
+        rounded = w_trits.reshape(orig_shape)
+
     if isinstance(x, np.ndarray):
         return rounded
     return rounded.tolist() if isinstance(x, list) else int(rounded.item())
@@ -5071,14 +5173,14 @@ def cosine_sim_fn(a: Any, b: Any) -> float:
     return float(np.dot(a_arr, b_arr) / (norm_a * norm_b))
 
 
-def gemv_vec_lut_fn(W_packed: Any, X: Any, M: int, K: int, gamma: float = 1.0) -> list[float]:
+def gemv_vec_lut_fn(W_packed: Any, X: Any, M: int, K: int, gamma: Any = 1.0, group_size: Optional[int] = None) -> list[float]:
     """Kernel Vec-LUT (Vectorized Look-Up Table) diretamente sobre matriz 5 trits/byte."""
     W_p = W_packed.data if isinstance(W_packed, Tensor) else np.asarray(W_packed, dtype=np.uint8)
     bytes_per_row = (K + 4) // 5
     expected_row_aligned = M * bytes_per_row
-    gamma_f = float(gamma)
+    is_scalar_gamma = isinstance(gamma, (int, float, np.floating, np.integer)) or (isinstance(gamma, np.ndarray) and gamma.ndim == 0)
 
-    if W_p.size == expected_row_aligned:
+    if W_p.size == expected_row_aligned and is_scalar_gamma:
         dll = AOTKernelEngine.get_dll()
         if dll:
             W_c = np.ascontiguousarray(W_p, dtype=np.uint8)
@@ -5088,7 +5190,7 @@ def gemv_vec_lut_fn(W_packed: Any, X: Any, M: int, K: int, gamma: float = 1.0) -
                 W_c.ctypes.data_as(ctypes.POINTER(ctypes.c_uint8)),
                 x_arr.ctypes.data_as(ctypes.POINTER(ctypes.c_float)),
                 y.ctypes.data_as(ctypes.POINTER(ctypes.c_float)),
-                M, K, gamma_f
+                M, K, float(gamma)
             )
             return Tensor(y, dtype="f32") if isinstance(W_packed, Tensor) else (y if isinstance(W_packed, np.ndarray) else y.tolist())
 
@@ -5119,18 +5221,35 @@ def gemv_vec_lut_fn(W_packed: Any, X: Any, M: int, K: int, gamma: float = 1.0) -
         idx4  = W_2d // 81
 
         group_indices = np.arange(num_groups)
-        acc = (lut01[group_indices, idx01] + lut23[group_indices, idx23] + lut4[group_indices, idx4]).sum(axis=1) * gamma_f
-        return acc if isinstance(W_packed, (Tensor, np.ndarray)) else acc.tolist()
+        acc = (lut01[group_indices, idx01] + lut23[group_indices, idx23] + lut4[group_indices, idx4]).sum(axis=1) * float(gamma)
+        return Tensor(acc, dtype="f32") if isinstance(W_packed, Tensor) else (acc if isinstance(W_packed, np.ndarray) else acc.tolist())
     else:
-        unpacked = unpack_ternary_5trits_fn(W_p, M * K)
-        w_mat = np.array(unpacked, dtype=np.float32).reshape(M, K)
+        # Group-wise or fallback unpacking with exact boundary alignment
+        trits_per_row = bytes_per_row * 5
+        u_all = unpack_ternary_5trits_fn(W_p, M * trits_per_row)
+        w_mat = np.array(u_all, dtype=np.float32).reshape(M, trits_per_row)[:, :K]
         x_vec = np.array(X.data if isinstance(X, Tensor) else X, dtype=np.float32).ravel()
-        res = w_mat.dot(x_vec) * gamma_f
-        return res if isinstance(W_packed, (Tensor, np.ndarray)) else res.tolist()
+        if not is_scalar_gamma:
+            gamma_arr = np.asarray(gamma, dtype=np.float32)
+            G = int(group_size or 128)
+            if gamma_arr.ndim == 2:
+                col_grp_idx = np.minimum(np.arange(K) // G, gamma_arr.shape[1] - 1)
+                w_mat = w_mat * gamma_arr[:, col_grp_idx]
+            elif gamma_arr.ndim == 1:
+                col_grp_idx = np.minimum(np.arange(K) // G, len(gamma_arr) - 1)
+                w_mat = w_mat * gamma_arr[col_grp_idx]
+            else:
+                w_mat = w_mat * float(gamma_arr)
+            res = w_mat.dot(x_vec)
+        else:
+            res = w_mat.dot(x_vec) * float(gamma)
+        return Tensor(res, dtype="f32") if isinstance(W_packed, Tensor) else (res if isinstance(W_packed, np.ndarray) else res.tolist())
 
 
 def ternary_add_only_matmul(W: Any, X: Any) -> Any:
-    """Multiplication-free matrix multiplication for ternary weights {-1, 0, 1}."""
+    """Multiplication-free matrix multiplication for ternary weights {-1, 0, 1}.
+    Supports both canonical global scaling and group-wise scaling (group_size=128).
+    """
     W_arr = W.data if isinstance(W, Tensor) else np.asarray(W)
     X_arr = X.data if isinstance(X, Tensor) else np.asarray(X)
     is_ternary_W = (isinstance(W, Tensor) and W.dtype in ("t2", "ternary")) or getattr(W, "dtype", None) in ("t2", "ternary")
@@ -5139,46 +5258,109 @@ def ternary_add_only_matmul(W: Any, X: Any) -> Any:
 
     if is_ternary_W and W_arr.ndim == 2 and X_arr.ndim == 1:
         M, K = W_arr.shape
-        if dll and len(X_arr) == K:
-            W_c = np.ascontiguousarray(W_arr, dtype=np.int8)
-            X_c = np.ascontiguousarray(X_arr, dtype=np.float32)
-            y = np.empty(M, dtype=np.float32)
-            dll.nat_c_gemv_ternary(
-                W_c.ctypes.data_as(ctypes.POINTER(ctypes.c_int8)),
-                X_c.ctypes.data_as(ctypes.POINTER(ctypes.c_float)),
-                y.ctypes.data_as(ctypes.POINTER(ctypes.c_float)),
-                M, K
-            )
-            out = Tensor(y, dtype="f32") if isinstance(W, Tensor) or isinstance(X, Tensor) else (y if isinstance(W, np.ndarray) else y.tolist())
-            if isinstance(W, Tensor) and hasattr(W, "gamma") and not math.isclose(W.gamma, 1.0):
-                out = out * W.gamma
-            return out
-        res = W_arr.astype(np.float32).dot(X_arr.astype(np.float32))
-        if isinstance(W, Tensor) and hasattr(W, "gamma") and not math.isclose(W.gamma, 1.0):
-            res = res * W.gamma
+        gamma_val = getattr(W, "gamma", None)
+        is_scalar_gamma = gamma_val is None or isinstance(gamma_val, (int, float, np.floating, np.integer)) or (isinstance(gamma_val, np.ndarray) and gamma_val.ndim == 0)
+        if is_scalar_gamma:
+            g_f = float(gamma_val) if gamma_val is not None else 1.0
+            if dll and len(X_arr) == K:
+                W_c = np.ascontiguousarray(W_arr, dtype=np.int8)
+                X_c = np.ascontiguousarray(X_arr, dtype=np.float32)
+                y = np.empty(M, dtype=np.float32)
+                dll.nat_c_gemv_ternary(
+                    W_c.ctypes.data_as(ctypes.POINTER(ctypes.c_int8)),
+                    X_c.ctypes.data_as(ctypes.POINTER(ctypes.c_float)),
+                    y.ctypes.data_as(ctypes.POINTER(ctypes.c_float)),
+                    M, K
+                )
+                out = Tensor(y, dtype="f32") if isinstance(W, Tensor) or isinstance(X, Tensor) else (y if isinstance(W, np.ndarray) else y.tolist())
+                if not math.isclose(g_f, 1.0):
+                    out = out * g_f
+                return out
+            res = W_arr.astype(np.float32).dot(X_arr.astype(np.float32))
+            if not math.isclose(g_f, 1.0):
+                res = res * g_f
+        else:
+            G = getattr(W, "group_size", 128) or 128
+            pad_k = (G - (K % G)) % G
+            W_padded = np.pad(W_arr, ((0, 0), (0, pad_k)), mode='constant', constant_values=0) if pad_k > 0 else W_arr
+            X_padded = np.pad(X_arr, (0, pad_k), mode='constant', constant_values=0) if pad_k > 0 else X_arr
+            num_groups = W_padded.shape[1] // G
+            W_grp = W_padded.reshape(M, num_groups, G).astype(np.float32)
+            X_grp = X_padded.reshape(num_groups, G).astype(np.float32)
+            grp_dots = np.einsum('mgk,gk->mg', W_grp, X_grp)
+            gamma_arr = np.asarray(gamma_val, dtype=np.float32)
+            if gamma_arr.ndim == 2:
+                scaled_grp_dots = grp_dots * gamma_arr
+            elif gamma_arr.ndim == 1:
+                scaled_grp_dots = grp_dots * gamma_arr[None, :]
+            else:
+                scaled_grp_dots = grp_dots * gamma_arr
+            res = np.sum(scaled_grp_dots, axis=1)
+
+    elif is_ternary_W and W_arr.ndim == 2 and X_arr.ndim == 2:
+        M, K = W_arr.shape
+        gamma_val = getattr(W, "gamma", None)
+        is_scalar_gamma = gamma_val is None or isinstance(gamma_val, (int, float, np.floating, np.integer)) or (isinstance(gamma_val, np.ndarray) and gamma_val.ndim == 0)
+        if is_scalar_gamma:
+            g_f = float(gamma_val) if gamma_val is not None else 1.0
+            res = W_arr.astype(np.float32).dot(X_arr.astype(np.float32))
+            if not math.isclose(g_f, 1.0):
+                res = res * g_f
+        else:
+            G = getattr(W, "group_size", 128) or 128
+            gamma_arr = np.asarray(gamma_val, dtype=np.float32)
+            col_grp_idx = np.minimum(np.arange(K) // G, gamma_arr.shape[1] - 1 if gamma_arr.ndim == 2 else len(gamma_arr) - 1)
+            scale_broadcast = gamma_arr[:, col_grp_idx] if gamma_arr.ndim == 2 else gamma_arr[col_grp_idx]
+            W_dequant = W_arr.astype(np.float32) * scale_broadcast
+            res = W_dequant.dot(X_arr.astype(np.float32))
+
     elif is_ternary_X and W_arr.ndim == 1 and X_arr.ndim == 2:
         K, M = X_arr.shape
-        if dll and len(W_arr) == K:
-            X_trans = np.ascontiguousarray(X_arr.T, dtype=np.int8)
-            W_c = np.ascontiguousarray(W_arr, dtype=np.float32)
-            y = np.empty(M, dtype=np.float32)
-            dll.nat_c_gemv_ternary(
-                X_trans.ctypes.data_as(ctypes.POINTER(ctypes.c_int8)),
-                W_c.ctypes.data_as(ctypes.POINTER(ctypes.c_float)),
-                y.ctypes.data_as(ctypes.POINTER(ctypes.c_float)),
-                M, K
-            )
-            out = Tensor(y, dtype="f32") if isinstance(W, Tensor) or isinstance(X, Tensor) else (y if isinstance(X, np.ndarray) else y.tolist())
-            if isinstance(X, Tensor) and hasattr(X, "gamma") and not math.isclose(X.gamma, 1.0):
-                out = out * X.gamma
-            return out
-        res = W_arr.astype(np.float32).dot(X_arr.astype(np.float32))
-        if isinstance(X, Tensor) and hasattr(X, "gamma") and not math.isclose(X.gamma, 1.0):
-            res = res * X.gamma
+        gamma_val = getattr(X, "gamma", None)
+        is_scalar_gamma = gamma_val is None or isinstance(gamma_val, (int, float, np.floating, np.integer)) or (isinstance(gamma_val, np.ndarray) and gamma_val.ndim == 0)
+        if is_scalar_gamma:
+            g_f = float(gamma_val) if gamma_val is not None else 1.0
+            if dll and len(W_arr) == K:
+                X_trans = np.ascontiguousarray(X_arr.T, dtype=np.int8)
+                W_c = np.ascontiguousarray(W_arr, dtype=np.float32)
+                y = np.empty(M, dtype=np.float32)
+                dll.nat_c_gemv_ternary(
+                    X_trans.ctypes.data_as(ctypes.POINTER(ctypes.c_int8)),
+                    W_c.ctypes.data_as(ctypes.POINTER(ctypes.c_float)),
+                    y.ctypes.data_as(ctypes.POINTER(ctypes.c_float)),
+                    M, K
+                )
+                out = Tensor(y, dtype="f32") if isinstance(W, Tensor) or isinstance(X, Tensor) else (y if isinstance(X, np.ndarray) else y.tolist())
+                if not math.isclose(g_f, 1.0):
+                    out = out * g_f
+                return out
+            res = W_arr.astype(np.float32).dot(X_arr.astype(np.float32))
+            if not math.isclose(g_f, 1.0):
+                res = res * g_f
+        else:
+            G = getattr(X, "group_size", 128) or 128
+            gamma_arr = np.asarray(gamma_val, dtype=np.float32)
+            col_grp_idx = np.minimum(np.arange(K) // G, gamma_arr.shape[1] - 1 if gamma_arr.ndim == 2 else len(gamma_arr) - 1)
+            scale_broadcast = (gamma_arr[:, col_grp_idx] if gamma_arr.ndim == 2 else gamma_arr[col_grp_idx]).T
+            X_dequant = X_arr.astype(np.float32) * scale_broadcast
+            res = W_arr.astype(np.float32).dot(X_dequant)
+
     elif is_ternary_W and W_arr.ndim == 1 and X_arr.ndim == 1:
-        pos = (W_arr == 1)
-        neg = (W_arr == -1)
-        res = np.sum(X_arr[pos]) - np.sum(X_arr[neg])
+        gamma_val = getattr(W, "gamma", None)
+        is_scalar_gamma = gamma_val is None or isinstance(gamma_val, (int, float, np.floating, np.integer)) or (isinstance(gamma_val, np.ndarray) and gamma_val.ndim == 0)
+        if is_scalar_gamma:
+            pos = (W_arr == 1)
+            neg = (W_arr == -1)
+            res = np.sum(X_arr[pos]) - np.sum(X_arr[neg])
+            g_f = float(gamma_val) if gamma_val is not None else 1.0
+            if not math.isclose(g_f, 1.0):
+                res = res * g_f
+        else:
+            G = getattr(W, "group_size", 128) or 128
+            gamma_arr = np.asarray(gamma_val, dtype=np.float32)
+            col_grp_idx = np.minimum(np.arange(len(W_arr)) // G, len(gamma_arr) - 1)
+            W_dequant = W_arr.astype(np.float32) * gamma_arr[col_grp_idx]
+            res = float(np.dot(W_dequant, X_arr.astype(np.float32)))
     else:
         res = np.matmul(W_arr, X_arr)
 
@@ -10359,6 +10541,80 @@ class RuntimeExecucao(unittest.TestCase):
         self.assertAlmostEqual(gamma, 0.47, places=2)
         q = quantize_bitnet_fn(dados)
         self.assertEqual(q, [1, -1, 0, -1, 0])
+
+    def test_quantize_bitnet_groupwise_2d(self):
+        rng = np.random.RandomState(42)
+        M, K = 16, 256
+        w_data = rng.randn(M, K).astype(np.float32)
+        t_w = Tensor(w_data, dtype="f32")
+        q = t_w.quantize_bitnet(group_size=128)
+        self.assertEqual(q.dtype, "t2")
+        self.assertEqual(q.shape, [M, K])
+        self.assertEqual(q.group_size, 128)
+        self.assertIsInstance(q.gamma, np.ndarray)
+        self.assertEqual(q.gamma.shape, (M, 2))
+        unique_vals = set(np.unique(q.data))
+        self.assertTrue(unique_vals.issubset({-1, 0, 1}))
+
+    def test_quantize_bitnet_groupwise_matmul(self):
+        rng = np.random.RandomState(42)
+        M, K = 16, 256
+        w_data = rng.randn(M, K).astype(np.float32)
+        x_data = rng.randn(K).astype(np.float32)
+        t_w = Tensor(w_data, dtype="f32")
+        t_x = Tensor(x_data, dtype="f32")
+        q = t_w.quantize_bitnet(group_size=128)
+        y = q @ t_x
+        self.assertEqual(y.shape, [M])
+        # Compute exact dequantized reference
+        gamma_expanded = np.repeat(q.gamma, 128, axis=1)
+        w_dequant = q.data.astype(np.float32) * gamma_expanded
+        y_expected = w_dequant.dot(x_data)
+        np.testing.assert_allclose(y.data, y_expected, rtol=1e-5, atol=1e-5)
+
+    def test_quantize_bitnet_groupwise_packed_5trits(self):
+        rng = np.random.RandomState(42)
+        M, K = 16, 256
+        w_data = rng.randn(M, K).astype(np.float32)
+        x_data = rng.randn(K).astype(np.float32)
+        t_w = Tensor(w_data, dtype="f32")
+        t_x = Tensor(x_data, dtype="f32")
+        q = t_w.quantize_bitnet(group_size=128)
+        p = q.pack_5trits()
+        self.assertEqual(p.dtype, "t2_packed_5t")
+        self.assertEqual(p.group_size, 128)
+        y_q = q @ t_x
+        y_p = p @ t_x
+        np.testing.assert_allclose(y_p.data, y_q.data, rtol=1e-4, atol=1e-4)
+
+    def test_quantize_bitnet_fidelity_cosine_similarity(self):
+        rng = np.random.RandomState(100)
+        M, K = 32, 512
+        # Heterogeneous variance across channels to mimic real LLM weights
+        scales = np.linspace(0.1, 5.0, K).astype(np.float32)
+        w_data = (rng.randn(M, K).astype(np.float32)) * scales
+        x_data = rng.randn(K).astype(np.float32)
+        t_w = Tensor(w_data, dtype="f32")
+        t_x = Tensor(x_data, dtype="f32")
+        y_fp32 = t_w @ t_x
+
+        # Global BitNet (group_size=None)
+        q_global = t_w.quantize_bitnet(group_size=None)
+        y_global = q_global @ t_x
+        sim_global = cosine_sim_fn(y_global, y_fp32)
+
+        # Group-wise BitNet (group_size=128)
+        q_group128 = t_w.quantize_bitnet(group_size=128)
+        y_group128 = q_group128 @ t_x
+        sim_group128 = cosine_sim_fn(y_group128, y_fp32)
+
+        # Group-wise BitNet (group_size=64)
+        q_group64 = t_w.quantize_bitnet(group_size=64)
+        y_group64 = q_group64 @ t_x
+        sim_group64 = cosine_sim_fn(y_group64, y_fp32)
+
+        self.assertGreater(sim_group128, sim_global)
+        self.assertGreater(sim_group128, 0.90)
 
     def test_safetensors_roundtrip(self):
         import tempfile, os
